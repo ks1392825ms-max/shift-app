@@ -154,6 +154,9 @@
       from = Math.min(from, d.start);
       to = Math.max(to, d.end);
     }
+    // 15分単位の勤務（例 8:15 出勤）があっても、枠の区切りは 8:00・8:30 のような30分ちょうどにそろえる
+    from = Math.floor(from / SLOT_MINUTES) * SLOT_MINUTES;
+    to = Math.ceil(to / SLOT_MINUTES) * SLOT_MINUTES;
 
     const slots = [];
     for (let t = from; t + SLOT_MINUTES <= to; t += SLOT_MINUTES) {
@@ -198,7 +201,7 @@
   // スタッフ1人の月の合計：{ work（通常勤務）, business（社用）, off（通常休）, paid（有給）, blank（未入力） }
   // 定休日で何も入っていない日は、設定に合わせて通常休として数える
   function staffMonthTotals(member, map, dates, store) {
-    const checks = K.storage.getChecks();
+    const checks = K.storage.getChecks(store.id);
     const totals = { work: 0, business: 0, off: 0, paid: 0, blank: 0 };
     for (const date of dates) {
       const shift = map.get(`${member.id}|${date}`);

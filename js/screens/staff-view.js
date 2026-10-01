@@ -146,7 +146,7 @@
 
     // 表示中の店舗での勤務だけを数える
     const detail = K.calc.staffMonthDetail(member, month, store.id);
-    const checks = K.storage.getChecks();
+    const checks = K.storage.getChecks(store.id);
     const result = K.rules.checkMonth(store.id, month);
     const myIssues = result.issues.filter((i) => i.staffId === member.id && i.type !== 'blank');
     const offShort = result.offShort.get(member.id);

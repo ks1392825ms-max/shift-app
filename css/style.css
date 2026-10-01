@@ -2749,7 +2749,7 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
   margin-top: 12px;
 }
 
-/* ==== 店舗ごとの表示（ヘッダーの［A店｜B店］） ==== */
+/* ==== 店舗ごとの表示（ヘッダーの店舗の切り替え） ==== */
 .app-header__inner {
   align-items: center;
 }
@@ -2806,4 +2806,184 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
 
 .metrics-table td {
   font-weight: 700;
+}
+
+/* ==== 店舗の追加・削除（店舗がいくつでも） ==== */
+
+/* ヘッダー：4店舗以上のときの選択メニュー */
+.header-store--menu {
+  display: flex;
+}
+
+.store-select {
+  max-width: 46vw;
+  min-height: 36px;
+  padding: 4px 30px 4px 12px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--store-color, var(--border));
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px; /* iPhone で選んだときに画面が拡大されないように */
+  font-weight: 700;
+}
+
+/* 横並びの切り替えは、店舗の数だけ幅を分ける */
+.store-switch {
+  min-width: 0;
+}
+
+/* 設定 > 店舗 */
+.store-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.store-card__show {
+  margin-top: 12px;
+}
+
+.current-badge {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 0.7rem;
+  font-weight: 700;
+  vertical-align: 2px;
+}
+
+/* ==== 勤務時間の細かい設定（15分単位・店舗ごと・曜日ごと） ==== */
+
+.roster-toolbar__actions {
+  flex-wrap: wrap;
+}
+
+/* チェックボックスと文字の1行 */
+.check-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.check-line input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--text);
+}
+
+.pattern-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+/* よく使う勤務時間（まとめて追加） */
+.preset-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.preset-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.preset-item + .preset-item {
+  border-top: 1px solid var(--border);
+}
+
+.preset-item input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--text);
+}
+
+.preset-item__time {
+  flex: 1;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.preset-item__note {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.preset-item.is-done {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* 曜日ごとのいつもの勤務 */
+.weekly-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.weekly-row {
+  display: grid;
+  grid-template-columns: 2.2em 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.weekly-row__day {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2em;
+  height: 2em;
+  border-radius: 50%;
+  background: var(--surface-2);
+  font-weight: 800;
+}
+
+.weekly-row.is-sat .weekly-row__day {
+  color: #2563eb;
+}
+
+.weekly-row.is-sun .weekly-row__day {
+  color: #dc2626;
+}
+
+.weekly-select {
+  min-height: 42px;
+  padding: 6px 10px;
+}
+
+/* 入力シート：その曜日のいつもの勤務 */
+.sheet-option {
+  position: relative;
+}
+
+.sheet-option.is-usual {
+  border-color: var(--text);
+}
+
+.usual-badge {
+  position: absolute;
+  top: -8px;
+  right: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 0.62rem;
+  font-weight: 800;
+  line-height: 1.6;
 }

@@ -44,7 +44,7 @@
         el('h2', { class: 'month-nav__label' }, shortDate(date)),
         el('button', { type: 'button', class: 'icon-btn icon-btn--round', 'aria-label': '次の日', onclick: () => go(1) }, '▶')
       ),
-      // 店舗の切り替えは、画面上部（ヘッダー）の［A店｜B店］で行う
+      // 店舗の切り替えは、画面上部（ヘッダー）で行う
       el('span', { class: 'store-tag', style: { '--store-color': store.color } }, store.name)
     );
   }

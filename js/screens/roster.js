@@ -184,7 +184,7 @@
     view.check = K.rules.checkMonth(view.store.id, view.month);
     view.table.querySelector('tbody').replaceWith(el('tbody', null, view.dates.map(dateRow)));
     view.table.querySelector('tfoot').replaceWith(footer());
-    const oldButton = document.querySelector('.check-btn:not(.export-btn)');
+    const oldButton = document.querySelector('.check-btn:not(.export-btn):not(.weekly-btn)');
     if (oldButton) oldButton.replaceWith(checkButton());
   }
 
@@ -209,7 +209,7 @@
     sheet = null;
     if (!returnFocus || !view) return;
     if (kind === 'check' || kind === 'export') {
-      const btn = document.querySelector(kind === 'check' ? '.check-btn:not(.export-btn)' : '.export-btn');
+      const btn = document.querySelector(kind === 'check' ? '.check-btn:not(.export-btn):not(.weekly-btn)' : '.export-btn');
       if (btn) btn.focus({ preventScroll: true });
     } else {
       focusCell(staffId, date);
@@ -259,26 +259,31 @@
   function openSheet(member, date) {
     closeSheet(false);
     const current = view.map.get(`${member.id}|${date}`) || null;
+    // その曜日のいつもの勤務（スタッフの設定。勤務パターンID または "off"）
+    const usual = (member.weeklyPatterns || {})[String(K.calc.weekdayOf(date))] || null;
     const patterns = member.patternIds
       .map((id) => K.storage.getPattern(id))
       .filter((p) => p && !p.deleted)
-      .sort((a, b) => a.start.localeCompare(b.start));
+      .sort((a, b) => (b.id === usual) - (a.id === usual) || a.start.localeCompare(b.start));
 
     const isCurrent = (kind, patternId) =>
       Boolean(current && current.kind === kind && (!TIMED_KINDS.includes(kind) || current.patternId === patternId));
+
+    const isUsual = (kind, patternId) => Boolean(usual) && ((kind === 'work' && patternId === usual) || (kind === 'off' && usual === 'off'));
 
     const option = ({ cls, main, sub, kind, patternId, color }) =>
       el(
         'button',
         {
           type: 'button',
-          class: `sheet-option ${cls}${isCurrent(kind, patternId) ? ' is-current' : ''}`,
+          class: `sheet-option ${cls}${isCurrent(kind, patternId) ? ' is-current' : ''}${isUsual(kind, patternId) ? ' is-usual' : ''}`,
           style: color ? { '--pattern-color': color } : null,
           'aria-pressed': String(isCurrent(kind, patternId)),
           onclick: () => apply(member, date, { kind, patternId }),
         },
         el('span', { class: 'sheet-option__main' }, main),
-        sub ? el('span', { class: 'sheet-option__sub' }, sub) : null
+        sub ? el('span', { class: 'sheet-option__sub' }, sub) : null,
+        isUsual(kind, patternId) ? el('span', { class: 'usual-badge' }, 'いつも') : null
       );
 
     // 通常勤務・社用のどちらも、登録済みの勤務パターンから時間を選ぶ
@@ -416,6 +421,26 @@
     panel.querySelector('.sheet__close').focus({ preventScroll: true });
   }
 
+  // ---- 曜日ごとのいつもの勤務を反映 ----
+
+  // スタッフの「曜日ごとのいつもの勤務」を、この月の未入力の日にだけ入れる（入力済みの日・定休日は変えない）
+  function applyWeekly() {
+    const hasSetting = view.staff.some((m) => m.active && m.storeId === view.store.id && m.weeklyPatterns && Object.keys(m.weeklyPatterns).length);
+    if (!hasSetting) {
+      K.app.toast('曜日ごとの勤務を設定したスタッフがいません（設定 > スタッフ）');
+      return;
+    }
+    const monthLabel = `${Number(view.month.slice(5))}月`;
+    if (!window.confirm(`${view.store.name}の${monthLabel}の「未入力の日」に、スタッフの曜日ごとのいつもの勤務を入れます。\n入力済みの日と定休日は変えません。よろしいですか？`)) return;
+    try {
+      const count = K.storage.applyWeeklyPatterns(view.store.id, view.month);
+      refreshAll();
+      K.app.toast(count ? `${count}日分を入れました` : '入れられる未入力の日はありませんでした');
+    } catch (err) {
+      K.app.toast(err.message);
+    }
+  }
+
   // ---- 出力（画像・印刷） ----
 
   function openExportSheet() {
@@ -425,12 +450,12 @@
     const targetIds = () => (target === 'all' ? stores.map((s) => s.id) : [target]);
     const monthLabel = `${Number(view.month.slice(0, 4))}年${Number(view.month.slice(5))}月`;
 
-    const buttons = [...stores.map((s) => [s.id, s.name]), ['all', '両方']].map(([key, label]) =>
+    const buttons = [...stores.map((s) => [s.id, s.name]), ['all', '全店舗']].map(([key, label]) =>
       el(
         'button',
         {
           type: 'button',
-          class: `segment__btn${key === target ? ' is-selected' : ''}`,
+          class: `chip${key === target ? ' is-selected' : ''}`,
           'aria-pressed': String(key === target),
           onclick: (event) => {
             target = key;
@@ -464,7 +489,7 @@
       { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sheet-title' },
       sheetHead('出力', monthLabel),
       el('p', { class: 'sheet__label' }, '店舗'),
-      el('div', { class: 'segment segment--compact', role: 'group', 'aria-label': '出力する店舗' }, buttons),
+      el('div', { class: 'chips', role: 'group', 'aria-label': '出力する店舗' }, buttons),
       el(
         'div',
         { class: 'export-actions' },
@@ -505,9 +530,15 @@
         el('h2', { class: 'month-nav__label' }, `${Number(month.slice(0, 4))}年${Number(month.slice(5))}月`),
         el('button', { type: 'button', class: 'icon-btn icon-btn--round', 'aria-label': '次の月', onclick: () => K.app.setMonth(shiftMonth(month, 1)) }, '▶')
       ),
-      // 店舗の切り替えは、画面上部（ヘッダー）の［A店｜B店］で行う
+      // 店舗の切り替えは、画面上部（ヘッダー）で行う
       el('span', { class: 'store-tag', style: { '--store-color': store.color } }, store.name),
-      el('div', { class: 'roster-toolbar__actions' }, checkButton(), el('button', { type: 'button', class: 'check-btn export-btn', onclick: openExportSheet }, '出力'))
+      el(
+        'div',
+        { class: 'roster-toolbar__actions' },
+        checkButton(),
+        el('button', { type: 'button', class: 'check-btn export-btn', onclick: openExportSheet }, '出力'),
+        el('button', { type: 'button', class: 'check-btn weekly-btn', onclick: applyWeekly }, '曜日の設定を反映')
+      )
     );
   }
 

@@ -52,7 +52,7 @@
   //   total: 未入力以外の件数, blank: 未入力の件数
   // }
   function checkMonth(storeId, month) {
-    const checks = K.storage.getChecks();
+    const checks = K.storage.getChecks(storeId);
     const store = K.storage.getStore(storeId);
     const dates = K.calc.monthDates(month);
     const staff = K.calc.rosterStaff(storeId, month);

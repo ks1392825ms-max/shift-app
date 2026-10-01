@@ -30,14 +30,16 @@
   }
 
   function render(container) {
-    const c = K.storage.getChecks();
+    // 表示中の店舗のチェックの基準（店舗ごとに別々に持つ）
+    const store = K.app.currentStore();
+    const c = K.storage.getChecks(store.id);
     const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
     const val = (id) => container.querySelector(`#${id}`);
 
     function onSubmit(event) {
       event.preventDefault();
       try {
-        K.storage.updateChecks({
+        K.storage.updateChecks(store.id, {
           maxConsecutiveDays: val('chk-consecutive').value,
           monthlyOffDays: val('chk-off').value,
           shortageMinSlots: val('chk-short-slots').value,
@@ -47,7 +49,7 @@
           countPaidLeaveAsOff: val('chk-paid').checked,
           closedDayAsOff: val('chk-closed').checked,
         });
-        K.app.toast('保存しました');
+        K.app.toast(`${store.name}の基準を保存しました`);
         K.app.rerender();
       } catch (err) {
         errorBox.textContent = err.message;
@@ -56,7 +58,13 @@
     }
 
     container.append(
-      el('p', { class: 'hint' }, 'シフト表の自動チェックの基準です。アプリは知らせるだけで、シフトを自動で直すことはしません。'),
+      el(
+        'div',
+        { class: 'toolbar toolbar--wrap' },
+        el('span', { class: 'store-tag', style: { '--store-color': store.color } }, store.name),
+        el('p', { class: 'hint hint--inline' }, `${store.name}専用の自動チェックの基準です。ほかの店舗は、画面上部で切り替えて設定します。`)
+      ),
+      el('p', { class: 'hint' }, 'アプリは知らせるだけで、シフトを自動で直すことはしません。'),
       el(
         'form',
         { class: 'card', novalidate: true, onsubmit: onSubmit },

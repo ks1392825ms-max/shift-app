@@ -31,6 +31,11 @@
   const isInt = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
   const isTime = (v) => U.isValidTime(v);
   const isRange = (r) => r && isTime(r.start) && isTime(r.end) && r.start < r.end;
+  // 勤務パターンの出勤・退勤は15分単位まで
+  const isPatternRange = (r) => r && U.isValidTime(r.start, 15) && U.isValidTime(r.end, 15) && r.start < r.end;
+  // 曜日ごとのいつもの勤務：{ "0"〜"6": 勤務パターンID または "off" }
+  const isWeekly = (w) =>
+    w === undefined || (w && typeof w === 'object' && !Array.isArray(w) && Object.entries(w).every(([k, v]) => /^[0-6]$/.test(k) && (v === 'off' || isId(v))));
   const isOptDate = (v) => v === '' || v === undefined || U.isValidDate(v);
   const isCount = (v) => isInt(v, 0, 50);
   const isOptCount = (v) => v === null || v === undefined || isCount(v);
@@ -46,9 +51,11 @@
       Array.isArray(r.closedWeekdays) && r.closedWeekdays.every((w) => isInt(w, 0, 6)) && Number.isFinite(r.order),
     staff: (r) =>
       isStr(r.name, 12) && r.name.trim() && isId(r.storeId) && ['stylist', 'assistant'].includes(r.role) && isStr(r.title || '', 10) &&
-      Array.isArray(r.patternIds) && r.patternIds.every(isId) && typeof r.active === 'boolean' && Number.isFinite(r.order),
+      Array.isArray(r.patternIds) && r.patternIds.every(isId) && typeof r.active === 'boolean' && Number.isFinite(r.order) &&
+      isWeekly(r.weeklyPatterns),
     shiftPatterns: (r) =>
-      isRange(r) && isInt(r.breakMinutes, 0, 24 * 60) && isStr(r.label, 12) && r.label.trim() && COLOR_RE.test(r.color),
+      isPatternRange(r) && isInt(r.breakMinutes, 0, 24 * 60) && isStr(r.label, 12) && r.label.trim() && COLOR_RE.test(r.color) &&
+      (r.storeId === undefined || r.storeId === null || isId(r.storeId)),
     shifts: (r) =>
       isId(r.staffId) && U.isValidDate(r.date) && ['work', 'off', 'paid', 'business'].includes(r.kind) &&
       (r.patternId === null || r.patternId === undefined || isId(r.patternId)) &&
@@ -111,7 +118,11 @@
       });
     }
     // 臨時休業日の機能はなくしたので、古いファイルに入っていても使わない
-    for (const s of data.stores) delete s.closedDates;
+    for (const s of data.stores) {
+      delete s.closedDates;
+      // 店舗専用のチェックの基準（ある場合だけ）：正しくない値は初期値にする
+      if (s.checks !== undefined) s.checks = cleanChecks(s.checks);
+    }
 
     if (data.stores.filter((s) => !s.deleted).length === 0) {
       throw new Error('ファイルに店舗の情報が入っていません。シフト管理のバックアップファイルか確認してください。');

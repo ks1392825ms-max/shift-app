@@ -1,11 +1,11 @@
-// 集計（「この店舗」＝ヘッダーで選んだ店舗だけの集計 ／「2店舗の比較」）
+// 集計（「この店舗」＝ヘッダーで選んだ店舗だけの集計 ／「店舗の比較」＝全店舗を並べる）
 (function () {
   'use strict';
   const K = window.ShiftApp;
   const U = K.utils;
   const el = U.el;
 
-  // 表示するもの：'store'（この店舗）/ 'compare'（2店舗の比較）
+  // 表示するもの：'store'（この店舗）/ 'compare'（店舗の比較）
   let mode = 'store';
 
   function shiftMonth(month, delta) {
@@ -114,7 +114,7 @@
     );
   }
 
-  // ---- 2店舗の比較 ----
+  // ---- 店舗の比較（店舗がいくつあっても、すべて横に並べる。狭い画面では横にスクロール） ----
 
   // 店舗ごとの数字を横に並べた表
   function metricsTable(stores, summaries, checks) {
@@ -263,7 +263,7 @@
           { class: 'segment segment--compact summary-mode', role: 'group', 'aria-label': '集計の種類' },
           [
             ['store', `この店舗（${store.name}）`],
-            ['compare', '2店舗の比較'],
+            ['compare', '店舗の比較'],
           ].map(([key, label]) =>
             el(
               'button',

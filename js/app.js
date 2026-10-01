@@ -16,7 +16,7 @@
     screen: 'roster',
     params: {},
     month: U.todayStr().slice(0, 7), // 表示している月（"2026-10"）
-    storeId: null, // 表示している店舗。すべての画面で共通（ヘッダーの［A店｜B店］で切り替える）
+    storeId: null, // 表示している店舗。すべての画面で共通（ヘッダーの店舗の切り替えで選ぶ）
   };
 
   function loadUiState() {
@@ -44,13 +44,36 @@
     return store;
   }
 
-  // ヘッダーの［A店｜B店］
+  // ヘッダーの店舗の切り替え
+  // 3店舗までは横に並んだボタン、4店舗以上はスマホでも押しやすい選択メニューにする
+  const SWITCH_BUTTONS_MAX = 3;
+
   function renderStoreSwitch() {
     const box = document.getElementById('store-switch');
     const store = currentStore();
+    document.documentElement.style.setProperty('--current-store-color', store.color);
     if (!box) return;
+    const stores = K.storage.getStores();
+    const useMenu = stores.length > SWITCH_BUTTONS_MAX;
+    box.classList.toggle('segment', !useMenu);
+    box.classList.toggle('header-store--menu', useMenu);
+    if (useMenu) {
+      box.replaceChildren(
+        U.el(
+          'select',
+          {
+            class: 'store-select',
+            'aria-label': '表示する店舗',
+            style: { '--store-color': store.color },
+            onchange: (event) => setStore(event.currentTarget.value),
+          },
+          stores.map((s) => U.el('option', { value: s.id, selected: s.id === store.id }, s.name))
+        )
+      );
+      return;
+    }
     box.replaceChildren(
-      ...K.storage.getStores().map((s) =>
+      ...stores.map((s) =>
         U.el(
           'button',
           {
@@ -64,7 +87,6 @@
         )
       )
     );
-    document.documentElement.style.setProperty('--current-store-color', store.color);
   }
 
   function render() {

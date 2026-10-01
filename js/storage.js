@@ -209,7 +209,8 @@
     return Math.max(-1, ...list.map((x) => x.order ?? -1)) + 1;
   }
 
-  // ---- 店舗（A店・B店の2つ。追加・削除はしない） ----
+  // ---- 店舗（初期は A店・B店。自由に追加・削除できる） ----
+  // 削除は本当に消さず deleted: true にする（その店舗のスタッフ・シフト・集計の記録は残り、「元に戻す」で戻せる）
 
   function getStores() {
     return active(data.stores)
@@ -222,22 +223,109 @@
     return s ? copy(s) : null;
   }
 
-  function updateStore(id, fields) {
-    findActive(data.stores, id, '店舗が見つかりませんでした。');
+  // 削除した店舗の一覧（元に戻す用）
+  function getDeletedStores() {
+    return data.stores
+      .filter((s) => s.deleted)
+      .sort((a, b) => a.order - b.order)
+      .map(copy);
+  }
 
+  // 店舗名・営業時間・定休日のチェック
+  function normalizeStore(fields, exceptId) {
     const name = cleanText(fields.name, { label: '店舗名', max: MAX_STORE_NAME, required: true });
-    if (active(data.stores).some((s) => s.id !== id && s.name === name)) {
+    if (active(data.stores).some((s) => s.id !== exceptId && s.name === name)) {
       throw new Error(`「${name}」はすでにあります。別の名前にしてください。`);
     }
 
     if (!U.isValidTime(fields.open) || !U.isValidTime(fields.close)) throw new Error('営業時間が正しくありません。');
     if (U.toMinutes(fields.open) >= U.toMinutes(fields.close)) throw new Error('閉店時刻は開店時刻より後にしてください。');
 
-    const closedWeekdays = [...new Set(fields.closedWeekdays)].map(Number).sort((a, b) => a - b);
+    const closedWeekdays = [...new Set(fields.closedWeekdays || [])].map(Number).sort((a, b) => a - b);
     if (closedWeekdays.some((w) => !Number.isInteger(w) || w < 0 || w > 6)) throw new Error('定休日が正しくありません。');
     if (closedWeekdays.length === 7) throw new Error('すべての曜日を定休日にはできません。');
 
+    return { name, open: fields.open, close: fields.close, closedWeekdays };
+  }
+
+  // まだ使われていない色を選ぶ（店舗の目印の色）
+  function nextStoreColor() {
+    const used = new Set(active(data.stores).map((s) => s.color));
+    return K.defaults.storeColors.find((c) => !used.has(c)) || K.defaults.storeColors[data.stores.length % K.defaults.storeColors.length];
+  }
+
+  // 店舗を追加する。チェックの基準も、その店舗専用に初期値で持たせる
+  function addStore(fields) {
+    const clean = normalizeStore(fields);
+    const now = U.nowIso();
+    const store = {
+      id: U.uuid(),
+      ...clean,
+      color: fields.color ? cleanColor(fields.color) : nextStoreColor(),
+      order: nextOrder(data.stores),
+      checks: { ...K.defaults.checks },
+      createdAt: now,
+      updatedAt: now,
+      deleted: false,
+    };
+    commit((d) => d.stores.push(store));
+    return copy(store);
+  }
+
+  // 店舗を削除する（在籍中のスタッフがいる店舗は削除できない。最後の1店舗も削除できない）
+  function deleteStore(id) {
+    const store = findActive(data.stores, id, '店舗が見つかりませんでした。');
+    if (active(data.stores).length <= 1) throw new Error('店舗は最低1つ必要です。');
+    const members = active(data.staff).filter((m) => m.storeId === id && m.active);
+    if (members.length) {
+      throw new Error(
+        `${store.name}には在籍中のスタッフが${members.length}人います（${members.map((m) => m.name).join('、')}）。` +
+          '先にスタッフをほかの店舗に移すか、「在籍中」を外してください。'
+      );
+    }
     commit((d) => {
+      const s = d.stores.find((x) => x.id === id);
+      s.deleted = true;
+      s.updatedAt = U.nowIso();
+    });
+  }
+
+  // 削除した店舗を元に戻す
+  function restoreStore(id) {
+    const store = data.stores.find((s) => s.id === id && s.deleted);
+    if (!store) throw new Error('店舗が見つかりませんでした。');
+    if (active(data.stores).some((s) => s.name === store.name)) {
+      throw new Error(`「${store.name}」という店舗がすでにあるため、元に戻せません。先にどちらかの名前を変えてください。`);
+    }
+    commit((d) => {
+      const s = d.stores.find((x) => x.id === id);
+      s.deleted = false;
+      s.updatedAt = U.nowIso();
+    });
+  }
+
+  // 店舗の並び順を、1つ上（-1）か1つ下（+1）と入れ替える
+  function moveStore(id, direction) {
+    findActive(data.stores, id, '店舗が見つかりませんでした。');
+    const list = getStores();
+    const index = list.findIndex((s) => s.id === id);
+    const other = list[index + direction];
+    if (index < 0 || !other) return;
+    commit((d) => {
+      const a = d.stores.find((s) => s.id === id);
+      const b = d.stores.find((s) => s.id === other.id);
+      [a.order, b.order] = [b.order, a.order];
+      a.updatedAt = b.updatedAt = U.nowIso();
+    });
+  }
+
+  function updateStore(id, fields) {
+    findActive(data.stores, id, '店舗が見つかりませんでした。');
+    const { name, closedWeekdays } = normalizeStore(fields, id);
+    const color = fields.color ? cleanColor(fields.color) : null;
+
+    commit((d) => {
+      if (color) d.stores.find((s) => s.id === id).color = color;
       Object.assign(d.stores.find((s) => s.id === id), {
         name,
         open: fields.open,
@@ -250,9 +338,18 @@
 
   // ---- 勤務パターン ----
 
-  // 開始時刻の早い順
-  function getPatterns() {
+  // 勤務パターンは「全店舗共通」（storeId なし。以前からのパターンはすべてこれ）か「その店舗専用」（storeId あり）
+  // 出勤・退勤の時刻は15分単位まで（画面では30分単位が基本で、切り替えると15分単位も選べる）
+  const PATTERN_TIME_STEP = 15;
+
+  function patternAvailableIn(pattern, storeId) {
+    return !pattern.storeId || pattern.storeId === storeId;
+  }
+
+  // 開始時刻の早い順。storeId を渡すと、その店舗で使えるもの（共通＋その店舗専用）だけ
+  function getPatterns({ storeId } = {}) {
     return active(data.shiftPatterns)
+      .filter((p) => !storeId || patternAvailableIn(p, storeId))
       .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end))
       .map(copy);
   }
@@ -263,7 +360,9 @@
   }
 
   function normalizePattern(fields, exceptId) {
-    if (!U.isValidTime(fields.start) || !U.isValidTime(fields.end)) throw new Error('勤務時間が正しくありません。');
+    if (!U.isValidTime(fields.start, PATTERN_TIME_STEP) || !U.isValidTime(fields.end, PATTERN_TIME_STEP)) {
+      throw new Error('勤務時間が正しくありません（15分単位で設定してください）。');
+    }
     const duration = U.toMinutes(fields.end) - U.toMinutes(fields.start);
     if (duration <= 0) throw new Error('終了時刻は開始時刻より後にしてください。');
 
@@ -273,12 +372,26 @@
     }
     if (breakMinutes >= duration) throw new Error('休憩の長さは、勤務時間より短くしてください。');
 
+    // 使う店舗：空なら全店舗共通
+    const storeId = fields.storeId || null;
+    if (storeId) findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+
+    // 同じ店舗で使えるパターンどうしで、表示名が重ならないようにする
     const label = cleanText(fields.label, { label: '表示名', max: MAX_PATTERN_LABEL, required: true });
-    if (active(data.shiftPatterns).some((p) => p.id !== exceptId && p.label === label)) {
-      throw new Error(`表示名「${label}」はすでにあります。別の表示名にしてください。`);
+    const clash = active(data.shiftPatterns).some(
+      (p) => p.id !== exceptId && p.label === label && (!p.storeId || !storeId || p.storeId === storeId)
+    );
+    if (clash) throw new Error(`表示名「${label}」はすでにあります。別の表示名にしてください。`);
+
+    // 専用にする店舗以外のスタッフが使っていたら、変えられない
+    if (exceptId && storeId) {
+      const others = active(data.staff).filter((s) => s.storeId !== storeId && s.patternIds.includes(exceptId));
+      if (others.length) {
+        throw new Error(`${others.map((s) => s.name).join('、')} さん（ほかの店舗）が使っているため、この店舗専用にはできません。`);
+      }
     }
 
-    return { start: fields.start, end: fields.end, breakMinutes, label, color: cleanColor(fields.color) };
+    return { start: fields.start, end: fields.end, breakMinutes, label, color: cleanColor(fields.color), storeId };
   }
 
   function addPattern(fields) {
@@ -321,6 +434,10 @@
       for (const s of d.staff) {
         if (!s.deleted && s.patternIds.includes(id)) {
           s.patternIds = s.patternIds.filter((p) => p !== id);
+          // 曜日ごとの勤務からも外す
+          if (s.weeklyPatterns) {
+            for (const w of Object.keys(s.weeklyPatterns)) if (s.weeklyPatterns[w] === id) delete s.weeklyPatterns[w];
+          }
           s.updatedAt = now;
         }
       }
@@ -355,9 +472,54 @@
 
     const patternIds = [...new Set(fields.patternIds || [])];
     if (patternIds.length === 0) throw new Error('使える勤務パターンを1つ以上選んでください。');
-    for (const pid of patternIds) findActive(data.shiftPatterns, pid, '選んだ勤務パターンが見つかりませんでした。');
+    for (const pid of patternIds) {
+      const p = findActive(data.shiftPatterns, pid, '選んだ勤務パターンが見つかりませんでした。');
+      if (!patternAvailableIn(p, fields.storeId)) throw new Error(`「${p.label}」は、ほかの店舗専用の勤務パターンです。`);
+    }
 
-    return { name, storeId: fields.storeId, role: fields.role, title, patternIds, active: fields.active !== false };
+    // 曜日ごとのいつもの勤務：{ "0"〜"6"（日〜土）: 勤務パターンID または "off"（通常休） }
+    // 使える勤務パターンから外したものは、自動で外す
+    const weeklyPatterns = {};
+    for (const [w, value] of Object.entries(fields.weeklyPatterns || {})) {
+      if (!/^[0-6]$/.test(w) || !value) continue;
+      if (value === 'off' || patternIds.includes(value)) weeklyPatterns[w] = value;
+    }
+
+    return { name, storeId: fields.storeId, role: fields.role, title, patternIds, weeklyPatterns, active: fields.active !== false };
+  }
+
+  // 曜日ごとのいつもの勤務を、その月の「未入力の日」に反映する（入力済みの日・定休日は変えない）
+  // 戻り値：反映した日数
+  function applyWeeklyPatterns(storeId, month) {
+    const store = findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    const [y, m] = month.split('-').map(Number);
+    const days = new Date(y, m, 0).getDate();
+    const members = active(data.staff).filter((s) => s.storeId === storeId && s.active && s.weeklyPatterns);
+    const plans = [];
+    for (let day = 1; day <= days; day++) {
+      const date = `${month}-${String(day).padStart(2, '0')}`;
+      const weekday = new Date(y, m - 1, day).getDay();
+      if (store.closedWeekdays.includes(weekday)) continue;
+      for (const s of members) {
+        const value = s.weeklyPatterns[String(weekday)];
+        if (!value) continue;
+        if (data.shifts.some((x) => x.id === shiftId(s.id, date) && !x.deleted)) continue; // 入力済みは変えない
+        if (value !== 'off' && !data.shiftPatterns.some((p) => p.id === value && !p.deleted)) continue;
+        plans.push({ staffId: s.id, date, value });
+      }
+    }
+    if (!plans.length) return 0;
+    commit((d) => {
+      const now = U.nowIso();
+      for (const { staffId, date, value } of plans) {
+        const id = shiftId(staffId, date);
+        const fields = { kind: value === 'off' ? 'off' : 'work', patternId: value === 'off' ? null : value, storeId, breaks: [] };
+        const existing = d.shifts.find((x) => x.id === id);
+        if (existing) Object.assign(existing, fields, { deleted: false, updatedAt: now });
+        else d.shifts.push({ id, staffId, date, ...fields, createdAt: now, updatedAt: now, deleted: false });
+      }
+    });
+    return plans.length;
   }
 
   function addStaff(fields) {
@@ -785,12 +947,18 @@
 
   // ---- 設定 ----
 
-  function getChecks() {
-    return { ...data.settings.checks };
+  // チェックの基準
+  // 店舗ごとに持てる（store.checks）。店舗専用の基準がない店舗（以前からの A店・B店など）は、共通の基準（settings.checks）を使う
+  function getChecks(storeId) {
+    const store = storeId ? data.stores.find((s) => s.id === storeId) : null;
+    return { ...data.settings.checks, ...((store && store.checks) || {}) };
   }
 
-  // チェックの基準を保存する
-  function updateChecks(fields) {
+  // チェックの基準を保存する（storeId を渡すと、その店舗専用の基準として保存する）
+  function updateChecks(storeIdOrFields, maybeFields) {
+    const storeId = typeof storeIdOrFields === 'string' ? storeIdOrFields : null;
+    const fields = storeId ? maybeFields : storeIdOrFields;
+    if (storeId) findActive(data.stores, storeId, '店舗が見つかりませんでした。');
     const intIn = (value, label, min, max) => {
       const n = Number(value);
       if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${label}は${min}〜${max}の整数で入力してください。`);
@@ -814,8 +982,14 @@
       closedDayAsOff: Boolean(fields.closedDayAsOff),
     };
     commit((d) => {
-      Object.assign(d.settings.checks, clean);
-      d.settings.updatedAt = U.nowIso();
+      if (storeId) {
+        const s = d.stores.find((x) => x.id === storeId);
+        s.checks = clean;
+        s.updatedAt = U.nowIso();
+      } else {
+        Object.assign(d.settings.checks, clean);
+        d.settings.updatedAt = U.nowIso();
+      }
     });
   }
 
@@ -917,6 +1091,11 @@
     init,
     getStores,
     getStore,
+    getDeletedStores,
+    addStore,
+    deleteStore,
+    restoreStore,
+    moveStore,
     updateStore,
     getPatterns,
     getPattern,
@@ -930,6 +1109,7 @@
     updateStaff,
     moveStaff,
     deleteStaff,
+    applyWeeklyPatterns,
     shiftStoreId,
     getShifts,
     getShift,
