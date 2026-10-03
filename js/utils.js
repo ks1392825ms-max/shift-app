@@ -126,6 +126,16 @@
   }
 
   // 時刻を選ぶ <select> を作る
+  // 並び替えの「↑」「↓」ボタン（一番上の↑・一番下の↓は押せない）。onMove(-1 か +1)
+  function moveButtons({ name, index, count, onMove }) {
+    return el(
+      'span',
+      { class: 'move-btns' },
+      el('button', { type: 'button', class: 'icon-btn move-btn', 'aria-label': `${name}を上へ`, disabled: index === 0, onclick: () => onMove(-1) }, '↑'),
+      el('button', { type: 'button', class: 'icon-btn move-btn', 'aria-label': `${name}を下へ`, disabled: index === count - 1, onclick: () => onMove(1) }, '↓')
+    );
+  }
+
   function timeSelect({ id, value, from, to, step, onchange }) {
     return el(
       'select',
@@ -153,5 +163,6 @@
     isValidTime,
     el,
     timeSelect,
+    moveButtons,
   };
 })();

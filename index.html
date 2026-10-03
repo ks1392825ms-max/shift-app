@@ -3,8 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <!-- 外部への通信（fetch など）をすべて禁止する安全装置。ネット保存を追加するときだけ、確認のうえで変更する -->
-  <meta http-equiv="Content-Security-Policy" content="connect-src 'none'; form-action 'none'">
+  <!-- 安全装置（CSP）：プログラムはこのアプリ自身のファイルだけを読み込む。
+       通信してよいのは、共有モードで使う Firebase（データの保存・メールリンクのログイン・ログイン状態の維持）だけ。
+       「この端末だけで使う」モードのときは、Firebase の部品を読み込まないので、どこにも通信しない。 -->
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self'; connect-src https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; form-action 'none'">
   <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">
   <title>シフト管理</title>
@@ -23,6 +25,8 @@
     <div class="app-header__inner">
       <h1 class="app-title">SHIFT</h1>
       <span class="app-subtitle" id="screen-title"></span>
+      <!-- 共有モードのときだけ表示 -->
+      <span class="mode-badge" id="mode-badge" hidden></span>
       <!-- 表示する店舗（すべての画面で共通） -->
       <div class="segment segment--compact store-switch header-store" id="store-switch" role="group" aria-label="表示する店舗"></div>
     </div>
@@ -53,6 +57,8 @@
   <script src="js/utils.js" defer></script>
   <script src="js/data/defaults.js" defer></script>
   <script src="js/storage.js" defer></script>
+  <script src="js/firebase-config.js" defer></script>
+  <script src="js/cloud.js" defer></script>
   <script src="js/backup.js" defer></script>
   <script src="js/holidays.js" defer></script>
   <script src="js/calc.js" defer></script>
@@ -70,6 +76,7 @@
   <script src="js/screens/settings-checks.js" defer></script>
   <script src="js/screens/settings-data.js" defer></script>
   <script src="js/screens/settings.js" defer></script>
+  <script src="js/screens/login.js" defer></script>
   <script src="js/app.js" defer></script>
 </body>
 </html>

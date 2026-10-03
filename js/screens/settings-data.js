@@ -104,6 +104,61 @@
     }
   }
 
+  // 共有モード（管理者4人で共有）の切り替え
+  function modeCard() {
+    if (K.storage.isCloud()) {
+      const user = K.app.cloudUser();
+      return el(
+        'section',
+        { class: 'card mode-card is-cloud' },
+        el('h2', { class: 'card__title' }, '共有モード（管理者で共有）'),
+        el('dl', { class: 'info-list' }, el('dt', null, 'ログイン中'), el('dd', null, user ? user.email : '')),
+        el('p', { class: 'hint hint--left' }, 'ほかの管理者が変えた内容は、自動で反映されます。電波がないときに入力した分は、つながったときに送られます。'),
+        el(
+          'div',
+          { class: 'actions actions--tight' },
+          el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => K.app.cloudActions.signOut() }, 'ログアウト'),
+          el(
+            'button',
+            {
+              type: 'button',
+              class: 'btn btn--ghost',
+              onclick: () => {
+                if (window.confirm('この端末だけで使う形に戻しますか？\n共有のデータは消えません。この端末で以前使っていたデータが表示されます。')) K.app.cloudActions.backToLocal();
+              },
+            },
+            'この端末だけで使う形に戻す'
+          )
+        )
+      );
+    }
+    const supported = K.cloud && K.cloud.supported();
+    return el(
+      'section',
+      { class: 'card mode-card' },
+      el('h2', { class: 'card__title' }, '共有モード（管理者で共有）'),
+      el('p', { class: 'hint hint--left' }, '今は「この端末だけ」で使っています。共有モードにすると、管理者が同じデータを見て編集できます（ログインが必要です）。'),
+      el('p', { class: 'hint hint--left' }, '切り替えても、この端末のデータは消えず、書き換えもしません。いつでも戻せます。'),
+      supported
+        ? el(
+            'div',
+            { class: 'actions actions--tight' },
+            el(
+              'button',
+              {
+                type: 'button',
+                class: 'btn btn--primary',
+                onclick: () => {
+                  if (window.confirm('共有モードに切り替えますか？\nログイン画面が開きます。この端末のデータは消えません。')) K.app.cloudActions.switchToCloud();
+                },
+              },
+              '共有モードに切り替える'
+            )
+          )
+        : el('p', { class: 'hint hint--left' }, '共有モードは、公開した URL（https://〜.github.io/shift-app/）で開いたときに使えます。')
+    );
+  }
+
   function pendingCard() {
     return el(
       'section',
@@ -128,12 +183,15 @@
           '合体する（おすすめ）',
           el('span', { class: 'export-actions__sub' }, 'この端末とファイルの両方の入力を残します。同じ記録は、あとから変更したほうを残します')
         ),
-        el(
-          'button',
-          { type: 'button', class: 'btn btn--ghost', onclick: applyReplace },
-          '丸ごと置き換える',
-          el('span', { class: 'export-actions__sub' }, 'この端末のデータを、ファイルの内容と同じにします')
-        ),
+        // 共有モードでは、ほかの管理者のデータまで置き換えてしまうため出さない
+        K.storage.isCloud()
+          ? null
+          : el(
+              'button',
+              { type: 'button', class: 'btn btn--ghost', onclick: applyReplace },
+              '丸ごと置き換える',
+              el('span', { class: 'export-actions__sub' }, 'この端末のデータを、ファイルの内容と同じにします')
+            ),
         el(
           'button',
           {
@@ -168,7 +226,14 @@
 
     // 表示しない部分（null）を除いてから並べる
     const parts = [
-      el('p', { class: 'hint' }, 'データは、このブラウザの中に保存されています。万一に備えて、ときどきバックアップを保存してください。'),
+      modeCard(),
+      el(
+        'p',
+        { class: 'hint' },
+        K.storage.isCloud()
+          ? '共有モードです。データは共有の保存場所（Firebase）にあります。万一に備えて、ときどきバックアップを保存してください。'
+          : 'データは、このブラウザの中に保存されています。万一に備えて、ときどきバックアップを保存してください。'
+      ),
       pending ? pendingCard() : null,
       el(
         'section',

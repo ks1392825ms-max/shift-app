@@ -152,12 +152,21 @@
     );
   }
 
-  function row(bt) {
+  function move(id, direction) {
+    try {
+      K.storage.moveBusinessTime(id, direction);
+      K.app.rerender();
+    } catch (err) {
+      K.app.toast(err.message);
+    }
+  }
+
+  function row(bt, index, count) {
     const m = K.storage.getStaffMember(bt.staffId);
     const store = m ? K.storage.getStore(m.storeId) : null;
     return el(
       'li',
-      null,
+      { class: 'reorder-row' },
       el(
         'button',
         { type: 'button', class: 'pattern-row', onclick: () => openForm(bt.id) },
@@ -177,7 +186,13 @@
           )
         ),
         el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›')
-      )
+      ),
+      U.moveButtons({
+        name: `${m ? m.name : ''}${U.WEEKDAYS[bt.weekday]}曜${U.formatTime(bt.start)}の社用`,
+        index,
+        count,
+        onMove: (direction) => move(bt.id, direction),
+      })
     );
   }
 
@@ -199,11 +214,11 @@
       el(
         'div',
         { class: 'toolbar' },
-        el('p', { class: 'hint hint--inline' }, '毎週決まった社用時間です。この時間は予約可能人数から除きます。'),
+        el('p', { class: 'hint hint--inline' }, '毎週決まった社用時間です。この時間は予約可能人数から除きます。「↑」「↓」で並び順を変えられます。'),
         el('button', { type: 'button', class: 'btn btn--primary btn--small', onclick: () => openForm('new') }, '＋ 追加')
       ),
       list.length
-        ? el('ul', { class: 'list-card' }, list.map(row))
+        ? el('ul', { class: 'list-card' }, list.map((bt, i) => row(bt, i, list.length)))
         : el('p', { class: 'empty-row' }, 'まだ登録されていません。日付を指定した社用時間は、シフト表の「1日の詳細」で登録します。')
     );
   }

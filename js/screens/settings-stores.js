@@ -48,8 +48,7 @@
         el(
           'div',
           { class: 'store-card__actions' },
-          el('button', { type: 'button', class: 'icon-btn', 'aria-label': `${store.name}を上へ`, disabled: index === 0, onclick: () => move(store.id, -1) }, '▲'),
-          el('button', { type: 'button', class: 'icon-btn', 'aria-label': `${store.name}を下へ`, disabled: index === count - 1, onclick: () => move(store.id, 1) }, '▼'),
+          U.moveButtons({ name: store.name, index, count, onMove: (direction) => move(store.id, direction) }),
           el('button', { type: 'button', class: 'text-btn', onclick: () => openForm(store.id) }, '編集')
         )
       ),
@@ -85,7 +84,7 @@
       class: 'field__input',
       type: 'text',
       maxlength: '10',
-      placeholder: '例：C店、駅前店',
+      placeholder: '例：店舗C、駅前店',
       value: base.name,
     });
     const openSelect = U.timeSelect({ id: 'store-open', value: base.open });

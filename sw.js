@@ -2,9 +2,10 @@
 // 公開した URL（https）で開いたときだけ動く。
 // 方針：いつもはインターネットから最新のファイルを取り、取れないとき（電波がない等）だけ、保存しておいたファイルを使う。
 // そのため、アプリを更新したときに古い版が残り続けることはない。
-// シフトや設定のデータはここでは扱わない（データはブラウザの localStorage にある）。
+// シフトや設定のデータはここでは扱わない（端末だけのモードは localStorage、共有モードは Firebase が扱う）。
+// 同じ場所（このアプリ）のファイルだけを扱い、Firebase との通信には関わらない。
 
-const CACHE = 'shift-app-v1';
+const CACHE = 'shift-app-v2';
 
 // 最初に保存しておくファイル（アプリのファイルを増やしたら、ここにも追加する）
 const APP_FILES = [
@@ -18,6 +19,11 @@ const APP_FILES = [
   'js/utils.js',
   'js/data/defaults.js',
   'js/storage.js',
+  'js/firebase-config.js',
+  'js/cloud.js',
+  'js/vendor/firebase/firebase-app.js',
+  'js/vendor/firebase/firebase-auth.js',
+  'js/vendor/firebase/firebase-firestore.js',
   'js/backup.js',
   'js/holidays.js',
   'js/calc.js',
@@ -35,6 +41,7 @@ const APP_FILES = [
   'js/screens/settings-checks.js',
   'js/screens/settings-data.js',
   'js/screens/settings.js',
+  'js/screens/login.js',
   'js/app.js',
 ];
 

@@ -2987,3 +2987,86 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
   font-weight: 800;
   line-height: 1.6;
 }
+
+/* ==== 共有モード（ログイン画面・「共有中」の印） ==== */
+
+/* ログインなどの画面では、店舗の切り替えと下のタブを隠す */
+body.is-gate .header-store,
+body.is-gate .bottom-nav {
+  display: none;
+}
+
+.screen[data-screen="login"] {
+  max-width: 480px;
+}
+
+.gate-card {
+  margin-top: 8px;
+}
+
+.gate-notes {
+  margin: 12px 0 0;
+  padding-left: 1.2em;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.mode-badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.mode-card.is-cloud {
+  border-color: var(--text);
+}
+
+@media (max-width: 420px) {
+  .mode-badge {
+    padding: 2px 8px;
+  }
+}
+
+/* ==== 並び替え（設定の「↑」「↓」） ==== */
+
+.move-btns {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.icon-btn.move-btn {
+  width: 34px;
+  height: 34px;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* 一覧の行：左に項目（押すと編集）、右に「↑」「↓」 */
+.reorder-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 10px;
+}
+
+.reorder-row > .pattern-row {
+  flex: 1;
+  min-width: 0;
+  padding-right: 6px;
+}
+
+@media (max-width: 420px) {
+  .icon-btn.move-btn {
+    width: 32px;
+    height: 32px;
+  }
+  .reorder-row > .pattern-row .chevron {
+    display: none;
+  }
+}

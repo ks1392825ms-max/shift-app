@@ -70,17 +70,19 @@
     };
   }
 
-  function bandRow(b, onClick) {
+  // move を渡すと「↑」「↓」を付ける：{ index, count, onMove }
+  function bandRow(b, onClick, move) {
     return el(
       'li',
-      null,
+      move ? { class: 'reorder-row' } : null,
       el(
         'button',
         { type: 'button', class: 'pattern-row', onclick: onClick },
         el('span', { class: 'band-time' }, `${U.formatTime(b.start)}〜${U.formatTime(b.end)}`),
         el('span', { class: 'pattern-row__main' }, el('span', { class: 'pattern-row__sub band-summary' }, bandSummary(b))),
         el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›')
-      )
+      ),
+      move ? U.moveButtons({ name: `${U.formatTime(b.start)}からの時間帯`, ...move }) : null
     );
   }
 
@@ -296,9 +298,30 @@
         el('span', { class: 'store-tag', style: { '--store-color': store.color } }, store.name),
         segment('日の区分', Object.entries(DAY_TYPE_LABELS), dayType, (key) => (dayType = key))
       ),
-      el('p', { class: 'hint' }, '30分ごとの予約可能人数が、ここで決めた人数と合っているかをチェックします。設定していない時間帯はチェックしません。'),
+      el('p', { class: 'hint' }, '30分ごとの予約可能人数が、ここで決めた人数と合っているかをチェックします。設定していない時間帯はチェックしません。「↑」「↓」で並び順を変えられます（チェックの結果は変わりません）。'),
       rules.length
-        ? el('ul', { class: 'list-card' }, rules.map((r) => bandRow(r, () => { formTarget = r.id; K.app.rerender(); })))
+        ? el('ul', { class: 'list-card' }, rules.map((r, i) =>
+              bandRow(
+                r,
+                () => {
+                  formTarget = r.id;
+                  K.app.rerender();
+                },
+                {
+                  index: i,
+                  count: rules.length,
+                  onMove: (direction) => {
+                    try {
+                      K.storage.moveStaffingRule(r.id, direction);
+                      K.app.rerender();
+                    } catch (err) {
+                      K.app.toast(err.message);
+                    }
+                  },
+                }
+              )
+            )
+          )
         : el('p', { class: 'empty-row' }, `${store.name}の${DAY_TYPE_LABELS[dayType]}の必要人数は、まだ設定されていません。`),
       el(
         'button',

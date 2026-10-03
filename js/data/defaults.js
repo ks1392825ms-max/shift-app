@@ -8,8 +8,8 @@
     // 営業時間・定休日は仮の値。設定画面で変更する
     // closedWeekdays：0 = 日曜 … 6 = 土曜
     stores: [
-      { id: 'store_a', name: 'A店', color: '#3b82f6', open: '09:00', close: '20:00', closedWeekdays: [2] },
-      { id: 'store_b', name: 'B店', color: '#f59e0b', open: '09:00', close: '20:00', closedWeekdays: [2] },
+      { id: 'store_a', name: '店舗A', color: '#3b82f6', open: '09:00', close: '20:00', closedWeekdays: [2] },
+      { id: 'store_b', name: '店舗B', color: '#f59e0b', open: '09:00', close: '20:00', closedWeekdays: [2] },
     ],
 
     shiftPatterns: [
@@ -31,7 +31,7 @@
       // 週の区切りは月曜〜日曜（週40時間のチェック用）
     },
 
-    // 店舗を追加したときに順番に使う目印の色（A店・B店の青・オレンジのあとに続く）
+    // 店舗を追加したときに順番に使う目印の色（店舗A・店舗Bの青・オレンジのあとに続く）
     storeColors: ['#3b82f6', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6', '#ef4444', '#06b6d4', '#84cc16', '#64748b'],
 
     // 選べる色

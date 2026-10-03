@@ -81,6 +81,11 @@
   // 変更して保存する。保存に失敗したら、変更前の状態に戻す
   // 通常の変更では「バックアップしていない変更あり」の目印を付ける（markChanged: false で付けない）
   function commit(mutate, { markChanged = true } = {}) {
+    // 共有モードのときは、共有の保存場所に保存する（端末のデータには書き込まない）
+    if (backend) {
+      commitCloud(mutate, markChanged);
+      return;
+    }
     // 別のタブで先に保存されていたら、古い内容で上書きしないよう、最新を読み込んでやり直してもらう
     if (reloadFromStorage()) {
       if (externalChangeHandler) setTimeout(externalChangeHandler, 0);
@@ -102,10 +107,158 @@
   }
 
   // 別のタブで保存されたときに呼ぶ処理を登録する（画面の作り直しなど）
+  // ---- 共有モード（Firebase） ----
+  // 共有モードかどうかは、端末ごとに選ぶ（この端末の設定として保存する。シフトのデータとは別）。
+  // 共有モードのときは、共有の保存場所（backend＝K.cloud。テストでは偽物）のデータを使い、
+  // 端末のデータ（shift-app-data）には読み書きしない。
+
+  const MODE_KEY = 'shift-app-mode';
+  let backend = null;
+  let cloudErrorHandler = null;
+
+  function getMode() {
+    try {
+      return localStorage.getItem(MODE_KEY) === 'cloud' ? 'cloud' : 'local';
+    } catch (err) {
+      return 'local';
+    }
+  }
+
+  function setMode(mode) {
+    localStorage.setItem(MODE_KEY, mode === 'cloud' ? 'cloud' : 'local');
+  }
+
+  function isCloud() {
+    return Boolean(backend);
+  }
+
+  // 共有の保存場所に保存できなかったときに呼ぶ処理を登録する（画面で知らせる）
+  function onCloudError(handler) {
+    cloudErrorHandler = handler;
+  }
+
+  // 共有データを使い始める
+  function attachCloud(b, cloudData) {
+    backend = b;
+    data = migrate(JSON.parse(JSON.stringify(cloudData)));
+  }
+
+  // 共有データが変わったとき（ほかの管理者の変更など）に、最新の内容に入れ替える
+  function receiveCloudData(cloudData) {
+    if (!backend) return;
+    data = migrate(JSON.parse(JSON.stringify(cloudData)));
+  }
+
+  // 共有データを使うのをやめて、端末のデータに戻す
+  function detachCloud() {
+    backend = null;
+    const raw = localStorage.getItem(STORAGE_KEY);
+    data = raw === null ? createInitialData() : migrate(JSON.parse(raw));
+    lastSaved = raw;
+  }
+
+  // 共有の保存場所に書く形：シフトには店舗と月を必ず入れる（スタッフの閲覧範囲をルールで絞るため）
+  function toCloudRecord(key, record, source) {
+    if (key !== 'shifts') return record;
+    const member = source.staff.find((m) => m.id === record.staffId);
+    return { ...record, storeId: record.storeId || (member ? member.storeId : null), month: record.date.slice(0, 7) };
+  }
+
+  // 変更前と変更後を比べて、変わった記録だけを取り出す
+  function diffForCloud(before, after) {
+    const changes = [];
+    for (const key of LIST_KEYS) {
+      const prev = new Map((before[key] || []).map((r) => [r.id, JSON.stringify(r)]));
+      for (const r of after[key]) {
+        if (prev.get(r.id) !== JSON.stringify(r)) changes.push({ collection: key, id: r.id, data: toCloudRecord(key, r, after) });
+      }
+    }
+    if (JSON.stringify(before.settings) !== JSON.stringify(after.settings)) {
+      changes.push({ collection: 'settings', id: 'main', data: after.settings });
+    }
+    return changes;
+  }
+
+  function commitCloud(mutate, markChanged) {
+    const before = JSON.parse(JSON.stringify(data));
+    mutate(data);
+    if (markChanged) {
+      data.settings.backup = { ...(data.settings.backup || {}), changedSinceBackup: true };
+    }
+    // シフトに店舗と月を入れた形を、手元のデータにも合わせておく（次の比較で差が出ないように）
+    for (const s of data.shifts) {
+      if (!s.storeId || !s.month) Object.assign(s, toCloudRecord('shifts', s, data));
+    }
+    const changes = diffForCloud(before, data);
+    if (!changes.length) return;
+    // 電波がないときは、この端末に一時的に保存され、つながったときに送られる。失敗したときだけ知らせる
+    Promise.resolve()
+      .then(() => backend.write(changes))
+      .catch((err) => {
+        console.error(err);
+        if (cloudErrorHandler) cloudErrorHandler(err);
+      });
+  }
+
+  // 店舗名の空白を整える（初回の移行のときに使う）
+  // 例：「店舗 A」→「店舗A」、「Salon  1」→「Salon 1」
+  function normalizeStoreName(name) {
+    return String(name)
+      .replace(/[\s　]+/g, ' ')
+      .trim()
+      .replace(/([\x21-\x7e]) (?=[^\x00-\x7f])/g, '$1')
+      .replace(/([^\x00-\x7f]) (?=[\x21-\x7e])/g, '$1');
+  }
+
+  // 初回だけ：バックアップファイルの内容を、空の共有の保存場所にアップロードする（写し）
+  // incoming は K.backup.parseFile の data。店舗名を整え、シフトに店舗と月を入れる。
+  // 戻り値：アップロードした内容のまとめ
+  async function uploadToCloud(b, incoming) {
+    return writeFirstData(b, migrate(JSON.parse(JSON.stringify({ version: DATA_VERSION, ...incoming }))));
+  }
+
+  // 初回だけ：店舗名を入力して、空の状態から始める（スタッフ・シフトは、このあとアプリの画面から登録する）
+  // 勤務パターンとチェックの基準は、初期データ（架空の一般的な値）を使う
+  async function startFreshCloud(b, storeName) {
+    const name = normalizeStoreName(storeName || '');
+    if (!name) throw new Error('店舗名を入力してください。');
+    if (name.length > 10) throw new Error('店舗名は10文字以内で入力してください。');
+    const d = createInitialData();
+    d.stores = [{ ...d.stores[0], id: U.uuid(), name, createdAt: U.nowIso(), updatedAt: U.nowIso() }];
+    return writeFirstData(b, d);
+  }
+
+  async function writeFirstData(b, d) {
+    if (!(await b.isEmpty())) {
+      throw new Error('共有の保存場所には、すでにデータがあります。二重に登録しないよう、登録を中止しました。');
+    }
+    const now = U.nowIso();
+    for (const s of d.stores) {
+      const name = normalizeStoreName(s.name);
+      if (name !== s.name) Object.assign(s, { name, updatedAt: now });
+    }
+    const changes = [];
+    for (const key of LIST_KEYS) {
+      for (const r of d[key]) changes.push({ collection: key, id: r.id, data: toCloudRecord(key, r, d) });
+    }
+    const settings = { ...d.settings };
+    delete settings.backup;
+    changes.push({ collection: 'settings', id: 'main', data: settings });
+    await b.write(changes);
+    const live = (list) => list.filter((x) => !x.deleted);
+    return {
+      stores: live(d.stores).map((s) => ({ name: s.name, staff: live(d.staff).filter((m) => m.storeId === s.id).length })),
+      shifts: live(d.shifts).length,
+      records: changes.length,
+    };
+  }
+
   function onExternalChange(handler) {
     externalChangeHandler = handler;
     window.addEventListener('storage', (event) => {
       if (event.key !== STORAGE_KEY && event.key !== null) return;
+      // 共有モードのときは、端末のデータの変化は関係ない（共有データの変化は別に届く）
+      if (backend) return;
       try {
         if (reloadFromStorage()) handler();
       } catch (err) {
@@ -209,7 +362,36 @@
     return Math.max(-1, ...list.map((x) => x.order ?? -1)) + 1;
   }
 
-  // ---- 店舗（初期は A店・B店。自由に追加・削除できる） ----
+  // ---- 表示順（設定の「↑」「↓」で変える：毎週の社用・必要人数の時間帯） ----
+  // まだ並び替えていない項目（order がない）は、今までどおりの順（曜日・時刻の順など）で、並び替えた項目のあとに並ぶ。
+  // あとから追加した項目も order を持たないので、並び替えた一覧では一番下に入る。
+  function byOrder(fallback) {
+    return (a, b) => {
+      const ao = Number.isFinite(a.order);
+      const bo = Number.isFinite(b.order);
+      if (ao && bo) return a.order - b.order || fallback(a, b);
+      if (ao !== bo) return ao ? -1 : 1;
+      return fallback(a, b);
+    };
+  }
+
+  // 表示中の並び（ids）で、id の項目を1つ上（-1）か1つ下（+1）へ動かし、その並びを 0, 1, 2… の order として保存する
+  function reorderList(key, ids, id, direction) {
+    const index = ids.indexOf(id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= ids.length) return;
+    const next = [...ids];
+    [next[index], next[target]] = [next[target], next[index]];
+    commit((d) => {
+      const now = U.nowIso();
+      next.forEach((rid, i) => {
+        const r = d[key].find((x) => x.id === rid);
+        if (r && r.order !== i) Object.assign(r, { order: i, updatedAt: now });
+      });
+    });
+  }
+
+  // ---- 店舗（初期は 店舗A・店舗B。自由に追加・削除できる） ----
   // 削除は本当に消さず deleted: true にする（その店舗のスタッフ・シフト・集計の記録は残り、「元に戻す」で戻せる）
 
   function getStores() {
@@ -346,12 +528,43 @@
     return !pattern.storeId || pattern.storeId === storeId;
   }
 
-  // 開始時刻の早い順。storeId を渡すと、その店舗で使えるもの（共通＋その店舗専用）だけ
+  // 勤務パターンの並び順。店舗ごとに持つ（store.patternOrder：勤務パターンIDの並び）。
+  // 全店舗共通のパターンも、店舗ごとに別の順番にできる。並びにないもの（並び替えていない・あとから追加）は開始時刻の早い順で後ろに
+  function comparePatterns(storeId) {
+    const store = storeId ? data.stores.find((s) => s.id === storeId) : null;
+    const order = store && Array.isArray(store.patternOrder) ? store.patternOrder : [];
+    const rank = (p) => {
+      const i = order.indexOf(p.id);
+      return i < 0 ? order.length : i;
+    };
+    return (a, b) => rank(a) - rank(b) || a.start.localeCompare(b.start) || a.end.localeCompare(b.end);
+  }
+
+  // storeId を渡すと、その店舗で使えるもの（共通＋その店舗専用）だけを、その店舗の並び順で。渡さないときは開始時刻の早い順
   function getPatterns({ storeId } = {}) {
     return active(data.shiftPatterns)
       .filter((p) => !storeId || patternAvailableIn(p, storeId))
-      .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end))
+      .sort(comparePatterns(storeId))
       .map(copy);
+  }
+
+  // その店舗での並び順で、1つ上（-1）か1つ下（+1）へ動かす。
+  // 画面では「店舗専用」と「全店舗共通」に分けて表示するので、同じ区分の中で隣のものと入れ替える
+  function movePattern(id, direction, storeId) {
+    findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    const list = getPatterns({ storeId });
+    const me = list.find((p) => p.id === id);
+    if (!me) throw new Error('勤務パターンが見つかりませんでした。');
+    const group = list.filter((p) => Boolean(p.storeId) === Boolean(me.storeId));
+    const other = group[group.findIndex((p) => p.id === id) + direction];
+    if (!other) return;
+    const ids = list.map((p) => p.id);
+    const i = ids.indexOf(id);
+    const j = ids.indexOf(other.id);
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    commit((d) => {
+      Object.assign(d.stores.find((s) => s.id === storeId), { patternOrder: ids, updatedAt: U.nowIso() });
+    });
   }
 
   function getPattern(id) {
@@ -696,8 +909,22 @@
   function getBusinessTimes({ staffId, type } = {}) {
     return active(data.businessTimes)
       .filter((b) => (!staffId || b.staffId === staffId) && (!type || b.type === type))
-      .sort((a, b) => (a.weekday ?? 0) - (b.weekday ?? 0) || (a.date || '').localeCompare(b.date || '') || a.start.localeCompare(b.start))
+      .sort(byOrder((a, b) => (a.weekday ?? 0) - (b.weekday ?? 0) || (a.date || '').localeCompare(b.date || '') || a.start.localeCompare(b.start)))
       .map(copy);
+  }
+
+  // 設定の一覧（その店舗の在籍・休職中スタッフの、同じ種類の社用）の中で、1つ上（-1）か1つ下（+1）へ動かす
+  function moveBusinessTime(id, direction) {
+    const bt = findActive(data.businessTimes, id, '社用時間が見つかりませんでした。');
+    const storeOf = (b) => {
+      const m = data.staff.find((s) => s.id === b.staffId && !s.deleted);
+      return m ? m.storeId : null;
+    };
+    const storeId = storeOf(bt);
+    const ids = getBusinessTimes({ type: bt.type })
+      .filter((b) => storeId && storeOf(b) === storeId)
+      .map((b) => b.id);
+    reorderList('businessTimes', ids, id, direction);
   }
 
   function normalizeBusinessTime(fields, exceptId) {
@@ -822,8 +1049,15 @@
   function getStaffingRules({ storeId, dayType } = {}) {
     return active(data.staffingRules)
       .filter((r) => (!storeId || r.storeId === storeId) && (!dayType || r.dayType === dayType))
-      .sort((a, b) => a.start.localeCompare(b.start))
+      .sort(byOrder((a, b) => a.start.localeCompare(b.start)))
       .map(copy);
+  }
+
+  // 同じ店舗・同じ日の区分（平日／土日祝）の中で、1つ上（-1）か1つ下（+1）へ動かす（表示の順番だけ。チェックの結果は変わらない）
+  function moveStaffingRule(id, direction) {
+    const rule = findActive(data.staffingRules, id, '必要人数の時間帯が見つかりませんでした。');
+    const ids = getStaffingRules({ storeId: rule.storeId, dayType: rule.dayType }).map((r) => r.id);
+    reorderList('staffingRules', ids, id, direction);
   }
 
   function normalizeStaffingRule(fields, exceptId) {
@@ -948,7 +1182,7 @@
   // ---- 設定 ----
 
   // チェックの基準
-  // 店舗ごとに持てる（store.checks）。店舗専用の基準がない店舗（以前からの A店・B店など）は、共通の基準（settings.checks）を使う
+  // 店舗ごとに持てる（store.checks）。店舗専用の基準がない店舗（以前からの 店舗A・店舗Bなど）は、共通の基準（settings.checks）を使う
   function getChecks(storeId) {
     const store = storeId ? data.stores.find((s) => s.id === storeId) : null;
     return { ...data.settings.checks, ...((store && store.checks) || {}) };
@@ -1049,6 +1283,7 @@
 
   // 復元の直前の状態が残っていれば、その日時を返す
   function getRestoreBackupDate() {
+    if (backend) return null; // 共有モードでは使わない
     try {
       const raw = localStorage.getItem(RESTORE_BACKUP_KEY);
       return raw ? JSON.parse(raw).savedAt : null;
@@ -1059,6 +1294,8 @@
 
   // バックアップの内容で丸ごと置き換える。直前の状態は1つだけ残しておく
   function replaceWithBackup(incoming) {
+    // 共有モードでは、ほかの管理者のデータまで置き換えてしまうため使えない（「合体する」を使う）
+    if (backend) throw new Error('共有モードでは「丸ごと置き換える」は使えません。「合体する」を使ってください。');
     try {
       localStorage.setItem(RESTORE_BACKUP_KEY, JSON.stringify({ savedAt: U.nowIso(), data }));
     } catch (err) {
@@ -1072,6 +1309,7 @@
 
   // 復元を取り消して、復元の直前の状態に戻す
   function undoRestore() {
+    if (backend) throw new Error('共有モードでは「復元を取り消す」は使えません。');
     let saved;
     try {
       saved = JSON.parse(localStorage.getItem(RESTORE_BACKUP_KEY));
@@ -1098,6 +1336,8 @@
     moveStore,
     updateStore,
     getPatterns,
+    comparePatterns,
+    movePattern,
     getPattern,
     addPattern,
     updatePattern,
@@ -1117,12 +1357,14 @@
     clearShift,
     setShiftBreaks,
     getBusinessTimes,
+    moveBusinessTime,
     addBusinessTime,
     updateBusinessTime,
     deleteBusinessTime,
     isBusinessTimeSkipped,
     setBusinessTimeSkip,
     getStaffingRules,
+    moveStaffingRule,
     addStaffingRule,
     updateStaffingRule,
     deleteStaffingRule,
@@ -1146,5 +1388,15 @@
     replaceWithBackup,
     undoRestore,
     LIST_KEYS,
+    getMode,
+    setMode,
+    isCloud,
+    onCloudError,
+    attachCloud,
+    receiveCloudData,
+    detachCloud,
+    normalizeStoreName,
+    uploadToCloud,
+    startFreshCloud,
   };
 })();

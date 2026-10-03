@@ -261,10 +261,12 @@
     const current = view.map.get(`${member.id}|${date}`) || null;
     // その曜日のいつもの勤務（スタッフの設定。勤務パターンID または "off"）
     const usual = (member.weeklyPatterns || {})[String(K.calc.weekdayOf(date))] || null;
+    // いつもの勤務を先頭に、そのあとは店舗ごとの勤務パターンの並び順（設定 > 勤務パターン で変えられる）
+    const byStoreOrder = K.storage.comparePatterns(K.app.currentStore().id);
     const patterns = member.patternIds
       .map((id) => K.storage.getPattern(id))
       .filter((p) => p && !p.deleted)
-      .sort((a, b) => (b.id === usual) - (a.id === usual) || a.start.localeCompare(b.start));
+      .sort((a, b) => (b.id === usual) - (a.id === usual) || byStoreOrder(a, b));
 
     const isCurrent = (kind, patternId) =>
       Boolean(current && current.kind === kind && (!TIMED_KINDS.includes(kind) || current.patternId === patternId));

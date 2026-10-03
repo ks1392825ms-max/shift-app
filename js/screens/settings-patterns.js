@@ -307,11 +307,20 @@
     );
   }
 
-  function patternRow(p, store) {
+  function movePattern(id, direction, store) {
+    try {
+      K.storage.movePattern(id, direction, store.id);
+      K.app.rerender();
+    } catch (err) {
+      K.app.toast(err.message);
+    }
+  }
+
+  function patternRow(p, store, index, count) {
     const users = K.storage.getPatternUsers(p.id).filter((s) => s.active && s.storeId === store.id).length;
     return el(
       'li',
-      null,
+      { class: 'reorder-row' },
       el(
         'button',
         { type: 'button', class: 'pattern-row', onclick: () => openForm(p.id) },
@@ -324,7 +333,8 @@
         ),
         el('span', { class: 'pattern-row__users' }, `${users}人`),
         el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›')
-      )
+      ),
+      U.moveButtons({ name: p.label, index, count, onMove: (direction) => movePattern(p.id, direction, store) })
     );
   }
 
@@ -349,7 +359,7 @@
             'section',
             { class: 'store-group', style: { '--store-color': title.endsWith('専用') ? store.color : 'var(--border)' } },
             el('div', { class: 'store-group__head' }, el('h2', { class: 'store-group__title' }, title), el('span', { class: 'store-group__count' }, `${list.length}件`)),
-            el('ul', { class: 'list-card' }, list.map((p) => patternRow(p, store)))
+            el('ul', { class: 'list-card' }, list.map((p, i) => patternRow(p, store, i, list.length)))
           )
         : null;
 
@@ -357,7 +367,7 @@
       el(
         'div',
         { class: 'toolbar toolbar--wrap' },
-        el('p', { class: 'hint hint--inline' }, `${store.name}で使える勤務パターンです。右の人数は、使える${store.name}の在籍スタッフ数です。`)
+        el('p', { class: 'hint hint--inline' }, `${store.name}で使える勤務パターンです。右の人数は、使える${store.name}の在籍スタッフ数です。「↑」「↓」で、${store.name}での並び順を変えられます（シフト入力の選択肢もこの順になります）。`)
       ),
       el(
         'div',

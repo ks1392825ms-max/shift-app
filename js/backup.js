@@ -122,6 +122,14 @@
       delete s.closedDates;
       // 店舗専用のチェックの基準（ある場合だけ）：正しくない値は初期値にする
       if (s.checks !== undefined) s.checks = cleanChecks(s.checks);
+      // 店舗ごとの勤務パターンの並び順（ある場合だけ）：正しくなければ使わない（時刻順に戻る）
+      if (s.patternOrder !== undefined && !(Array.isArray(s.patternOrder) && s.patternOrder.length <= 500 && s.patternOrder.every(isId))) {
+        delete s.patternOrder;
+      }
+    }
+    // 毎週の社用・必要人数の時間帯の並び順（ある場合だけ）：正しくなければ使わない
+    for (const r of [...data.businessTimes, ...data.staffingRules]) {
+      if (r.order !== undefined && !Number.isFinite(r.order)) delete r.order;
     }
 
     if (data.stores.filter((s) => !s.deleted).length === 0) {

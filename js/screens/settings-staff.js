@@ -287,7 +287,7 @@
     const patternLabels = member.patternIds
       .map((id) => K.storage.getPattern(id))
       .filter((p) => p && !p.deleted)
-      .sort((a, b) => a.start.localeCompare(b.start))
+      .sort(K.storage.comparePatterns(member.storeId))
       .map((p) => p.label)
       .join(' / ');
     const hasWeekly = member.weeklyPatterns && Object.keys(member.weeklyPatterns).length > 0;
@@ -308,10 +308,7 @@
         el('div', { class: 'staff-row__sub' }, `${patternLabels || '勤務パターン未設定'}${hasWeekly ? '・曜日の設定あり' : ''}`)
       ),
       reorder
-        ? [
-            el('button', { type: 'button', class: 'icon-btn', 'aria-label': `${member.name}さんを上へ`, disabled: index === 0, onclick: () => move(member.id, -1) }, '▲'),
-            el('button', { type: 'button', class: 'icon-btn', 'aria-label': `${member.name}さんを下へ`, disabled: index === count - 1, onclick: () => move(member.id, 1) }, '▼'),
-          ]
+        ? U.moveButtons({ name: `${member.name}さん`, index, count, onMove: (direction) => move(member.id, direction) })
         : null,
       el('button', { type: 'button', class: 'text-btn', onclick: () => openForm(member.id) }, '編集')
     );

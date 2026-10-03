@@ -1,0 +1,43 @@
+// Firestore のルール（段階1：管理者だけが読み書きできる）
+//
+// 使い方：Firebase の管理画面 → Firestore Database → 「ルール」タブに、この内容をそのまま貼り付けて「公開」。
+//
+// 管理者の登録：Firestore Database → 「データ」タブで、
+//   コレクション「access」→ ドキュメント「admins」→ フィールド「emails」（型：array）に、
+//   管理者4人のメールアドレスを、すべて小文字で1つずつ入れる。
+//   （この登録は管理画面からだけ変えられる。アプリからは変えられない）
+//
+// 段階1のルール：
+//   ・メールのリンクでログインし、メールアドレスの確認が済んでいる人のうち、
+//     access/admins に登録された人（管理者）だけが、すべてのデータを読み書きできる。
+//   ・それ以外の人は、何も読めず、何も書けない。
+//   ・access（管理者の名簿）は、管理者が読むことだけできる（アプリから書き換えはできない）。
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/access/admins)
+        && request.auth.token.email.lower()
+             in get(/databases/$(database)/documents/access/admins).data.emails;
+    }
+
+    // 管理者の名簿：管理者が読むだけ（書き換えは管理画面からだけ）
+    match /access/{doc} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // シフトアプリのデータ（店舗・スタッフ・シフト・設定など）：管理者だけ
+    match /{collection}/{id} {
+      allow read, write: if isAdmin() && collection != 'access';
+    }
+  }
+}
