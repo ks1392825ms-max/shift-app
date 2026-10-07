@@ -1,4 +1,4 @@
-// 設定 > スタッフ（表示名・所属店舗・役割・肩書き・使える勤務パターン・在籍）
+// 設定 > スタッフ（表示名・所属店舗・職種・肩書き・勤務条件・使える勤務パターン・ログイン用メール・在籍）
 (function () {
   'use strict';
   const K = window.ShiftApp;
@@ -58,7 +58,13 @@
     const state = {
       // 新しいスタッフは、表示中の店舗の所属にする
       storeId: member ? member.storeId : K.app.currentStore().id,
-      role: member ? member.role : 'stylist',
+      // 職種（職種のない以前の記録は、役割を職種として扱う）
+      position: member ? member.position || member.role : 'stylist',
+      employment: (member && member.employment) || 'full',
+      fixedOff: new Set((member && member.fixedOff && member.fixedOff.weekdays) || []),
+      workWeekdays: new Set((member && member.workWeekdays) || []),
+      // 同じ人（ほかの店舗の記録）
+      samePerson: member ? (K.storage.getSamePersonStaff(member.id)[0] || {}).id || '' : '',
       patternIds: new Set(member ? member.patternIds : []),
       // 曜日ごとのいつもの勤務：{ "0"〜"6": 勤務パターンID または "off" }
       weekly: { ...((member && member.weeklyPatterns) || {}) },
@@ -69,7 +75,7 @@
       class: 'field__input',
       type: 'text',
       maxlength: '12',
-      placeholder: '例：佐藤',
+      placeholder: '例：山田',
       value: member ? member.name : '',
     });
     const titleInput = el('input', {
@@ -82,6 +88,63 @@
     });
     const activeInput = el('input', { id: 'staff-active', type: 'checkbox', checked: member ? member.active : true });
     const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+
+    // ---- 勤務条件 ----
+    const isNewInput = el('input', { id: 'staff-is-new', type: 'checkbox', checked: Boolean(member && member.isNew) });
+    const excludeInput = el('input', { id: 'staff-exclude', type: 'checkbox', checked: Boolean(member && member.excludeFromCount) });
+    const weeklyOffSelect = el(
+      'select',
+      { id: 'staff-weekly-off', class: 'field__input field__input--short' },
+      el('option', { value: '', selected: !(member && member.weeklyOffDays) }, 'なし'),
+      [1, 2, 3].map((n) => el('option', { value: String(n), selected: Boolean(member && member.weeklyOffDays === n) }, `週${n}日`))
+    );
+    const holidayOffInput = el('input', { id: 'staff-holiday-off', type: 'checkbox', checked: Boolean(member && member.fixedOff && member.fixedOff.holidays) });
+    const noteInput = el('textarea', { id: 'staff-note', class: 'field__input', rows: '2', maxlength: '100', placeholder: '例：日曜は店舗Bで勤務' }, member ? member.note || '' : '');
+    const emailInput = el('input', {
+      id: 'staff-email',
+      class: 'field__input',
+      type: 'email',
+      inputmode: 'email',
+      autocomplete: 'off',
+      placeholder: '例：name@example.com（なければ空欄）',
+      value: member ? member.email || '' : '',
+    });
+
+    // 曜日のチェック（固定休・この店舗で働く曜日）
+    function weekdayChips(name, set) {
+      return el(
+        'div',
+        { class: 'weekday-chips', role: 'group', 'aria-label': name },
+        [1, 2, 3, 4, 5, 6, 0].map((w) =>
+          el(
+            'label',
+            { class: `weekday-chip${w === 0 ? ' is-sun' : w === 6 ? ' is-sat' : ''}` },
+            el('input', {
+              type: 'checkbox',
+              checked: set.has(w),
+              'data-weekday': String(w),
+              'aria-label': `${name}：${U.WEEKDAYS[w]}`,
+              onchange: (event) => (event.currentTarget.checked ? set.add(w) : set.delete(w)),
+            }),
+            el('span', null, U.WEEKDAYS[w])
+          )
+        )
+      );
+    }
+
+    // 同じ人（ほかの店舗の在籍中の記録）
+    function samePersonSelect() {
+      const others = K.storage.getStaff().filter((s) => s.storeId !== state.storeId && (!member || s.id !== member.id));
+      return el(
+        'select',
+        { id: 'staff-same-person', class: 'field__input', onchange: (event) => (state.samePerson = event.currentTarget.value) },
+        el('option', { value: '', selected: !state.samePerson }, 'なし'),
+        others.map((s) => {
+          const store = K.storage.getStore(s.storeId);
+          return el('option', { value: s.id, selected: s.id === state.samePerson }, `${s.name}（${store ? store.name : ''}）`);
+        })
+      );
+    }
 
     // 所属店舗で使える勤務パターン（全店舗共通＋その店舗専用）
     const available = () => K.storage.getPatterns({ storeId: state.storeId });
@@ -154,19 +217,40 @@
       const fields = {
         name: nameInput.value,
         storeId: state.storeId,
-        role: state.role,
+        position: state.position,
         title: titleInput.value,
         patternIds: [...state.patternIds].filter((id) => usable.has(id)),
         weeklyPatterns: state.weekly,
         active: activeInput.checked,
+        employment: state.employment,
+        isNew: isNewInput.checked,
+        excludeFromCount: excludeInput.checked,
+        weeklyOffDays: weeklyOffSelect.value,
+        fixedOff: { weekdays: [...state.fixedOff], holidays: holidayOffInput.checked },
+        workWeekdays: [...state.workWeekdays],
+        note: noteInput.value,
+        email: emailInput.value,
       };
       try {
+        let id;
         if (isNew) {
-          K.storage.addStaff(fields);
+          id = K.storage.addStaff(fields).id;
           K.app.toast(`${fields.name.trim()}さんを追加しました`);
         } else {
+          id = member.id;
           K.storage.updateStaff(member.id, fields);
           K.app.toast('保存しました');
+        }
+        // 同じ人のつながりが変わったときだけ保存する
+        const before = (K.storage.getSamePersonStaff(id)[0] || {}).id || '';
+        const linked = K.storage.getSamePersonStaff(id).some((s) => s.id === state.samePerson);
+        if (state.samePerson ? !linked : before) {
+          try {
+            K.storage.setSamePerson(id, state.samePerson || null);
+          } catch (err) {
+            // スタッフ自体は保存できているので、フォームは閉じて知らせる
+            K.app.toast(`保存しました。ただし「ほかの店舗の同じ人」は変えられませんでした（${err.message}）`);
+          }
         }
         closeForm();
       } catch (err) {
@@ -225,15 +309,34 @@
       el(
         'div',
         { class: 'field' },
-        el('p', { class: 'field__label' }, '役割'),
+        el('p', { class: 'field__label' }, '職種'),
         choiceGroup({
-          label: '役割',
-          options: Object.entries(U.ROLE_LABELS),
-          value: state.role,
-          onChange: (key) => (state.role = key),
-        })
+          label: '職種',
+          options: Object.entries(U.POSITION_LABELS),
+          value: state.position,
+          onChange: (key) => (state.position = key),
+        }),
+        el('p', { class: 'field__note' }, 'シフト表の人数は、スタイリスト・ジュニアスタイリストを St、ジュニアスタイリスト兼アシスタント・アシスタントを As として数えます。')
       ),
       el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'staff-title' }, '肩書き（任意）'), titleInput),
+      el(
+        'div',
+        { class: 'field' },
+        el('p', { class: 'field__label' }, '雇用形態'),
+        choiceGroup({
+          label: '雇用形態',
+          options: Object.entries(U.EMPLOYMENT_LABELS),
+          value: state.employment,
+          onChange: (key) => (state.employment = key),
+        })
+      ),
+      el(
+        'div',
+        { class: 'field' },
+        el('label', { class: 'switch' }, isNewInput, el('span', { class: 'switch__track', 'aria-hidden': 'true' }), '新人'),
+        el('label', { class: 'switch' }, excludeInput, el('span', { class: 'switch__track', 'aria-hidden': 'true' }), '戦力外'),
+        el('p', { class: 'field__note' }, '「戦力外」の人はシフト表に表示しますが、St／As の人数・必要人数のチェック・AIの戦力計算には数えません。')
+      ),
       el(
         'div',
         { class: 'field' },
@@ -256,6 +359,43 @@
           { class: 'field__note' },
           'シフト表の「曜日の設定を反映」で、未入力の日にこの勤務を入れられます。入力シートでは「いつも」の印が付きます。'
         )
+      ),
+      el(
+        'div',
+        { class: 'field' },
+        el('label', { class: 'field__label', for: 'staff-weekly-off' }, '週休'),
+        weeklyOffSelect,
+        el('p', { class: 'field__note' }, '例：週2休の人は「週2日」。自動チェックで、月曜〜日曜の休みが足りない週を知らせます。AIシフト作成でも使います。')
+      ),
+      el(
+        'div',
+        { class: 'field' },
+        el('p', { class: 'field__label' }, '固定休（必ず休みの曜日）'),
+        weekdayChips('固定休', state.fixedOff),
+        el('label', { class: 'check-line' }, holidayOffInput, '祝日も休み'),
+        el('p', { class: 'field__note' }, '例：月火休みの人は「月」「火」。土日祝休みのパートの人は「土」「日」と「祝日も休み」。')
+      ),
+      el(
+        'div',
+        { class: 'field' },
+        el('p', { class: 'field__label' }, 'この店舗で働く曜日'),
+        weekdayChips('この店舗で働く曜日', state.workWeekdays),
+        el('p', { class: 'field__note' }, '複数の店舗で働く人の、この店舗の曜日です。選ばない（空）ときは、すべての曜日です。')
+      ),
+      el(
+        'div',
+        { class: 'field' },
+        el('label', { class: 'field__label', for: 'staff-same-person' }, 'ほかの店舗の同じ人'),
+        samePersonSelect(),
+        el('p', { class: 'field__note' }, '2つの店舗で働く人は、店舗ごとに登録してここでつなぎます。勤務条件は店舗ごとに持てます。同じ日に2店舗に入ると、自動チェックで知らせます。')
+      ),
+      el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'staff-note' }, '備考（任意）'), noteInput),
+      el(
+        'div',
+        { class: 'field' },
+        el('label', { class: 'field__label', for: 'staff-email' }, 'ログイン用のメールアドレス（任意）'),
+        emailInput,
+        el('p', { class: 'field__note' }, '希望休・有給の申請で、本人がログインするためのメールアドレスです。共有モードでは Firebase にだけ保存し、公開するファイルには入りません。')
       ),
       el(
         'div',
@@ -303,9 +443,25 @@
           { class: 'staff-row__name' },
           el('span', null, member.name),
           el('span', { class: `role-badge role-badge--${member.role}` }, U.ROLE_SHORT[member.role]),
-          member.title ? el('span', { class: 'title-badge' }, member.title) : null
+          member.title ? el('span', { class: 'title-badge' }, member.title) : null,
+          member.employment === 'part' ? el('span', { class: 'flag-badge' }, 'パート') : null,
+          member.isNew ? el('span', { class: 'flag-badge' }, '新人') : null,
+          member.excludeFromCount ? el('span', { class: 'flag-badge flag-badge--muted' }, '戦力外') : null
         ),
-        el('div', { class: 'staff-row__sub' }, `${patternLabels || '勤務パターン未設定'}${hasWeekly ? '・曜日の設定あり' : ''}`)
+        // 職種は登録した名前のまま表示する（St／As は人数の数え方）
+        el('div', { class: 'staff-row__position' }, U.positionLabel(member)),
+        el(
+          'div',
+          { class: 'staff-row__sub' },
+          [
+            patternLabels || '勤務パターン未設定',
+            hasWeekly ? '曜日の設定あり' : null,
+            member.weeklyOffDays ? `週${member.weeklyOffDays}休` : null,
+            K.storage.getSamePersonStaff(member.id).length ? 'ほかの店舗でも勤務' : null,
+          ]
+            .filter(Boolean)
+            .join('・')
+        )
       ),
       reorder
         ? U.moveButtons({ name: `${member.name}さん`, index, count, onMove: (direction) => move(member.id, direction) })

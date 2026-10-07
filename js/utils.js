@@ -9,6 +9,28 @@
   const ROLE_LABELS = { stylist: 'スタイリスト', assistant: 'アシスタント' };
   const ROLE_SHORT = { stylist: 'St', assistant: 'As' };
 
+  // 職種（表示はこの名前のまま）と、St／As のどちらで数えるか
+  const POSITION_LABELS = {
+    stylist: 'スタイリスト',
+    junior_stylist: 'ジュニアスタイリスト',
+    junior_assistant: 'ジュニアスタイリスト兼アシスタント',
+    assistant: 'アシスタント',
+  };
+  const POSITION_ROLE = { stylist: 'stylist', junior_stylist: 'stylist', junior_assistant: 'assistant', assistant: 'assistant' };
+  // 職種のない以前の記録は、役割（スタイリスト／アシスタント）を職種として表示する
+  function positionLabel(member) {
+    return POSITION_LABELS[member.position] || ROLE_LABELS[member.role] || '';
+  }
+
+  const EMPLOYMENT_LABELS = { full: '正社員', part: 'パート' };
+  const PATTERN_DAY_LABELS = { weekday: '平日用', holiday: '土日祝用' };
+  const PATTERN_SLOT_LABELS = { early: '早番', late: '遅番' };
+
+  // その月の第何週の曜日か（1日〜7日は第1、8日〜14日は第2…）
+  function nthWeekOf(dateStr) {
+    return Math.ceil(Number(dateStr.slice(8, 10)) / 7);
+  }
+
   // 重ならないID（UUID）を作る
   function uuid() {
     if (window.crypto && typeof crypto.randomUUID === 'function') {
@@ -148,6 +170,13 @@
     WEEKDAYS,
     ROLE_LABELS,
     ROLE_SHORT,
+    POSITION_LABELS,
+    POSITION_ROLE,
+    positionLabel,
+    EMPLOYMENT_LABELS,
+    PATTERN_DAY_LABELS,
+    PATTERN_SLOT_LABELS,
+    nthWeekOf,
     uuid,
     nowIso,
     toDateStr,

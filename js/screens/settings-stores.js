@@ -29,7 +29,11 @@
   }
 
   function summaryCard(store, index, count) {
-    const closed = store.closedWeekdays.length ? store.closedWeekdays.map((w) => U.WEEKDAYS[w]).join('・') + '曜' : 'なし';
+    const closedParts = [
+      store.closedWeekdays.length ? store.closedWeekdays.map((w) => U.WEEKDAYS[w]).join('・') + '曜' : null,
+      ...(store.closedNthWeekdays || []).map((x) => `${x.weeks.map((n) => `第${n}`).join('・')}${U.WEEKDAYS[x.weekday]}曜`),
+    ].filter(Boolean);
+    const closed = closedParts.length ? closedParts.join('、') : 'なし';
     const staffCount = K.storage.getStaff({ storeId: store.id }).length;
     const isCurrent = store.id === K.app.state.storeId;
 
@@ -111,6 +115,41 @@
       )
     );
 
+    // 第○週の○曜日の定休日（例：第1・第3火曜）。曜日ごとに第1〜第5週を選ぶ
+    const nthClosed = new Map((base.closedNthWeekdays || []).map((x) => [x.weekday, new Set(x.weeks)]));
+    const nthGrid = el(
+      'div',
+      { class: 'nth-grid', role: 'group', 'aria-label': '第○週の定休日' },
+      [1, 2, 3, 4, 5, 6, 0].map((w) =>
+        el(
+          'div',
+          { class: `nth-grid__row${w === 0 ? ' is-sun' : w === 6 ? ' is-sat' : ''}` },
+          el('span', { class: 'nth-grid__day' }, U.WEEKDAYS[w]),
+          [1, 2, 3, 4, 5].map((n) => {
+            const on = Boolean(nthClosed.get(w) && nthClosed.get(w).has(n));
+            return el(
+              'button',
+              {
+                type: 'button',
+                class: `nth-toggle${on ? ' is-selected' : ''}`,
+                'aria-pressed': String(on),
+                'aria-label': `第${n}${U.WEEKDAYS[w]}曜日`,
+                onclick: (event) => {
+                  if (!nthClosed.has(w)) nthClosed.set(w, new Set());
+                  const set = nthClosed.get(w);
+                  if (set.has(n)) set.delete(n);
+                  else set.add(n);
+                  event.currentTarget.classList.toggle('is-selected', set.has(n));
+                  event.currentTarget.setAttribute('aria-pressed', String(set.has(n)));
+                },
+              },
+              `第${n}`
+            );
+          })
+        )
+      )
+    );
+
     // 色（追加のときは、選ばなければ自動で使われていない色にする）
     const colors = K.defaults.storeColors;
     const swatches = el(
@@ -147,6 +186,7 @@
         open: openSelect.value,
         close: closeSelect.value,
         closedWeekdays: [...closedWeekdays],
+        closedNthWeekdays: [...nthClosed].filter(([, weeks]) => weeks.size).map(([weekday, weeks]) => ({ weekday, weeks: [...weeks] })),
         color,
       };
       try {
@@ -199,6 +239,13 @@
         { class: 'field' },
         el('p', { class: 'field__label' }, '定休日（毎週）'),
         el('div', { class: 'day-toggles', role: 'group', 'aria-label': '定休日' }, weekdayButtons)
+      ),
+      el(
+        'div',
+        { class: 'field' },
+        el('p', { class: 'field__label' }, '定休日（第○週の○曜日）'),
+        nthGrid,
+        el('p', { class: 'field__note' }, '例：第1・第3火曜が休みなら、「火」の行の「第1」「第3」を選びます。毎週の定休日にした曜日は、ここでは選ばなくて大丈夫です。')
       ),
       el(
         'div',

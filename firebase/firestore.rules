@@ -1,17 +1,22 @@
-// Firestore のルール（段階1：管理者だけが読み書きできる）
+// Firestore のルール（段階A：管理者は全店舗、スタッフは本人の情報と申請だけ）
 //
 // 使い方：Firebase の管理画面 → Firestore Database → 「ルール」タブに、この内容をそのまま貼り付けて「公開」。
 //
-// 管理者の登録：Firestore Database → 「データ」タブで、
+// 管理者の登録（今までどおり）：Firestore Database → 「データ」タブで、
 //   コレクション「access」→ ドキュメント「admins」→ フィールド「emails」（型：array）に、
-//   管理者4人のメールアドレスを、すべて小文字で1つずつ入れる。
+//   管理者のメールアドレスを、すべて小文字で1つずつ入れる。
 //   （この登録は管理画面からだけ変えられる。アプリからは変えられない）
 //
-// 段階1のルール：
-//   ・メールのリンクでログインし、メールアドレスの確認が済んでいる人のうち、
-//     access/admins に登録された人（管理者）だけが、すべてのデータを読み書きできる。
-//   ・それ以外の人は、何も読めず、何も書けない。
-//   ・access（管理者の名簿）は、管理者が読むことだけできる（アプリから書き換えはできない）。
+// スタッフの登録：管理者がアプリの「設定 > スタッフ」でログイン用のメールを入れると、
+//   アプリが staffAccounts/{メールアドレス} を作る（本人のスタッフ記録と所属店舗の対応）。
+//
+// まとめ：
+//   ・未ログインの人：何も読めず、何も書けない。
+//   ・管理者：すべてのデータを読み書きできる（access は読むだけ）。
+//   ・スタッフ：自分の staffAccounts・自分のスタッフ記録・所属店舗・希望休の設定を読める。
+//       希望休（wishOffs）：自分の分を、日本時間の毎月25日〜月末に、翌月分だけ、上限の日数まで保存できる。
+//       有給希望（paidRequests）：自分の分を、同じ受付期間に「申請中」で出せる。取り下げは「申請中」のものだけ。
+//       承認・却下・日付の変更は管理者だけ。シフトなど、ほかのデータは読めない。
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -22,12 +27,55 @@ service cloud.firestore {
         && request.auth.token.email_verified == true;
     }
 
+    function myEmail() {
+      return request.auth.token.email.lower();
+    }
+
     function isAdmin() {
       return signedIn()
         && exists(/databases/$(database)/documents/access/admins)
-        && request.auth.token.email.lower()
-             in get(/databases/$(database)/documents/access/admins).data.emails;
+        && myEmail() in get(/databases/$(database)/documents/access/admins).data.emails;
     }
+
+    // ---- スタッフ ----
+
+    function accountPath() {
+      return /databases/$(database)/documents/staffAccounts/$(myEmail());
+    }
+
+    function isStaff() {
+      return signedIn()
+        && exists(accountPath())
+        && get(accountPath()).data.deleted == false
+        && get(accountPath()).data.staffIds.size() > 0;
+    }
+
+    function ownsStaff(staffId) {
+      return isStaff() && staffId in get(accountPath()).data.staffIds;
+    }
+
+    function inMyStore(storeId) {
+      return isStaff() && storeId in get(accountPath()).data.storeIds;
+    }
+
+    // 日本時間で今日が25日〜月末で、month（"2026-11" の形）が翌月か
+    function requestWindowOpen(month) {
+      let t = request.time + duration.value(9, 'h');
+      let y = t.month() == 12 ? t.year() + 1 : t.year();
+      let m = t.month() == 12 ? 1 : t.month() + 1;
+      let next = string(y) + '-' + (m < 10 ? '0' + string(m) : string(m));
+      return t.day() >= 25 && month == next;
+    }
+
+    // 希望休の上限：その月のスタッフ別の上限（管理者が変えた場合）→ なければ全体の初期値 → なければ2日
+    function wishOffLimit(staffId, month) {
+      let quota = /databases/$(database)/documents/requestQuotas/$(staffId + '_' + month);
+      let settings = /databases/$(database)/documents/settings/requests;
+      return exists(quota) ? get(quota).data.limit
+        : (exists(settings) ? get(settings).data.defaultLimit : 2);
+    }
+
+    // ---- コレクションごと ----
 
     // 管理者の名簿：管理者が読むだけ（書き換えは管理画面からだけ）
     match /access/{doc} {
@@ -35,7 +83,69 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // シフトアプリのデータ（店舗・スタッフ・シフト・設定など）：管理者だけ
+    // スタッフのログイン用メールの対応表：本人は自分の分だけ読める。作るのは管理者（アプリ）だけ
+    match /staffAccounts/{email} {
+      allow read: if isAdmin() || (signedIn() && email == myEmail());
+      allow write: if isAdmin();
+    }
+
+    // 店舗：スタッフは所属店舗だけ読める
+    match /stores/{storeId} {
+      allow read: if isAdmin() || inMyStore(storeId);
+      allow write: if isAdmin();
+    }
+
+    // スタッフ：スタッフは自分の記録だけ読める（ほかの人の情報は読めない）
+    match /staff/{staffId} {
+      allow read: if isAdmin() || ownsStaff(staffId);
+      allow write: if isAdmin();
+    }
+
+    // 設定：スタッフは希望休の設定（settings/requests）だけ読める
+    match /settings/{id} {
+      allow read: if isAdmin() || (id == 'requests' && isStaff());
+      allow write: if isAdmin();
+    }
+
+    // 希望休の上限の変更（スタッフ別・月別）：本人は読むだけ
+    match /requestQuotas/{id} {
+      allow read: if isAdmin() || ownsStaff(resource.data.staffId);
+      allow write: if isAdmin();
+    }
+
+    // 希望休（1人1か月1つ。id は「スタッフID_月」）
+    match /wishOffs/{id} {
+      allow read: if isAdmin() || ownsStaff(resource.data.staffId);
+      allow create, update: if isAdmin() || (
+        ownsStaff(request.resource.data.staffId)
+        && inMyStore(request.resource.data.storeId)
+        && id == request.resource.data.staffId + '_' + request.resource.data.month
+        && (resource == null || resource.data.staffId == request.resource.data.staffId)
+        && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'dates', 'updatedAt', 'updatedBy'])
+        && request.resource.data.dates is list
+        && request.resource.data.dates.size() <= wishOffLimit(request.resource.data.staffId, request.resource.data.month)
+        && requestWindowOpen(request.resource.data.month)
+      );
+      allow delete: if isAdmin();
+    }
+
+    // 有給希望（1日1つ）：スタッフは「申請中」で出す・取り下げるだけ
+    match /paidRequests/{id} {
+      allow read: if isAdmin() || ownsStaff(resource.data.staffId);
+      allow create: if isAdmin() || (
+        ownsStaff(request.resource.data.staffId)
+        && inMyStore(request.resource.data.storeId)
+        && request.resource.data.status == 'pending'
+        && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'date', 'status', 'note', 'createdAt', 'updatedAt', 'createdBy'])
+        && request.resource.data.date is string
+        && request.resource.data.date.matches(request.resource.data.month + '-[0-9][0-9]')
+        && requestWindowOpen(request.resource.data.month)
+      );
+      allow update: if isAdmin();
+      allow delete: if isAdmin() || (ownsStaff(resource.data.staffId) && resource.data.status == 'pending');
+    }
+
+    // そのほかのデータ（シフト・勤務パターン・必要人数・シフト確定など）：管理者だけ
     match /{collection}/{id} {
       allow read, write: if isAdmin() && collection != 'access';
     }

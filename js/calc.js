@@ -21,9 +21,17 @@
     return new Date(y, m - 1, d).getDay();
   }
 
-  // 店舗の定休日か
+  // 店舗の定休日か（毎週の曜日と、第○週の○曜日）
   function isStoreClosed(store, dateStr) {
-    return store.closedWeekdays.includes(weekdayOf(dateStr));
+    const w = weekdayOf(dateStr);
+    if (store.closedWeekdays.includes(w)) return true;
+    const nth = (store.closedNthWeekdays || []).find((x) => x.weekday === w);
+    return Boolean(nth && nth.weeks.includes(U.nthWeekOf(dateStr)));
+  }
+
+  // 人数（St／As）や必要人数のチェックに数える人か（「戦力外」の人は数えない。シフト表には表示する）
+  function countsAsStaff(member) {
+    return !member.excludeFromCount;
   }
 
   // シフト表に出すスタッフ：その店舗に所属する在籍中の人 ＋ その月にその店舗のシフトが入っている人
@@ -49,6 +57,7 @@
       const shift = map.get(`${member.id}|${dateStr}`);
       if (!shift) continue;
       if (shift.kind === 'work') {
+        if (!countsAsStaff(member)) continue;
         counts[member.role] += 1;
         counts.total += 1;
       } else if (shift.kind === 'business') {
@@ -168,6 +177,8 @@
           slot.excluded.push({ name: d.member.name, reason: '休憩' });
         } else if (d.business.some((b) => !b.skipped && overlapsRange(b, range))) {
           slot.excluded.push({ name: d.member.name, reason: '社用' });
+        } else if (!countsAsStaff(d.member)) {
+          slot.excluded.push({ name: d.member.name, reason: '戦力外' });
         } else {
           slot[d.member.role] += 1;
           slot.total += 1;
@@ -292,8 +303,8 @@
       paidDays,
       totalMinutes,
       staffCount: {
-        stylist: current.filter((m) => m.role === 'stylist').length,
-        assistant: current.filter((m) => m.role === 'assistant').length,
+        stylist: current.filter((m) => countsAsStaff(m) && m.role === 'stylist').length,
+        assistant: current.filter((m) => countsAsStaff(m) && m.role === 'assistant').length,
         total: current.length,
       },
       avgStylist: avg('stylist'),
@@ -307,6 +318,7 @@
     monthDates,
     weekdayOf,
     isStoreClosed,
+    countsAsStaff,
     rosterStaff,
     shiftMap,
     dailyCounts,

@@ -122,6 +122,17 @@
       { id: 'pattern-break', class: 'field__input field__input--time', onchange: () => updatePreview() },
       BREAK_OPTIONS.map((m) => el('option', { value: String(m), selected: m === (pattern ? pattern.breakMinutes : 60) }, m === 0 ? 'なし' : `${m}分`))
     );
+    // 平日用／土日祝用、早番／遅番（どちらも空でよい）
+    const optionSelect = (id, label, labels, value) =>
+      el(
+        'select',
+        { id, class: 'field__input', 'aria-label': label },
+        el('option', { value: '', selected: !value }, `${label}：指定なし`),
+        Object.entries(labels).map(([key, text]) => el('option', { value: key, selected: key === value }, text))
+      );
+    const dayTypeSelect = optionSelect('pattern-day-type', '使う日', U.PATTERN_DAY_LABELS, pattern && pattern.dayType);
+    const slotSelect = optionSelect('pattern-slot', '早番／遅番', U.PATTERN_SLOT_LABELS, pattern && pattern.slot);
+
     const labelInput = el('input', {
       id: 'pattern-label',
       class: 'field__input',
@@ -175,6 +186,8 @@
         label: labelInput.value,
         color: state.color,
         storeId: state.storeId,
+        dayType: dayTypeSelect.value,
+        slot: slotSelect.value,
       };
       try {
         if (isNew) {
@@ -231,6 +244,13 @@
         el('p', { class: 'field__label' }, '使う店舗'),
         scopeChoice(store, state.storeId, (key) => (state.storeId = key)),
         el('p', { class: 'field__note' }, '「全店舗共通」にすると、どの店舗のスタッフにも使えます。')
+      ),
+      el(
+        'div',
+        { class: 'field' },
+        el('label', { class: 'field__label', for: 'pattern-day-type' }, '使う日・早番／遅番（任意）'),
+        el('div', { class: 'time-range' }, dayTypeSelect, slotSelect),
+        el('p', { class: 'field__note' }, '例：平日の早番（9:00〜18:00）は「平日用」「早番」。AIシフト作成で、その日に使えるパターンを選ぶのに使います。')
       ),
       el('div', { class: 'field' }, el('p', { class: 'field__label' }, '色'), swatches),
       errorBox,
@@ -329,7 +349,18 @@
           'span',
           { class: 'pattern-row__main' },
           el('span', { class: 'pattern-row__time' }, `${U.formatTime(p.start)} 〜 ${U.formatTime(p.end)}`),
-          el('span', { class: 'pattern-row__sub' }, `休憩 ${p.breakMinutes ? `${p.breakMinutes}分` : 'なし'}・実働 ${U.formatHours(workMinutes(p))}`)
+          el(
+            'span',
+            { class: 'pattern-row__sub' },
+            [
+              U.PATTERN_DAY_LABELS[p.dayType],
+              U.PATTERN_SLOT_LABELS[p.slot],
+              `休憩 ${p.breakMinutes ? `${p.breakMinutes}分` : 'なし'}`,
+              `実働 ${U.formatHours(workMinutes(p))}`,
+            ]
+              .filter(Boolean)
+              .join('・')
+          )
         ),
         el('span', { class: 'pattern-row__users' }, `${users}人`),
         el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›')

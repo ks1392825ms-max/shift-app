@@ -197,7 +197,15 @@
       return;
     }
     if (!admin) {
-      showGate('not-admin', { email: user.email });
+      // 管理者でなければ、スタッフとして登録されているかを見る（スタッフは自分の情報と申請だけ）
+      let account = null;
+      try {
+        account = cloud.backend.checkStaff ? await cloud.backend.checkStaff(user.email) : null;
+      } catch (err) {
+        showGate('error', { message: `権限を確認できませんでした（${err.message}）` });
+        return;
+      }
+      showGate(account ? 'staff' : 'not-admin', { email: user.email, account });
       return;
     }
     cloud.unsubscribe = cloud.backend.subscribe(onCloudData, (err) => {
@@ -306,8 +314,10 @@
       toast('別のタブで変更された内容を読み込みました');
     });
     registerServiceWorker();
-    // 共有モードを選んでいて、使える開き方（公開 URL）なら共有モードで始める
-    if (K.storage.getMode() === 'cloud' && K.cloud && K.cloud.supported()) {
+    // 共有モードを選んでいて、使える開き方（公開 URL）なら共有モードで始める。
+    // メールのログイン用リンクを開いたとき（別のブラウザで開いた場合も）は、共有モードに切り替えてログインを進める
+    if (K.cloud && K.cloud.supported() && (K.storage.getMode() === 'cloud' || K.cloud.isLoginLink())) {
+      if (K.storage.getMode() !== 'cloud') K.storage.setMode('cloud');
       startCloud(K.cloud);
       return;
     }

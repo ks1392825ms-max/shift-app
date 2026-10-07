@@ -9,6 +9,7 @@
 //   sendLoginLink(email)        ログイン用のメールを送る
 //   completeLogin(email)        メールのリンクでログインを完了する
 //   checkAdmin()                管理者として登録されているか（ルールで読めるかどうかで判断）
+//   checkStaff(email)           スタッフとして登録されているか（staffAccounts に本人のメールがあるか）
 //   subscribe(onData, onError)  共有データを受け取り続ける（変わるたびに onData）。戻り値で止められる
 //   write(changes)              記録をまとめて保存する：[{ collection, id, data }]
 //   isEmpty()                   共有の保存場所が空か（店舗が1つもないか）
@@ -104,6 +105,21 @@
     }
   }
 
+  // スタッフかどうか：staffAccounts/{ログインしたメール} を読む（本人の分だけ読めるルール）。
+  // スタッフなら { staffIds, storeIds }、そうでなければ null
+  async function checkStaff(email) {
+    const { fsMod, db } = await load();
+    try {
+      const snap = await fsMod.getDoc(fsMod.doc(db, 'staffAccounts', String(email || '').toLowerCase()));
+      if (!snap.exists()) return null;
+      const account = snap.data();
+      return account.deleted || !account.staffIds || !account.staffIds.length ? null : { staffIds: account.staffIds, storeIds: account.storeIds || [] };
+    } catch (err) {
+      if (err && err.code === 'permission-denied') return null;
+      throw err;
+    }
+  }
+
   // 共有データを受け取り続ける。最初に全部そろったときと、その後変わるたびに onData(data) を呼ぶ
   function subscribe(onData, onError) {
     const { fsMod, db } = fb;
@@ -184,5 +200,5 @@
     await authMod.signOut(auth);
   }
 
-  K.cloud = { supported, start, isLoginLink, savedEmail, sendLoginLink, completeLogin, checkAdmin, subscribe, write, isEmpty, signOut };
+  K.cloud = { supported, start, isLoginLink, savedEmail, sendLoginLink, completeLogin, checkAdmin, checkStaff, subscribe, write, isEmpty, signOut };
 })();

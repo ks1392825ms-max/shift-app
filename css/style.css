@@ -3070,3 +3070,140 @@ body.is-gate .bottom-nav {
     display: none;
   }
 }
+
+/* ==== スタッフの勤務条件・店舗の第○週の定休日（段階A） ==== */
+
+.field__input--short {
+  max-width: 10rem;
+}
+
+/* スタッフ一覧の職種名と印（パート・新人・戦力外） */
+.staff-row__position {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.flag-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.flag-badge--muted {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+/* シフト表の「外」（戦力外：人数に数えない） */
+.role-badge--excluded {
+  border: 1px dashed var(--text-muted);
+  color: var(--text-muted);
+}
+
+/* 曜日のチェック（固定休・この店舗で働く曜日） */
+.weekday-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.weekday-chip {
+  position: relative;
+  display: inline-flex;
+}
+
+.weekday-chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.weekday-chip span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.weekday-chip input:checked + span {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.weekday-chip input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.weekday-chip.is-sun span {
+  color: #d14343;
+}
+
+.weekday-chip.is-sat span {
+  color: #2f6fd6;
+}
+
+.weekday-chip input:checked + span,
+.weekday-chip.is-sun input:checked + span,
+.weekday-chip.is-sat input:checked + span {
+  color: var(--accent-text);
+}
+
+/* 第○週の定休日の表 */
+.nth-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.nth-grid__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nth-grid__day {
+  flex: none;
+  width: 1.6em;
+  font-weight: 700;
+  text-align: center;
+}
+
+.nth-grid__row.is-sun .nth-grid__day {
+  color: #d14343;
+}
+
+.nth-grid__row.is-sat .nth-grid__day {
+  color: #2f6fd6;
+}
+
+.nth-toggle {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.nth-toggle.is-selected {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}

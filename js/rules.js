@@ -13,6 +13,10 @@
     ['dailyHours', '1日の労働時間'],
     ['weeklyHours', '1週の労働時間'],
     ['pattern', 'パターン外'],
+    ['fixedOff', '固定休'],
+    ['workDay', '勤務曜日外'],
+    ['otherStore', '他店舗と重複'],
+    ['weeklyOff', '週休'],
     ['blank', '未入力'],
   ];
   const TYPE_LABELS = Object.fromEntries(TYPES);
@@ -162,6 +166,65 @@
               message: `${member.name}さん　実働${U.formatHours(minutes)}（目安${checks.dailyHoursLimit}時間）`,
             });
             addCell(member.id, date, `実働${U.formatHours(minutes)}`);
+          }
+        }
+      }
+
+      // ---- 勤務条件（スタッフの設定） ----
+      // 同じ人のほかの店舗での勤務（同じ日に2店舗に入っていないか・週休を数えるとき）
+      const otherWork = new Map();
+      for (const other of K.storage.getSamePersonStaff(member.id)) {
+        for (const s of K.storage.getShifts({ month, staffId: other.id })) {
+          if (isAtWork(s) && (s.storeId || other.storeId) !== storeId) otherWork.set(s.date, s.storeId || other.storeId);
+        }
+      }
+      const fixed = member.fixedOff || { weekdays: [], holidays: false };
+      const workDays = member.workWeekdays || [];
+      for (const date of dates) {
+        if (!isAtWork(map.get(`${member.id}|${date}`))) continue;
+        const w = K.calc.weekdayOf(date);
+        const holiday = K.holidays.holidayName(date);
+        if (fixed.weekdays.includes(w) || (fixed.holidays && holiday)) {
+          const what = fixed.weekdays.includes(w) ? `${U.WEEKDAYS[w]}曜` : '祝日';
+          result.issues.push({ type: 'fixedOff', date, staffId: member.id, message: `${member.name}さん　固定休（${what}）の日に勤務が入っています` });
+          addCell(member.id, date, '固定休');
+        } else if (workDays.length && !workDays.includes(w)) {
+          result.issues.push({
+            type: 'workDay',
+            date,
+            staffId: member.id,
+            message: `${member.name}さん　${U.WEEKDAYS[w]}曜は${store.name}で働く曜日ではありません`,
+          });
+          addCell(member.id, date, '勤務曜日外');
+        }
+        if (otherWork.has(date)) {
+          const other = K.storage.getStore(otherWork.get(date));
+          result.issues.push({
+            type: 'otherStore',
+            date,
+            staffId: member.id,
+            message: `${member.name}さん　同じ日に${other ? other.name : 'ほかの店舗'}にも勤務が入っています`,
+          });
+          addCell(member.id, date, `${other ? other.name : 'ほかの店舗'}と重複`);
+        }
+      }
+
+      // 週休（月曜〜日曜の7日がこの月に入っていて、未入力のない週だけ数える。有給は休みに数える）
+      if (member.weeklyOffDays) {
+        const mondays = new Set(dates.map((d) => addDays(d, -((K.calc.weekdayOf(d) + 6) % 7))));
+        for (const monday of mondays) {
+          const week = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+          if (!week.every((d) => d.startsWith(`${month}-`))) continue;
+          const shifts = week.map((d) => map.get(`${member.id}|${d}`));
+          if (shifts.some((s) => !s)) continue;
+          const off = week.filter((d, i) => !isAtWork(shifts[i]) && !otherWork.has(d)).length;
+          if (off < member.weeklyOffDays) {
+            result.issues.push({
+              type: 'weeklyOff',
+              date: week[0],
+              staffId: member.id,
+              message: `${member.name}さん　${mdLabel(week[0])}〜${mdLabel(week[6])}の週 休み${off}日（週休${member.weeklyOffDays}日）`,
+            });
           }
         }
       }

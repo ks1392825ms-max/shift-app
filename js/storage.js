@@ -14,7 +14,8 @@
 //   staffingRules: [...],     必要人数（Step4〜）
 //   dayOverrides: [...],      日付ごとの上書き（Step4〜）
 //   holidays: [...],          祝日の手直し（Step4〜）
-//   requests: [...],          スタッフの希望（将来）
+//   requests: [...],          スタッフの希望（使っていない。将来のために残している）
+//   staffAccounts: [...],     スタッフのログイン用メールと、本人の記録・所属店舗の対応（スタッフの設定から自動で作る）
 //   settings: { checks: {...} }
 // }
 // すべての記録に id / createdAt / updatedAt / deleted を持たせる（同期のため）。
@@ -30,9 +31,12 @@
   const DEFAULTS_TIMESTAMP = '2000-01-01T00:00:00.000Z'; // 初期データの日時（同期で編集したほうが必ず優先されるように）
   const LIST_KEYS = [
     'stores', 'staff', 'shiftPatterns', 'shifts', 'businessTimes', 'businessTimeSkips',
-    'staffingRules', 'dayOverrides', 'holidays', 'requests',
+    'staffingRules', 'dayOverrides', 'holidays', 'requests', 'staffAccounts',
   ];
-  const ROLES = ['stylist', 'assistant'];
+  // 職種（St／As のどちらで数えるかは U.POSITION_ROLE）と雇用形態
+  const POSITIONS = ['stylist', 'junior_stylist', 'junior_assistant', 'assistant'];
+  const EMPLOYMENTS = ['full', 'part'];
+  const MAX_STAFF_NOTE = 100;
   const MAX_STORE_NAME = 10;
   const MAX_STAFF_NAME = 12;
   const MAX_TITLE = 10;
@@ -427,7 +431,19 @@
     if (closedWeekdays.some((w) => !Number.isInteger(w) || w < 0 || w > 6)) throw new Error('定休日が正しくありません。');
     if (closedWeekdays.length === 7) throw new Error('すべての曜日を定休日にはできません。');
 
-    return { name, open: fields.open, close: fields.close, closedWeekdays };
+    // 第○週の○曜日の定休日（例：第1・第3火曜 → [{ weekday: 2, weeks: [1, 3] }]）。毎週の定休日と同じ曜日は不要なので外す
+    const nth = new Map();
+    for (const item of fields.closedNthWeekdays || []) {
+      const weekday = Number(item && item.weekday);
+      const weeks = [...new Set((item && item.weeks) || [])].map(Number).sort((a, b) => a - b);
+      if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) throw new Error('第○週の定休日の曜日が正しくありません。');
+      if (!weeks.length || weeks.some((w) => !Number.isInteger(w) || w < 1 || w > 5)) throw new Error('第○週の定休日は、第1〜第5週から選んでください。');
+      if (closedWeekdays.includes(weekday)) continue;
+      nth.set(weekday, [...new Set([...(nth.get(weekday) || []), ...weeks])].sort((a, b) => a - b));
+    }
+    const closedNthWeekdays = [...nth].sort((a, b) => a[0] - b[0]).map(([weekday, weeks]) => ({ weekday, weeks }));
+
+    return { name, open: fields.open, close: fields.close, closedWeekdays, closedNthWeekdays };
   }
 
   // まだ使われていない色を選ぶ（店舗の目印の色）
@@ -502,8 +518,9 @@
   }
 
   function updateStore(id, fields) {
-    findActive(data.stores, id, '店舗が見つかりませんでした。');
-    const { name, closedWeekdays } = normalizeStore(fields, id);
+    const current = findActive(data.stores, id, '店舗が見つかりませんでした。');
+    // 第○週の定休日を渡されないときは、今の設定のまま
+    const { name, closedWeekdays, closedNthWeekdays } = normalizeStore({ closedNthWeekdays: current.closedNthWeekdays, ...fields }, id);
     const color = fields.color ? cleanColor(fields.color) : null;
 
     commit((d) => {
@@ -513,6 +530,7 @@
         open: fields.open,
         close: fields.close,
         closedWeekdays,
+        closedNthWeekdays,
         updatedAt: U.nowIso(),
       });
     });
@@ -523,6 +541,7 @@
   // 勤務パターンは「全店舗共通」（storeId なし。以前からのパターンはすべてこれ）か「その店舗専用」（storeId あり）
   // 出勤・退勤の時刻は15分単位まで（画面では30分単位が基本で、切り替えると15分単位も選べる）
   const PATTERN_TIME_STEP = 15;
+  const PATTERN_SLOTS = ['early', 'late'];
 
   function patternAvailableIn(pattern, storeId) {
     return !pattern.storeId || pattern.storeId === storeId;
@@ -604,7 +623,13 @@
       }
     }
 
-    return { start: fields.start, end: fields.end, breakMinutes, label, color: cleanColor(fields.color), storeId };
+    // 平日用／土日祝用（空＝どちらでも）と、早番／遅番（空＝区別なし）。AIシフト作成で、その日に使えるパターンを選ぶのに使う
+    const dayType = fields.dayType || null;
+    if (dayType !== null && !DAY_TYPES.includes(dayType)) throw new Error('平日用か土日祝用かを選んでください。');
+    const slot = fields.slot || null;
+    if (slot !== null && !PATTERN_SLOTS.includes(slot)) throw new Error('早番か遅番かを選んでください。');
+
+    return { start: fields.start, end: fields.end, breakMinutes, label, color: cleanColor(fields.color), storeId, dayType, slot };
   }
 
   function addPattern(fields) {
@@ -616,8 +641,9 @@
   }
 
   function updatePattern(id, fields) {
-    findActive(data.shiftPatterns, id, '勤務パターンが見つかりませんでした。');
-    const clean = normalizePattern(fields, id);
+    const current = findActive(data.shiftPatterns, id, '勤務パターンが見つかりませんでした。');
+    // 平日用／土日祝用・早番／遅番を渡されないときは、今の設定のまま
+    const clean = normalizePattern({ dayType: current.dayType, slot: current.slot, ...fields }, id);
     commit((d) => {
       Object.assign(d.shiftPatterns.find((p) => p.id === id), clean, { updatedAt: U.nowIso() });
     });
@@ -674,17 +700,21 @@
 
   function normalizeStaff(fields, exceptId) {
     const name = cleanText(fields.name, { label: '表示名', max: MAX_STAFF_NAME, required: true });
-    if (active(data.staff).some((s) => s.id !== exceptId && s.name === name)) {
-      throw new Error(`「${name}」さんはすでに登録されています。別の表示名にしてください。`);
+    // 同じ表示名は、同じ店舗の中だけ重ならないようにする（複数の店舗で働く人は、店舗ごとに同じ名前で登録できる）
+    if (active(data.staff).some((s) => s.id !== exceptId && s.name === name && s.storeId === fields.storeId)) {
+      throw new Error(`「${name}」さんは、この店舗にすでに登録されています。別の表示名にしてください。`);
     }
 
     findActive(data.stores, fields.storeId, '所属店舗を選んでください。');
-    if (!ROLES.includes(fields.role)) throw new Error('役割（スタイリスト／アシスタント）を選んでください。');
+    // 職種（4種類）。St／As のどちらで数えるか（role）は職種から決める。職種のない以前の記録は役割から
+    const position = fields.position || fields.role;
+    if (!POSITIONS.includes(position)) throw new Error('職種を選んでください。');
+    const role = U.POSITION_ROLE[position];
 
     const title = cleanText(fields.title, { label: '肩書き', max: MAX_TITLE, required: false });
 
+    // 勤務時間がまだ決まっていない人もいるので、使える勤務パターンは0個でもよい
     const patternIds = [...new Set(fields.patternIds || [])];
-    if (patternIds.length === 0) throw new Error('使える勤務パターンを1つ以上選んでください。');
     for (const pid of patternIds) {
       const p = findActive(data.shiftPatterns, pid, '選んだ勤務パターンが見つかりませんでした。');
       if (!patternAvailableIn(p, fields.storeId)) throw new Error(`「${p.label}」は、ほかの店舗専用の勤務パターンです。`);
@@ -698,7 +728,147 @@
       if (value === 'off' || patternIds.includes(value)) weeklyPatterns[w] = value;
     }
 
-    return { name, storeId: fields.storeId, role: fields.role, title, patternIds, weeklyPatterns, active: fields.active !== false };
+    return {
+      name,
+      storeId: fields.storeId,
+      role,
+      position,
+      title,
+      patternIds,
+      weeklyPatterns,
+      active: fields.active !== false,
+      ...normalizeStaffConditions(fields),
+    };
+  }
+
+  // 勤務条件（AIシフト作成でも使う）：雇用形態・新人・戦力外・週休・固定休・この店舗で働く曜日・備考・ログイン用メール
+  function normalizeStaffConditions(fields) {
+    const employment = fields.employment || 'full';
+    if (!EMPLOYMENTS.includes(employment)) throw new Error('雇用形態を選んでください。');
+
+    let weeklyOffDays = fields.weeklyOffDays === '' || fields.weeklyOffDays === undefined ? null : fields.weeklyOffDays;
+    if (weeklyOffDays !== null) {
+      weeklyOffDays = Number(weeklyOffDays);
+      if (!Number.isInteger(weeklyOffDays) || weeklyOffDays < 1 || weeklyOffDays > 6) throw new Error('週休の日数が正しくありません。');
+    }
+
+    const weekdays = (list, label) => {
+      const clean = [...new Set((list || []).map(Number))].sort((a, b) => a - b);
+      if (clean.some((w) => !Number.isInteger(w) || w < 0 || w > 6)) throw new Error(`${label}が正しくありません。`);
+      return clean;
+    };
+    const fixedOff = {
+      weekdays: weekdays(fields.fixedOff && fields.fixedOff.weekdays, '固定休'),
+      holidays: Boolean(fields.fixedOff && fields.fixedOff.holidays),
+    };
+    // この店舗で働く曜日（空＝すべての曜日）。複数の店舗で働く人の、店舗ごとの曜日
+    const workWeekdays = weekdays(fields.workWeekdays, 'この店舗で働く曜日');
+    if (workWeekdays.length === 7) workWeekdays.length = 0;
+
+    const note = cleanText(fields.note, { label: '備考', max: MAX_STAFF_NOTE, required: false });
+    const email = cleanEmail(fields.email);
+
+    return {
+      employment,
+      isNew: Boolean(fields.isNew),
+      excludeFromCount: Boolean(fields.excludeFromCount),
+      weeklyOffDays,
+      fixedOff,
+      workWeekdays,
+      note,
+      email,
+      personId: fields.personId || null,
+    };
+  }
+
+  // ログイン用のメールアドレス（小文字にそろえる。空はなし）
+  function cleanEmail(value) {
+    const email = String(value || '').trim().toLowerCase();
+    if (!email) return '';
+    if (email.length > 254 || !/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email)) throw new Error('メールアドレスが正しくありません。');
+    return email;
+  }
+
+  // ---- スタッフのログイン（staffAccounts） ----
+  // スタッフに登録したメールアドレスから作る（画面からは直接変えない）。
+  // id はメールアドレス。同じ人（personId が同じ、または同じ記録）にだけ、同じメールを使える。
+  // Firestore のルールは、ログインした人のメールでこの記録を探し、本人のスタッフ記録と所属店舗だけを読めるようにする。
+  function rebuildStaffAccounts(d) {
+    const byEmail = new Map();
+    for (const s of d.staff) {
+      if (s.deleted || !s.active || !s.email) continue;
+      if (!byEmail.has(s.email)) byEmail.set(s.email, []);
+      byEmail.get(s.email).push(s);
+    }
+    const now = U.nowIso();
+    d.staffAccounts = d.staffAccounts || [];
+    for (const account of d.staffAccounts) {
+      if (!byEmail.has(account.id) && !account.deleted) Object.assign(account, { staffIds: [], storeIds: [], deleted: true, updatedAt: now });
+    }
+    for (const [email, members] of byEmail) {
+      const next = { staffIds: members.map((m) => m.id).sort(), storeIds: [...new Set(members.map((m) => m.storeId))].sort() };
+      const account = d.staffAccounts.find((a) => a.id === email);
+      if (!account) {
+        d.staffAccounts.push({ id: email, email, ...next, createdAt: now, updatedAt: now, deleted: false });
+      } else if (account.deleted || JSON.stringify([account.staffIds, account.storeIds]) !== JSON.stringify([next.staffIds, next.storeIds])) {
+        Object.assign(account, next, { deleted: false, updatedAt: now });
+      }
+    }
+  }
+
+  // 同じメールを、同じ人でないスタッフに使っていないか（保存の前に確かめる）
+  function checkEmailOwner(email, id, personId) {
+    if (!email) return;
+    const clash = active(data.staff).find((s) => s.id !== id && s.email === email && (!personId || s.personId !== personId));
+    if (clash) {
+      throw new Error(`このメールアドレスは、${clash.name}さん（${(data.stores.find((s) => s.id === clash.storeId) || {}).name || 'ほかの店舗'}）に登録されています。同じ人（「ほかの店舗の同じ人」でつないだ記録）にだけ、同じメールを使えます。`);
+    }
+  }
+
+  // ほかの店舗の同じ人とつなぐ（otherId が null ならつながりを外す）。
+  // 例：2つの店舗で働く人。店舗ごとに勤務条件を持ち、同じ日に2店舗に入ると自動チェックで知らせる
+  function setSamePerson(id, otherId) {
+    const member = findActive(data.staff, id, 'スタッフが見つかりませんでした。');
+    let other = null;
+    if (otherId) {
+      other = findActive(data.staff, otherId, 'つなぐスタッフが見つかりませんでした。');
+      if (other.id === member.id) throw new Error('同じ記録どうしはつなげません。');
+      if (other.storeId === member.storeId) throw new Error('同じ人としてつなげるのは、ほかの店舗の記録だけです。');
+    } else if (member.personId && member.email) {
+      // つながりを外すと、同じメールが別の人のものになってしまう
+      const sameEmail = active(data.staff).some((s) => s.id !== id && s.personId === member.personId && s.email === member.email);
+      if (sameEmail) throw new Error('同じ人の記録に同じメールアドレスが登録されているため、つながりを外せません。先にメールアドレスを変えてください。');
+    }
+    commit((d) => {
+      const now = U.nowIso();
+      const me = d.staff.find((s) => s.id === id);
+      const oldPerson = me.personId || null;
+      if (other) {
+        const o = d.staff.find((s) => s.id === other.id);
+        const person = o.personId || me.personId || `person_${U.uuid()}`;
+        for (const s of d.staff) {
+          // 両方のグループを1つにまとめる
+          if (s.id === me.id || s.id === o.id || (s.personId && (s.personId === o.personId || s.personId === oldPerson))) {
+            if (s.personId !== person) Object.assign(s, { personId: person, updatedAt: now });
+          }
+        }
+      } else if (oldPerson) {
+        Object.assign(me, { personId: null, updatedAt: now });
+        // 残りが1人だけなら、そのつながりも外す
+        const rest = d.staff.filter((s) => !s.deleted && s.personId === oldPerson);
+        if (rest.length === 1) Object.assign(rest[0], { personId: null, updatedAt: now });
+      }
+      rebuildStaffAccounts(d);
+    });
+  }
+
+  // 同じ人のほかの店舗の記録（自分は含まない）
+  function getSamePersonStaff(id) {
+    const member = data.staff.find((s) => s.id === id);
+    if (!member || !member.personId) return [];
+    return active(data.staff)
+      .filter((s) => s.id !== id && s.personId === member.personId)
+      .map(copy);
   }
 
   // 曜日ごとのいつもの勤務を、その月の「未入力の日」に反映する（入力済みの日・定休日は変えない）
@@ -737,15 +907,23 @@
 
   function addStaff(fields) {
     const clean = normalizeStaff(fields);
+    checkEmailOwner(clean.email, null, null);
     const now = U.nowIso();
     const member = { id: U.uuid(), ...clean, order: nextOrder(data.staff), createdAt: now, updatedAt: now, deleted: false };
-    commit((d) => d.staff.push(member));
+    commit((d) => {
+      d.staff.push(member);
+      rebuildStaffAccounts(d);
+    });
     return copy(member);
   }
 
   function updateStaff(id, fields) {
     const current = findActive(data.staff, id, 'スタッフが見つかりませんでした。');
-    const clean = normalizeStaff({ ...current, ...fields }, id);
+    const merged = { ...current, ...fields };
+    // 役割（St／As）だけを渡されたときは、職種もそれに合わせる（以前の呼び出し方との互換）
+    if ('role' in fields && !('position' in fields)) merged.position = fields.role;
+    const clean = normalizeStaff(merged, id);
+    checkEmailOwner(clean.email, id, current.personId);
     commit((d) => {
       const s = d.staff.find((x) => x.id === id);
       const moved = clean.storeId !== s.storeId;
@@ -759,6 +937,7 @@
       // 店舗を変えたときは、新しい店舗の一番下に並べる
       const order = moved ? nextOrder(d.staff) : s.order;
       Object.assign(s, clean, { order, updatedAt: U.nowIso() });
+      rebuildStaffAccounts(d);
     });
   }
 
@@ -784,6 +963,7 @@
       const s = d.staff.find((x) => x.id === id);
       s.deleted = true;
       s.updatedAt = U.nowIso();
+      rebuildStaffAccounts(d);
     });
   }
 
@@ -1397,6 +1577,8 @@
     detachCloud,
     normalizeStoreName,
     uploadToCloud,
+    setSamePerson,
+    getSamePersonStaff,
     startFreshCloud,
   };
 })();

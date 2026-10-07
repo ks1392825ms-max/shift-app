@@ -239,11 +239,19 @@
           onSubmit: (email) => K.app.cloudActions.confirmEmail(email),
         })
       );
+    } else if (s === 'staff') {
+      // スタッフの申請画面は段階Bで作る。今はログインできることだけ確かめられる
+      body = card(
+        'スタッフとしてログインしました',
+        el('p', { class: 'hint hint--left' }, `${info.email} でログインしています。`),
+        el('p', { class: 'hint hint--left' }, '希望休・有給の申請画面は、準備ができしだい使えるようになります。'),
+        el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => K.app.cloudActions.signOut() }, 'ログアウト'))
+      );
     } else if (s === 'not-admin') {
       body = card(
         'このアカウントでは使えません',
-        el('p', { class: 'hint hint--left' }, `${info.email} は、管理者として登録されていません。`),
-        el('p', { class: 'hint hint--left' }, '管理者のメールアドレスは、Firebase の管理画面（access/admins）に登録します。'),
+        el('p', { class: 'hint hint--left' }, `${info.email} は、管理者・スタッフとして登録されていません。`),
+        el('p', { class: 'hint hint--left' }, '管理者は Firebase の管理画面（access/admins）に、スタッフは管理者がアプリの「設定 > スタッフ」のログイン用メールに登録します。'),
         el(
           'div',
           { class: 'actions' },

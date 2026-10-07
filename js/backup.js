@@ -71,7 +71,38 @@
       ((r.mode === 'type' && ['weekday', 'holiday'].includes(r.dayType)) || (r.mode === 'custom' && Array.isArray(r.bands) && r.bands.every(isBand))),
     holidays: (r) => U.isValidDate(r.date) && (r.action === 'remove' || (r.action === 'add' && isStr(r.name, 12))),
     requests: () => true, // 将来の機能。形だけ引き継ぐ
+    // スタッフのログイン用メール（スタッフの設定から作る対応表）
+    staffAccounts: (r) =>
+      isStr(r.email, 254) && r.id === r.email && Array.isArray(r.staffIds) && r.staffIds.every(isId) &&
+      Array.isArray(r.storeIds) && r.storeIds.every(isId),
   };
+
+  // 段階Aで足した項目（ある場合だけ）：正しくない値は使わない（記録そのものは取り込む）
+  const POSITIONS = ['stylist', 'junior_stylist', 'junior_assistant', 'assistant'];
+  const isWeekdays = (v) => Array.isArray(v) && v.every((w) => isInt(w, 0, 6));
+  function cleanAddedFields(data) {
+    for (const s of data.stores) {
+      const ok =
+        Array.isArray(s.closedNthWeekdays) &&
+        s.closedNthWeekdays.every((x) => x && isInt(x.weekday, 0, 6) && Array.isArray(x.weeks) && x.weeks.length && x.weeks.every((w) => isInt(w, 1, 5)));
+      if (s.closedNthWeekdays !== undefined && !ok) delete s.closedNthWeekdays;
+    }
+    for (const p of data.shiftPatterns) {
+      if (p.dayType !== undefined && p.dayType !== null && !['weekday', 'holiday'].includes(p.dayType)) p.dayType = null;
+      if (p.slot !== undefined && p.slot !== null && !['early', 'late'].includes(p.slot)) p.slot = null;
+    }
+    for (const m of data.staff) {
+      if (m.position !== undefined && !POSITIONS.includes(m.position)) delete m.position;
+      if (m.employment !== undefined && !['full', 'part'].includes(m.employment)) delete m.employment;
+      for (const key of ['isNew', 'excludeFromCount']) if (m[key] !== undefined && typeof m[key] !== 'boolean') delete m[key];
+      if (m.weeklyOffDays !== undefined && m.weeklyOffDays !== null && !isInt(m.weeklyOffDays, 1, 6)) delete m.weeklyOffDays;
+      if (m.fixedOff !== undefined && !(m.fixedOff && isWeekdays(m.fixedOff.weekdays) && typeof m.fixedOff.holidays === 'boolean')) delete m.fixedOff;
+      if (m.workWeekdays !== undefined && !isWeekdays(m.workWeekdays)) delete m.workWeekdays;
+      if (m.note !== undefined && !isStr(m.note, 100)) delete m.note;
+      if (m.email !== undefined && !(m.email === '' || (isStr(m.email, 254) && /^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(m.email)))) delete m.email;
+      if (m.personId !== undefined && m.personId !== null && !isId(m.personId)) delete m.personId;
+    }
+  }
 
   // チェックの基準：正しくない値は初期値にする
   function cleanChecks(checks) {
@@ -127,6 +158,7 @@
         delete s.patternOrder;
       }
     }
+    cleanAddedFields(data);
     // 毎週の社用・必要人数の時間帯の並び順（ある場合だけ）：正しくなければ使わない
     for (const r of [...data.businessTimes, ...data.staffingRules]) {
       if (r.order !== undefined && !Number.isFinite(r.order)) delete r.order;

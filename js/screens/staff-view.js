@@ -213,7 +213,7 @@
         'p',
         { class: 'day-summary' },
         el('span', { class: 'day-summary__counts' }, member.name),
-        `${store.name}での勤務・${U.ROLE_LABELS[member.role]}${member.title ? `・${member.title}` : ''}${home && home.id !== store.id ? `（現在は${home.name}の所属）` : ''}`
+        `${store.name}での勤務・${U.positionLabel(member)}${member.title ? `・${member.title}` : ''}${home && home.id !== store.id ? `（現在は${home.name}の所属）` : ''}`
       ),
       stats,
       el(

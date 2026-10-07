@@ -596,7 +596,10 @@
             el(
               'span',
               { class: 'roster__staff-meta' },
-              el('span', { class: `role-badge role-badge--${m.role}` }, U.ROLE_SHORT[m.role]),
+              // 戦力外の人は St／As に数えないので、その印にする
+              m.excludeFromCount
+                ? el('span', { class: 'role-badge role-badge--excluded', title: '戦力外（人数に数えない）' }, '外')
+                : el('span', { class: `role-badge role-badge--${m.role}` }, U.ROLE_SHORT[m.role]),
               m.title ? el('span', { class: 'roster__staff-title' }, m.title) : null
             )
           )
