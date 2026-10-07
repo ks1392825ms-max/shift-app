@@ -359,7 +359,7 @@
     } else {
       parts.push(el('p', { class: 'hint' }, '店舗を選ぶと、申請の画面が開きます。'));
     }
-    container.append(...parts);
+    container.append(...parts.filter(Boolean));
   }
 
   K.screens = K.screens || {};

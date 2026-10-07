@@ -218,7 +218,8 @@
       )
     );
 
-    container.append(
+    // 表示しない部分（null）を除いてから並べる（そのまま渡すと「null」の文字が出てしまう）
+    const parts = [
       el(
         'div',
         { class: 'roster-toolbar' },
@@ -234,8 +235,9 @@
       el('p', { class: 'hint' }, w.open ? `${R().monthLabel(w.month)}分の申請を受付中です（今月末まで）。` : `${R().monthLabel(w.month)}分の申請は、${Number(w.opensOn.slice(5, 7))}月25日から受け付けます。`),
       tabs,
       message ? el('p', { class: message.ok ? 'sync__result' : 'form-error', role: 'status' }, message.text) : null,
-      tab === 'wish' ? wishView(store) : tab === 'paid' ? paidView(store) : limitView(store)
-    );
+      tab === 'wish' ? wishView(store) : tab === 'paid' ? paidView(store) : limitView(store),
+    ];
+    container.append(...parts.filter(Boolean));
   }
 
   K.screens = K.screens || {};
