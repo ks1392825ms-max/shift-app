@@ -4,10 +4,10 @@
   const K = window.ShiftApp;
   const U = K.utils;
 
-  const SCREEN_TITLES = { roster: 'シフト表', day: '1日の詳細', staff: 'スタッフ別', summary: '集計', settings: '設定', login: '共有モード' };
+  const SCREEN_TITLES = { roster: 'シフト表', day: '1日の詳細', staff: 'スタッフ別', summary: '集計', settings: '設定', requests: '申請', login: '共有モード', request: '希望休・有給の申請' };
 
   // 下のタブで、どのタブを選択中にするか（1日の詳細はシフト表の中の画面）
-  const TAB_OF = { roster: 'roster', day: 'roster', staff: 'staff', summary: 'summary', settings: 'settings', login: null };
+  const TAB_OF = { roster: 'roster', day: 'roster', staff: 'staff', summary: 'summary', settings: 'settings', requests: 'requests', login: null, request: null };
 
   // 表示中の店舗を、次に開いたときも同じにするための保存場所（シフトのデータとは別。消えても困らない）
   const UI_KEY = 'shift-app-ui';
@@ -96,7 +96,8 @@
     }
 
     // 共有モードの入口（ログインなど）では、店舗の切り替えと下のタブを隠す
-    const gate = state.screen === 'login';
+    // スタッフの申請画面（request）も、店舗の切り替えと下のタブを出さない
+    const gate = state.screen === 'login' || state.screen === 'request';
     document.body.classList.toggle('is-gate', gate);
     renderModeBadge();
     if (!gate) renderStoreSwitch();
@@ -166,7 +167,7 @@
   // ---- 共有モード ----
   // 共有モードの流れ：ログイン → 管理者か確認 → 共有データを受け取り続ける（空なら初回の移行）
 
-  const cloud = { user: null, unsubscribe: null, ready: false, backend: null, awaitingConfirm: false, renderTimer: null };
+  const cloud = { user: null, unsubscribe: null, unsubscribeRequests: null, ready: false, backend: null, awaitingConfirm: false, renderTimer: null };
 
   function showGate(gateState, info = {}) {
     state.screen = 'login';
@@ -180,6 +181,11 @@
       cloud.unsubscribe();
       cloud.unsubscribe = null;
     }
+    if (cloud.unsubscribeRequests) {
+      cloud.unsubscribeRequests();
+      cloud.unsubscribeRequests = null;
+    }
+    K.requests.clearAdminData();
     cloud.ready = false;
     cloud.user = user;
     if (!user) {
@@ -205,7 +211,14 @@
         showGate('error', { message: `権限を確認できませんでした（${err.message}）` });
         return;
       }
-      showGate(account ? 'staff' : 'not-admin', { email: user.email, account });
+      if (account) {
+        // スタッフ：申請画面（本人の情報と申請だけを読み書きする）
+        state.screen = 'request';
+        state.params = { email: user.email, account };
+        render();
+      } else {
+        showGate('not-admin', { email: user.email });
+      }
       return;
     }
     cloud.unsubscribe = cloud.backend.subscribe(onCloudData, (err) => {
@@ -224,6 +237,16 @@
     if (!cloud.ready) {
       cloud.ready = true;
       K.storage.attachCloud(cloud.backend, cloudData);
+      // 管理者：全店舗の希望休・有給申請も受け取り続ける（申請タブ・シフト表の「希」の印）
+      if (cloud.backend.subscribeRequests) {
+        cloud.unsubscribeRequests = cloud.backend.subscribeRequests(
+          (d) => {
+            K.requests.setAdminData(d);
+            renderWhenIdle();
+          },
+          (err) => console.error(err)
+        );
+      }
       navigate('roster');
       return;
     }
@@ -278,6 +301,7 @@
 
   async function startCloud(backend) {
     cloud.backend = backend;
+    K.requests.attach(backend);
     K.storage.onCloudError((err) => toast(`共有の保存場所に保存できませんでした（${err.code || err.message}）`));
     showGate('loading');
     try {
@@ -342,6 +366,7 @@
     toast,
     cloudActions,
     cloudUser: () => cloud.user,
+    cloudBackend: () => cloud.backend,
     startCloud, // テスト用（偽の保存場所で共有モードを動かす）
   };
 

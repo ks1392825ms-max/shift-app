@@ -10,6 +10,8 @@
 //   completeLogin(email)        メールのリンクでログインを完了する
 //   checkAdmin()                管理者として登録されているか（ルールで読めるかどうかで判断）
 //   checkStaff(email)           スタッフとして登録されているか（staffAccounts に本人のメールがあるか）
+//   loadStaffContext / loadMyRequests / saveWishOff / addPaidRequest / withdrawPaidRequest   スタッフ本人の申請
+//   subscribeRequests / adminSet / adminUpdate / adminDelete                                 管理者の申請の受け取り・変更
 //   subscribe(onData, onError)  共有データを受け取り続ける（変わるたびに onData）。戻り値で止められる
 //   write(changes)              記録をまとめて保存する：[{ collection, id, data }]
 //   isEmpty()                   共有の保存場所が空か（店舗が1つもないか）
@@ -189,6 +191,134 @@
     }
   }
 
+  // ---- 希望休・有給（スタッフ）：自分の分だけを読み書きする（ルールでもそれ以外は止めている） ----
+
+  // 読めないもの・ないものは null にする
+  async function getData(col, id) {
+    const { fsMod, db } = await load();
+    try {
+      const snap = await fsMod.getDoc(fsMod.doc(db, col, id));
+      return snap.exists() ? snap.data() : null;
+    } catch (err) {
+      if (err && err.code === 'permission-denied') return null;
+      throw err;
+    }
+  }
+
+  // 本人のスタッフ記録・所属店舗・希望休の設定
+  async function loadStaffContext(account) {
+    const [stores, staff, settings] = await Promise.all([
+      Promise.all(account.storeIds.map((id) => getData('stores', id))),
+      Promise.all(account.staffIds.map((id) => getData('staff', id))),
+      getData('settings', 'requests'),
+    ]);
+    return {
+      stores: stores.filter((s) => s && !s.deleted),
+      staff: staff.filter((s) => s && !s.deleted && s.active !== false),
+      settings,
+    };
+  }
+
+  // 本人のその月の申請（希望休・有給希望・上限の変更）
+  async function loadMyRequests(staffId, month) {
+    const { fsMod, db } = await load();
+    const mine = (col) => fsMod.getDocs(fsMod.query(fsMod.collection(db, col), fsMod.where('staffId', '==', staffId), fsMod.where('month', '==', month)));
+    const [wish, paid, quota] = await Promise.all([mine('wishOffs'), mine('paidRequests'), mine('requestQuotas')]);
+    return {
+      wish: wish.docs.length ? wish.docs[0].data() : null,
+      paid: paid.docs.map((d) => ({ id: d.id, ...d.data() })),
+      quota: quota.docs.length ? quota.docs[0].data() : null,
+    };
+  }
+
+  async function saveWishOff({ staffId, storeId, month, dates, email }) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, 'wishOffs', `${staffId}_${month}`), {
+      staffId,
+      storeId,
+      month,
+      dates,
+      updatedAt: new Date().toISOString(),
+      updatedBy: email || '',
+    });
+  }
+
+  async function addPaidRequest({ staffId, storeId, month, date, note, email }) {
+    const { fsMod, db } = await load();
+    const now = new Date().toISOString();
+    const ref = await fsMod.addDoc(fsMod.collection(db, 'paidRequests'), {
+      staffId,
+      storeId,
+      month,
+      date,
+      status: 'pending',
+      note: note || '',
+      createdAt: now,
+      updatedAt: now,
+      createdBy: email || '',
+    });
+    return ref.id;
+  }
+
+  async function withdrawPaidRequest(id) {
+    const { fsMod, db } = await load();
+    await fsMod.deleteDoc(fsMod.doc(db, 'paidRequests', id));
+  }
+
+  // ---- 希望休・有給（管理者）：全店舗の申請を受け取り続ける ----
+  function subscribeRequests(onData, onError) {
+    const { fsMod, db } = fb;
+    const parts = { wishOffs: null, paidRequests: null, quotas: null, settings: undefined };
+    let timer = null;
+    const emit = () => {
+      if (Object.values(parts).some((v) => v === null || v === undefined)) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => onData({ ...parts, settings: parts.settings || null }), 30);
+    };
+    const fail = (err) => onError && onError(err);
+    const listen = (col, key) =>
+      fsMod.onSnapshot(
+        fsMod.collection(db, col),
+        (snap) => {
+          parts[key] = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          emit();
+        },
+        fail
+      );
+    const stops = [
+      listen('wishOffs', 'wishOffs'),
+      listen('paidRequests', 'paidRequests'),
+      listen('requestQuotas', 'quotas'),
+      fsMod.onSnapshot(
+        fsMod.doc(db, 'settings', 'requests'),
+        (snap) => {
+          parts.settings = snap.exists() ? snap.data() : false;
+          emit();
+        },
+        fail
+      ),
+    ];
+    return () => {
+      clearTimeout(timer);
+      for (const stop of stops) stop();
+    };
+  }
+
+  async function adminSet(col, id, data) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, col, id), data);
+  }
+
+  async function adminUpdate(col, id, data) {
+    const { fsMod, db } = await load();
+    await fsMod.updateDoc(fsMod.doc(db, col, id), data);
+  }
+
+  async function adminDelete(col, id) {
+    const { fsMod, db } = await load();
+    await fsMod.deleteDoc(fsMod.doc(db, col, id));
+  }
+
   async function isEmpty() {
     const { fsMod, db } = await load();
     const snap = await fsMod.getDocs(fsMod.query(fsMod.collection(db, 'stores'), fsMod.limit(1)));
@@ -200,5 +330,27 @@
     await authMod.signOut(auth);
   }
 
-  K.cloud = { supported, start, isLoginLink, savedEmail, sendLoginLink, completeLogin, checkAdmin, checkStaff, subscribe, write, isEmpty, signOut };
+  K.cloud = {
+    supported,
+    start,
+    isLoginLink,
+    savedEmail,
+    sendLoginLink,
+    completeLogin,
+    checkAdmin,
+    checkStaff,
+    subscribe,
+    write,
+    isEmpty,
+    signOut,
+    loadStaffContext,
+    loadMyRequests,
+    saveWishOff,
+    addPaidRequest,
+    withdrawPaidRequest,
+    subscribeRequests,
+    adminSet,
+    adminUpdate,
+    adminDelete,
+  };
 })();

@@ -3207,3 +3207,268 @@ body.is-gate .bottom-nav {
   background: var(--accent);
   color: var(--accent-text);
 }
+
+/* ==== 希望休・有給（段階B） ==== */
+
+/* シフト表の「希」（スタッフの希望休。表示だけ） */
+.cell.has-wish {
+  position: relative;
+  outline: 2px dashed var(--accent);
+  outline-offset: -3px;
+}
+
+.cell__wish {
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.55rem;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.legend-chip--wish {
+  position: relative;
+  display: inline-block;
+  width: 22px;
+  height: 16px;
+  vertical-align: middle;
+}
+
+/* スタッフの申請画面 */
+.screen[data-screen="request"] {
+  max-width: 520px;
+}
+
+.req-card + .req-card {
+  margin-top: 12px;
+}
+
+.req-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.req-choice {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--store-color, var(--border));
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.req-choice.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent) inset;
+}
+
+.req-mode {
+  margin: 8px 0;
+}
+
+.req-cal {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.req-cal__head {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.req-cal__head.is-sun,
+.req-day.is-sun .req-day__num {
+  color: #d14343;
+}
+
+.req-cal__head.is-sat,
+.req-day.is-sat .req-day__num {
+  color: #2f6fd6;
+}
+
+.req-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 2px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.req-day:disabled {
+  cursor: default;
+}
+
+.req-day.is-closed {
+  background: var(--bg);
+  opacity: 0.55;
+}
+
+.req-day__num {
+  font-weight: 700;
+}
+
+.req-day__mark {
+  min-height: 1em;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.req-day.is-wish {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.req-day.is-wish .req-day__num {
+  color: var(--accent-text);
+}
+
+.req-day.is-paid--pending {
+  border: 2px dashed var(--accent);
+}
+
+.req-day.is-paid--approved {
+  border: 2px solid var(--accent);
+}
+
+.req-day.is-paid--rejected .req-day__mark {
+  color: var(--text-muted);
+}
+
+.req-day.is-picked {
+  box-shadow: 0 0 0 3px var(--accent);
+}
+
+.req-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.req-paid-form {
+  margin-top: 10px;
+}
+
+.req-paid-form__date {
+  margin: 0 0 6px;
+  font-weight: 700;
+}
+
+.req-status {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.req-status--approved {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.req-status--rejected {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+/* 管理者の「申請」タブ */
+.req-tabs {
+  margin: 8px 0 12px;
+}
+
+.req-badge {
+  display: inline-block;
+  min-width: 1.4em;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #d14343;
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.req-unsent {
+  color: var(--text-muted);
+}
+
+.req-paid-list,
+.req-limit-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.req-paid-row {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.req-paid-row__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.req-paid-row__name {
+  font-weight: 700;
+}
+
+.req-paid-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.req-date-input {
+  width: auto;
+  max-width: 11rem;
+}
+
+.req-limit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.req-limit-row__name {
+  min-width: 5em;
+  font-weight: 700;
+}
+
+.req-limit-row .field__input:not(.field__input--short) {
+  flex: 1;
+  min-width: 8rem;
+}

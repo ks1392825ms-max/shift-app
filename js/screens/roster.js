@@ -51,6 +51,12 @@
       c.cls += ' has-details';
       c.label += '（休憩・社用時間あり）';
     }
+    // スタッフが出した希望休の日（共有モードのとき）。シフトのデータは変えず、印を付けるだけ
+    const wish = K.storage.isCloud() && K.requests.adminWishDates(member.id, date.slice(0, 7)).includes(date);
+    if (wish) {
+      c.cls += ' has-wish';
+      c.label += '（希望休）';
+    }
     // 連勤・労働時間・パターン外のチェックに引っかかったマス
     const issues = view.check.cells.get(`${member.id}|${date}`);
     if (issues) {
@@ -72,7 +78,8 @@
           onclick: () => openSheet(member, date),
           title: issues ? issues.join('、') : null,
         },
-        c.text
+        c.text,
+        wish ? el('span', { class: 'cell__wish', 'aria-hidden': 'true' }, '希') : null
       )
     );
   }
@@ -633,7 +640,10 @@
         el('span', { class: 'legend-chip cell--closed' }, '定休'),
         '定休日（通常休として数えます）',
         el('span', { class: 'legend-chip legend-chip--dot' }, el('span', { class: 'legend-dot', 'aria-hidden': 'true' })),
-        '休憩・社用時間あり　日付をタップすると1日の詳細'
+        '休憩・社用時間あり',
+        K.storage.isCloud() ? el('span', { class: 'legend-chip legend-chip--wish' }, el('span', { class: 'cell__wish' }, '希')) : null,
+        K.storage.isCloud() ? 'スタッフの希望休' : null,
+        '　日付をタップすると1日の詳細'
       )
     );
   }
