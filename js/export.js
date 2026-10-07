@@ -38,7 +38,9 @@
       return { date, closed, holiday: K.holidays.holidayName(date), weekday: K.calc.weekdayOf(date), cells, counts: K.calc.dailyCounts(staff, map, date) };
     });
     const [y, m] = month.split('-').map(Number);
-    return { store, staff, rows, title: `${store.name}　${y}年${m}月　シフト表` };
+    // 確定した月は、タイトルに「（確定）」を付ける
+    const confirmed = K.storage.getPublication(storeId, month) ? '（確定）' : '';
+    return { store, staff, rows, title: `${store.name}　${y}年${m}月　シフト表${confirmed}` };
   }
 
   const LEGEND = '休＝通常休　有＝有給　社＝社用（人数に含めない）　定休＝定休日　St／As／計＝その日の通常勤務の人数';

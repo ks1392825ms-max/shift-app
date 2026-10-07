@@ -213,11 +213,14 @@
   // 定休日で何も入っていない日は、設定に合わせて通常休として数える
   function staffMonthTotals(member, map, dates, store) {
     const checks = K.storage.getChecks(store.id);
-    const totals = { work: 0, business: 0, off: 0, paid: 0, blank: 0 };
+    // other：この店舗で働く曜日ではない日（2店舗で働く人の、ほかの店舗の曜日）。未入力には数えない
+    const totals = { work: 0, business: 0, off: 0, paid: 0, blank: 0, other: 0 };
+    const workDays = member.workWeekdays || [];
     for (const date of dates) {
       const shift = map.get(`${member.id}|${date}`);
       if (shift) totals[shift.kind] += 1;
       else if (checks.closedDayAsOff && isStoreClosed(store, date)) totals.off += 1;
+      else if (workDays.length && !workDays.includes(weekdayOf(date))) totals.other += 1;
       else totals.blank += 1;
     }
     return totals;

@@ -16,6 +16,7 @@
 //   holidays: [...],          祝日の手直し（Step4〜）
 //   requests: [...],          スタッフの希望（使っていない。将来のために残している）
 //   staffAccounts: [...],     スタッフのログイン用メールと、本人の記録・所属店舗の対応（スタッフの設定から自動で作る）
+//   publications: [...],      シフト確定の記録（店舗・月ごと）
 //   settings: { checks: {...} }
 // }
 // すべての記録に id / createdAt / updatedAt / deleted を持たせる（同期のため）。
@@ -31,7 +32,7 @@
   const DEFAULTS_TIMESTAMP = '2000-01-01T00:00:00.000Z'; // 初期データの日時（同期で編集したほうが必ず優先されるように）
   const LIST_KEYS = [
     'stores', 'staff', 'shiftPatterns', 'shifts', 'businessTimes', 'businessTimeSkips',
-    'staffingRules', 'dayOverrides', 'holidays', 'requests', 'staffAccounts',
+    'staffingRules', 'dayOverrides', 'holidays', 'requests', 'staffAccounts', 'publications',
   ];
   // 職種（St／As のどちらで数えるかは U.POSITION_ROLE）と雇用形態
   const POSITIONS = ['stylist', 'junior_stylist', 'junior_assistant', 'assistant'];
@@ -875,6 +876,7 @@
   // 戻り値：反映した日数
   function applyWeeklyPatterns(storeId, month) {
     const store = findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    assertEditable(storeId, `${month}-01`);
     const [y, m] = month.split('-').map(Number);
     const days = new Date(y, m, 0).getDate();
     const members = active(data.staff).filter((s) => s.storeId === storeId && s.active && s.weeklyPatterns);
@@ -1007,10 +1009,105 @@
   }
 
   // storeId（入力している店舗）は必ず指定する。スタッフの所属店舗か、その日のシフトがすでに記録されている店舗でなければ入力できない
+  // ---- シフト確定（publications） ----
+  // 店舗・月ごとに「確定済み」を記録する（id は「店舗ID_月」）。確定を取り消すと status を draft に戻す（記録は消さない）。
+  // 確定済みの月は、「確定を取り消す」まで、シフト・休憩・日付指定の社用時間を変えられない。
+  function publicationId(storeId, month) {
+    return `${storeId}_${month}`;
+  }
+
+  function getPublication(storeId, month) {
+    const p = data.publications.find((x) => x.id === publicationId(storeId, month) && !x.deleted && x.status === 'confirmed');
+    return p ? copy(p) : null;
+  }
+
+  function assertEditable(storeId, date) {
+    if (!storeId || !date || !getPublication(storeId, date.slice(0, 7))) return;
+    const store = data.stores.find((s) => s.id === storeId);
+    throw new Error(
+      `${store ? store.name : 'この店舗'}の${Number(date.slice(5, 7))}月のシフトは確定済みです。変更するときは、シフト表の「確定を取り消す」を押してください。`
+    );
+  }
+
+  function confirmMonth(storeId, month, by) {
+    findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    if (!/^\d{4}-\d{2}$/.test(month)) throw new Error('月が正しくありません。');
+    const id = publicationId(storeId, month);
+    const now = U.nowIso();
+    const fields = { status: 'confirmed', confirmedAt: now, confirmedBy: String(by || ''), deleted: false, updatedAt: now };
+    commit((d) => {
+      const existing = d.publications.find((p) => p.id === id);
+      if (existing) Object.assign(existing, fields);
+      else d.publications.push({ id, storeId, month, ...fields, createdAt: now });
+    });
+  }
+
+  function unconfirmMonth(storeId, month) {
+    const id = publicationId(storeId, month);
+    if (!getPublication(storeId, month)) return;
+    commit((d) => {
+      Object.assign(d.publications.find((p) => p.id === id), { status: 'draft', updatedAt: U.nowIso() });
+    });
+  }
+
+  // ---- AIシフト作成の結果を入れる ----
+  // assignments：[{ staffId, date, kind, patternId }]。入力済みのマスは変えない。
+  // 自動で入れた記録には autoRunId を付ける（手で直すと外れる）。「自動作成を取り消す」は autoRunId が付いたものだけを消す。
+  function applyAutoShifts(storeId, month, assignments) {
+    findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    assertEditable(storeId, `${month}-01`);
+    const runId = `auto_${U.uuid()}`;
+    const plans = [];
+    for (const a of assignments) {
+      if (!U.isValidDate(a.date) || !a.date.startsWith(`${month}-`)) continue;
+      if (data.shifts.some((x) => x.id === shiftId(a.staffId, a.date) && !x.deleted)) continue; // 入力済みは変えない
+      const member = findActive(data.staff, a.staffId, 'スタッフが見つかりませんでした。');
+      if (member.storeId !== storeId) throw new Error(`${member.name}さんは、この店舗の所属ではありません。`);
+      if (!SHIFT_KINDS.includes(a.kind)) throw new Error('シフトの種類が正しくありません。');
+      if (TIMED_KINDS.includes(a.kind) && !member.patternIds.includes(a.patternId)) {
+        throw new Error(`${member.name}さんに登録されていない勤務パターンです。`);
+      }
+      plans.push(a);
+    }
+    if (!plans.length) return { runId: null, count: 0 };
+    commit((d) => {
+      const now = U.nowIso();
+      for (const a of plans) {
+        const id = shiftId(a.staffId, a.date);
+        const fields = { kind: a.kind, patternId: TIMED_KINDS.includes(a.kind) ? a.patternId : null, storeId, breaks: [], autoRunId: runId };
+        const existing = d.shifts.find((x) => x.id === id);
+        if (existing) Object.assign(existing, fields, { deleted: false, updatedAt: now });
+        else d.shifts.push({ id, staffId: a.staffId, date: a.date, ...fields, createdAt: now, updatedAt: now, deleted: false });
+      }
+    });
+    return { runId, count: plans.length };
+  }
+
+  // 自動で入れて、まだ手で直していないシフトの数
+  function autoShiftCount(storeId, month) {
+    return active(data.shifts).filter((s) => s.autoRunId && s.date.startsWith(`${month}-`) && shiftStoreId(s) === storeId).length;
+  }
+
+  function undoAutoShifts(storeId, month) {
+    assertEditable(storeId, `${month}-01`);
+    const ids = active(data.shifts)
+      .filter((s) => s.autoRunId && s.date.startsWith(`${month}-`) && shiftStoreId(s) === storeId)
+      .map((s) => s.id);
+    if (!ids.length) return 0;
+    commit((d) => {
+      const now = U.nowIso();
+      for (const s of d.shifts) {
+        if (ids.includes(s.id)) Object.assign(s, { deleted: true, updatedAt: now });
+      }
+    });
+    return ids.length;
+  }
+
   function setShift(staffId, date, { kind, patternId, storeId }) {
     const member = findActive(data.staff, staffId, 'スタッフが見つかりませんでした。');
     if (!U.isValidDate(date)) throw new Error('日付が正しくありません。');
     const store = findActive(data.stores, storeId, '店舗を選んでください。');
+    assertEditable(store.id, date);
     const existingShift = data.shifts.find((x) => x.id === shiftId(staffId, date) && !x.deleted);
     if (member.storeId !== store.id && !(existingShift && shiftStoreId(existingShift) === store.id)) {
       const home = data.stores.find((s) => s.id === member.storeId);
@@ -1039,6 +1136,8 @@
         const p = data.shiftPatterns.find((x) => x.id === patternId);
         fields.breaks = existing.breaks.filter((b) => b.start >= p.start && b.end <= p.end);
       }
+      // 手で直したシフトは、自動作成の印（autoRunId）を外す（「自動作成を取り消す」で消えないように）
+      if (existing) delete existing.autoRunId;
       if (existing) Object.assign(existing, fields, { deleted: false, updatedAt: now });
       else d.shifts.push({ id, staffId, date, ...fields, createdAt: now, updatedAt: now, deleted: false });
     });
@@ -1070,6 +1169,7 @@
   // その日の休憩をまとめて保存する（breaks：[{ start, end }]。空の配列で休憩なし）
   function setShiftBreaks(staffId, date, breaks) {
     const { range } = workShiftOf(staffId, date, '休憩');
+    assertEditable(shiftStoreId(data.shifts.find((s) => s.id === shiftId(staffId, date))), date);
     const clean = breaks.map((b) => checkRange(b, '休憩', range)).sort((a, b) => a.start.localeCompare(b.start));
     for (let i = 1; i < clean.length; i++) {
       if (overlaps(clean[i - 1], clean[i])) throw new Error('休憩の時間が重なっています。');
@@ -1115,6 +1215,7 @@
     if (fields.type === 'date') {
       if (!U.isValidDate(fields.date)) throw new Error('日付が正しくありません。');
       const { range } = workShiftOf(member.id, fields.date, '日付を指定した社用時間');
+      assertEditable(member.storeId, fields.date);
       Object.assign(clean, { date: fields.date, ...checkRange(fields, '社用時間', range) });
       const sameDay = active(data.businessTimes).filter(
         (b) => b.id !== exceptId && b.type === 'date' && b.staffId === member.id && b.date === fields.date
@@ -1151,7 +1252,11 @@
   }
 
   function deleteBusinessTime(id) {
-    findActive(data.businessTimes, id, '社用時間が見つかりませんでした。');
+    const current = findActive(data.businessTimes, id, '社用時間が見つかりませんでした。');
+    if (current.type === 'date') {
+      const member = data.staff.find((m) => m.id === current.staffId);
+      assertEditable(member ? member.storeId : null, current.date);
+    }
     commit((d) => {
       const b = d.businessTimes.find((x) => x.id === id);
       b.deleted = true;
@@ -1185,6 +1290,7 @@
   function clearShift(staffId, date) {
     const id = shiftId(staffId, date);
     if (!data.shifts.some((s) => s.id === id && !s.deleted)) return;
+    assertEditable(shiftStoreId(data.shifts.find((s) => s.id === id)), date);
     commit((d) => {
       const s = d.shifts.find((x) => x.id === id);
       s.deleted = true;
@@ -1578,6 +1684,12 @@
     normalizeStoreName,
     uploadToCloud,
     setSamePerson,
+    getPublication,
+    confirmMonth,
+    unconfirmMonth,
+    applyAutoShifts,
+    autoShiftCount,
+    undoAutoShifts,
     getSamePersonStaff,
     startFreshCloud,
   };

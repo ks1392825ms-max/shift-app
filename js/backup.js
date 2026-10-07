@@ -71,6 +71,8 @@
       ((r.mode === 'type' && ['weekday', 'holiday'].includes(r.dayType)) || (r.mode === 'custom' && Array.isArray(r.bands) && r.bands.every(isBand))),
     holidays: (r) => U.isValidDate(r.date) && (r.action === 'remove' || (r.action === 'add' && isStr(r.name, 12))),
     requests: () => true, // 将来の機能。形だけ引き継ぐ
+    // シフト確定の記録（店舗・月ごと）
+    publications: (r) => isId(r.storeId) && /^\d{4}-\d{2}$/.test(r.month) && ['confirmed', 'draft'].includes(r.status),
     // スタッフのログイン用メール（スタッフの設定から作る対応表）
     staffAccounts: (r) =>
       isStr(r.email, 254) && r.id === r.email && Array.isArray(r.staffIds) && r.staffIds.every(isId) &&
@@ -81,6 +83,10 @@
   const POSITIONS = ['stylist', 'junior_stylist', 'junior_assistant', 'assistant'];
   const isWeekdays = (v) => Array.isArray(v) && v.every((w) => isInt(w, 0, 6));
   function cleanAddedFields(data) {
+    // 自動作成の印（段階C）
+    for (const s of data.shifts) {
+      if (s.autoRunId !== undefined && !isId(s.autoRunId)) delete s.autoRunId;
+    }
     for (const s of data.stores) {
       const ok =
         Array.isArray(s.closedNthWeekdays) &&

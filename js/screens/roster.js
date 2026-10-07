@@ -191,7 +191,7 @@
     view.check = K.rules.checkMonth(view.store.id, view.month);
     view.table.querySelector('tbody').replaceWith(el('tbody', null, view.dates.map(dateRow)));
     view.table.querySelector('tfoot').replaceWith(footer());
-    const oldButton = document.querySelector('.check-btn:not(.export-btn):not(.weekly-btn)');
+    const oldButton = document.querySelector('.check-btn:not(.export-btn):not(.weekly-btn):not(.tool-btn)');
     if (oldButton) oldButton.replaceWith(checkButton());
   }
 
@@ -216,7 +216,7 @@
     sheet = null;
     if (!returnFocus || !view) return;
     if (kind === 'check' || kind === 'export') {
-      const btn = document.querySelector(kind === 'check' ? '.check-btn:not(.export-btn):not(.weekly-btn)' : '.export-btn');
+      const btn = document.querySelector(kind === 'check' ? '.check-btn:not(.export-btn):not(.weekly-btn):not(.tool-btn)' : '.export-btn');
       if (btn) btn.focus({ preventScroll: true });
     } else {
       focusCell(staffId, date);
@@ -265,6 +265,11 @@
 
   function openSheet(member, date) {
     closeSheet(false);
+    // 確定済みの月は、確定を取り消すまで入力できない
+    if (K.storage.getPublication(view.store.id, view.month)) {
+      K.app.toast('確定済みです。変更するときは「確定を取り消す」を押してください');
+      return;
+    }
     const current = view.map.get(`${member.id}|${date}`) || null;
     // その曜日のいつもの勤務（スタッフの設定。勤務パターンID または "off"）
     const usual = (member.weeklyPatterns || {})[String(K.calc.weekdayOf(date))] || null;
@@ -526,9 +531,133 @@
     panel.querySelector('.sheet__close').focus({ preventScroll: true });
   }
 
+  // ---- AIシフト作成 ----
+
+  function whoAmI() {
+    const user = K.app.cloudUser && K.app.cloudUser();
+    return user ? user.email : 'この端末';
+  }
+
+  function openAutoSheet() {
+    closeSheet(false);
+    const monthLabel = `${Number(view.month.slice(0, 4))}年${Number(view.month.slice(5))}月`;
+    let result;
+    try {
+      result = K.autoshift.plan(view.store.id, view.month);
+    } catch (err) {
+      K.app.toast(err.message);
+      return;
+    }
+    const works = result.assignments.filter((a) => a.kind === 'work').length;
+    const offs = result.assignments.length - works;
+
+    function doApply() {
+      try {
+        const { count } = K.storage.applyAutoShifts(view.store.id, view.month, result.assignments);
+        closeSheet(false);
+        K.app.rerender();
+        K.app.toast(`${count}マスを入れました。シフト表と「チェック」で確認してください`);
+      } catch (err) {
+        K.app.toast(err.message);
+      }
+    }
+
+    const panel = el(
+      'div',
+      { class: 'sheet sheet--wide', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sheet-title' },
+      sheetHead('AIシフト作成', `${view.store.name}・${monthLabel}`),
+      el(
+        'p',
+        { class: 'sheet__note' },
+        '空いているマスだけを埋めます（入力済みのマスは変えません）。承認済みの有給・希望休・固定休は必ず休みにし、週休・月の休日数の目安・連勤の上限・必要人数を見て作ります。'
+      ),
+      result.assignments.length
+        ? el('p', { class: 'auto-summary' }, `勤務 ${works}マス・休み ${offs}マスを入れます。`)
+        : el('p', { class: 'auto-summary' }, '入れられる空きマスはありませんでした。'),
+      result.summary.length
+        ? el(
+            'div',
+            { class: 'table-wrap' },
+            el(
+              'table',
+              { class: 'data-table auto-table' },
+              el('thead', null, el('tr', null, el('th', { scope: 'col', class: 'is-left' }, 'スタッフ'), el('th', { scope: 'col' }, '勤務'), el('th', { scope: 'col' }, '休み'))),
+              el(
+                'tbody',
+                null,
+                result.summary.map((s) => el('tr', null, el('th', { scope: 'row', class: 'is-left' }, s.name), el('td', null, `${s.work}`), el('td', null, `${s.off}`)))
+              )
+            )
+          )
+        : null,
+      result.notes.length ? el('ul', { class: 'auto-notes' }, result.notes.map((n) => el('li', null, n))) : null,
+      el(
+        'div',
+        { class: 'actions' },
+        el('button', { type: 'button', class: 'btn btn--primary', disabled: !result.assignments.length, onclick: doApply }, 'この内容で入れる'),
+        el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => closeSheet() }, 'やめる')
+      ),
+      el('p', { class: 'sheet__note' }, '入れたあとも、マスを押して手で直せます。「自動作成を取り消す」で、自動で入れて手で直していないマスだけを消せます。')
+    );
+    showSheet(panel, { kind: 'auto' });
+    panel.querySelector('.sheet__close').focus({ preventScroll: true });
+  }
+
+  function undoAuto() {
+    const count = K.storage.autoShiftCount(view.store.id, view.month);
+    if (!window.confirm(`自動で入れて、まだ手で直していない ${count}マスを消して、未入力に戻します。よろしいですか？`)) return;
+    try {
+      const n = K.storage.undoAutoShifts(view.store.id, view.month);
+      K.app.rerender();
+      K.app.toast(`${n}マスを未入力に戻しました`);
+    } catch (err) {
+      K.app.toast(err.message);
+    }
+  }
+
+  // ---- シフト確定 ----
+
+  function confirmShift() {
+    const monthLabel = `${Number(view.month.slice(5))}月`;
+    const blank = view.check.blank;
+    const note = view.check.total || blank ? `\n（注意：チェックの注意 ${view.check.total}件・未入力のスタッフ ${blank}人があります）` : '';
+    if (!window.confirm(`${view.store.name}の${monthLabel}のシフトを確定しますか？\n確定すると、「確定を取り消す」を押すまで変更できません。${note}`)) return;
+    try {
+      K.storage.confirmMonth(view.store.id, view.month, whoAmI());
+      K.app.rerender();
+      K.app.toast('シフトを確定しました');
+    } catch (err) {
+      K.app.toast(err.message);
+    }
+  }
+
+  function unconfirmShift() {
+    if (!window.confirm('確定を取り消して、もう一度変更できるようにしますか？')) return;
+    try {
+      K.storage.unconfirmMonth(view.store.id, view.month);
+      K.app.rerender();
+      K.app.toast('確定を取り消しました');
+    } catch (err) {
+      K.app.toast(err.message);
+    }
+  }
+
+  function publishBanner(pub) {
+    const d = new Date(pub.confirmedAt);
+    const when = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return el(
+      'div',
+      { class: 'publish-banner', role: 'status' },
+      el('span', { class: 'publish-banner__text' }, `✓ 確定済み（${when}・${pub.confirmedBy || ''}）`),
+      el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: unconfirmShift }, '確定を取り消す')
+    );
+  }
+
   // ---- 画面全体 ----
 
   function toolbar(month, store) {
+    const pub = K.storage.getPublication(store.id, month);
+    const autoCount = K.storage.autoShiftCount(store.id, month);
     return el(
       'div',
       { class: 'roster-toolbar' },
@@ -546,7 +675,10 @@
         { class: 'roster-toolbar__actions' },
         checkButton(),
         el('button', { type: 'button', class: 'check-btn export-btn', onclick: openExportSheet }, '出力'),
-        el('button', { type: 'button', class: 'check-btn weekly-btn', onclick: applyWeekly }, '曜日の設定を反映')
+        pub ? null : el('button', { type: 'button', class: 'check-btn weekly-btn', onclick: applyWeekly }, '曜日の設定を反映'),
+        pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn ai-btn', onclick: openAutoSheet }, 'AIで作成'),
+        !pub && autoCount ? el('button', { type: 'button', class: 'check-btn tool-btn undo-auto-btn', onclick: undoAuto }, `自動作成を取り消す（${autoCount}）`) : null,
+        pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn confirm-btn', onclick: confirmShift }, 'シフトを確定')
       )
     );
   }
@@ -575,6 +707,8 @@
     };
 
     container.append(toolbar(month, store));
+    const pub = K.storage.getPublication(storeId, month);
+    if (pub) container.append(publishBanner(pub));
 
     if (view.staff.length === 0) {
       container.append(

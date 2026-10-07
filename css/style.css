@@ -3472,3 +3472,43 @@ body.is-gate .bottom-nav {
   flex: 1;
   min-width: 8rem;
 }
+
+/* ==== AIシフト作成・シフト確定（段階C） ==== */
+
+.publish-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 10px 14px;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.publish-banner__text {
+  font-weight: 800;
+}
+
+.check-btn.confirm-btn {
+  border-color: var(--accent);
+  font-weight: 800;
+}
+
+.auto-summary {
+  margin: 10px 0;
+  font-weight: 800;
+}
+
+.auto-table {
+  margin-bottom: 10px;
+}
+
+.auto-notes {
+  margin: 0 0 10px;
+  padding-left: 1.2em;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
