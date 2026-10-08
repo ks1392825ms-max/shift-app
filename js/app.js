@@ -353,7 +353,37 @@
   function registerServiceWorker() {
     const secure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
     if (!secure || !('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Service Worker の登録に失敗しました', err));
+    // 前から仕組みが動いていたか（初めて開いたときは、お知らせを出さない）
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    navigator.serviceWorker
+      .register('sw.js')
+      .then((reg) => {
+        // 新しい版（sw.js が変わった）が届いたら、お知らせを出す
+        reg.addEventListener('updatefound', () => {
+          const worker = reg.installing;
+          if (!worker) return;
+          worker.addEventListener('statechange', () => {
+            if (worker.state === 'activated' && hadController) showUpdateBanner();
+          });
+        });
+        // 画面に戻ってきたときにも、新しい版があるか確かめる
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
+        });
+      })
+      .catch((err) => console.warn('Service Worker の登録に失敗しました', err));
+  }
+
+  // 「新しい版があります」のお知らせ（押すと読み込み直す）
+  function showUpdateBanner() {
+    if (document.getElementById('update-banner')) return;
+    const banner = U.el(
+      'div',
+      { id: 'update-banner', class: 'update-banner', role: 'status' },
+      U.el('span', null, '新しい版があります'),
+      U.el('button', { type: 'button', class: 'btn btn--primary btn--small', onclick: () => location.reload() }, '更新する')
+    );
+    document.body.append(banner);
   }
 
   K.app = {
@@ -368,6 +398,7 @@
     cloudUser: () => cloud.user,
     cloudBackend: () => cloud.backend,
     startCloud, // テスト用（偽の保存場所で共有モードを動かす）
+    showUpdateBanner, // テスト用
   };
 
   document.addEventListener('DOMContentLoaded', start);

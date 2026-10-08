@@ -5,7 +5,7 @@
 // シフトや設定のデータはここでは扱わない（端末だけのモードは localStorage、共有モードは Firebase が扱う）。
 // 同じ場所（このアプリ）のファイルだけを扱い、Firebase との通信には関わらない。
 
-const CACHE = 'shift-app-v4';
+const CACHE = 'shift-app-v5';
 
 // 最初に保存しておくファイル（アプリのファイルを増やしたら、ここにも追加する）
 const APP_FILES = [
@@ -30,6 +30,7 @@ const APP_FILES = [
   'js/rules.js',
   'js/requests.js',
   'js/autoshift.js',
+  'js/published.js',
   'js/export.js',
   'js/screens/roster.js',
   'js/screens/day.js',
@@ -74,8 +75,13 @@ self.addEventListener('fetch', (event) => {
   // 同じ場所（このアプリ）のファイルを読むときだけ扱う
   if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) return;
 
+  // ブラウザが覚えている古いファイルを使わず、毎回 GitHub に新しい版があるか確かめる（変わっていなければ中身は受け取り直さない）
+  // ページそのもの（navigate）は、そのままでは cache の指定ができないので、URL で取り直す
+  const fresh =
+    request.mode === 'navigate' ? fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' }) : fetch(request, { cache: 'no-cache' });
+
   event.respondWith(
-    fetch(request)
+    fresh
       .then((response) => {
         if (response.ok) {
           const copy = response.clone();

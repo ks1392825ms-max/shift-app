@@ -25,6 +25,9 @@
       paidDate: null, // 有給希望で選んだ日
       message: null, // { ok, text }
       busy: false,
+      tab: 'requests', // requests（休み希望）/ roster（確定シフト）
+      pub: null, // 確定シフト：{ staffId, loading, rosters, myPaid, month, error }
+      onlyMine: false,
     };
     load();
   }
@@ -54,6 +57,8 @@
     view.storeId = member.storeId;
     view.staffId = member.id;
     view.data = null;
+    view.pub = null;
+    if (view.tab === 'roster') loadPublished();
     view.paidDate = null;
     view.message = null;
     if (rerender) K.app.rerender();
@@ -238,6 +243,176 @@
     }
   }
 
+  // ---- 確定シフト（所属店舗の今月・来月の確定分） ----
+
+  function visibleMonths() {
+    const thisMonth = R().todayJst().slice(0, 7);
+    return [thisMonth, R().nextMonthOf(thisMonth)];
+  }
+
+  async function loadPublished() {
+    const staffId = view.staffId;
+    const storeId = view.storeId;
+    view.pub = { staffId, loading: true, rosters: [], myPaid: new Set(), month: null, error: null };
+    K.app.rerender();
+    try {
+      const months = visibleMonths();
+      const rosters = await backend().loadPublishedRosters(storeId, months);
+      // 本人の承認済みの有給（写しでは「休」になっているので、本人の画面だけ「有」にする）
+      const mine = await Promise.all(months.map((m) => backend().loadMyRequests(staffId, m)));
+      const myPaid = new Set(mine.flatMap((d) => d.paid.filter((r) => r.status === 'approved').map((r) => r.date)));
+      if (!view.pub || view.pub.staffId !== staffId) return; // 途中で店舗を変えた
+      const published = months.filter((m) => rosters.some((r) => r.month === m));
+      view.pub = { staffId, loading: false, rosters, myPaid, month: published[0] || months[0], error: null };
+    } catch (err) {
+      if (view.pub) view.pub = { ...view.pub, loading: false, error: `確定シフトを読み込めませんでした（${err.message}）` };
+    }
+    K.app.rerender();
+  }
+
+  function cellText(cell, mine, date) {
+    if (!cell) return '';
+    if (cell.k === 'work') return cell.t;
+    if (cell.k === 'business') return `社用 ${cell.t}`;
+    if (cell.k === 'closed') return '定休';
+    if (cell.k === 'off') return mine && view.pub.myPaid.has(date) ? '有' : '休';
+    return '';
+  }
+
+  function rosterCard(member) {
+    const p = view.pub;
+    if (!p || p.loading) return el('section', { class: 'card req-card' }, el('p', { class: 'hint' }, '読み込んでいます…'));
+    if (p.error) return el('section', { class: 'card req-card' }, el('p', { class: 'form-error' }, p.error));
+    const months = visibleMonths();
+    const roster = p.rosters.find((r) => r.month === p.month);
+    const monthButtons = el(
+      'div',
+      { class: 'segment segment--compact req-mode', role: 'group', 'aria-label': '表示する月' },
+      months.map((m) =>
+        el(
+          'button',
+          {
+            type: 'button',
+            class: `segment__btn${p.month === m ? ' is-selected' : ''}`,
+            'aria-pressed': String(p.month === m),
+            onclick: () => {
+              view.pub.month = m;
+              K.app.rerender();
+            },
+          },
+          R().monthLabel(m)
+        )
+      )
+    );
+    const parts = [el('h2', { class: 'card__title' }, '確定シフト'), monthButtons];
+    if (!roster) {
+      parts.push(el('p', { class: 'empty-row' }, `${R().monthLabel(p.month)}のシフトは、まだ確定していません。`));
+      return el('section', { class: 'card req-card' }, parts);
+    }
+    const d = new Date(roster.confirmedAt);
+    parts.push(el('p', { class: 'hint hint--left' }, `${roster.storeName}・${d.getMonth() + 1}/${d.getDate()} に確定`));
+    parts.push(
+      el(
+        'label',
+        { class: 'check-line' },
+        el('input', {
+          type: 'checkbox',
+          id: 'only-mine',
+          checked: view.onlyMine,
+          onchange: (event) => {
+            view.onlyMine = event.currentTarget.checked;
+            K.app.rerender();
+          },
+        }),
+        '自分のシフトだけ'
+      )
+    );
+    const label = (day) => `${Number(day.date.slice(5, 7))}/${Number(day.date.slice(8, 10))}（${U.WEEKDAYS[K.calc.weekdayOf(day.date)]}）`;
+    const dayClass = (day) => {
+      const w = K.calc.weekdayOf(day.date);
+      return w === 0 || day.holiday ? 'is-sun' : w === 6 ? 'is-sat' : '';
+    };
+    if (view.onlyMine) {
+      parts.push(
+        el(
+          'ul',
+          { class: 'detail-list pub-mine' },
+          roster.days.map((day) =>
+            el(
+              'li',
+              { class: 'detail-item' },
+              el('span', { class: `detail-item__text ${dayClass(day)}` }, label(day)),
+              el('span', { class: 'pub-mine__value' }, cellText(day.cells[member.id], true, day.date) || '—')
+            )
+          )
+        )
+      );
+    } else {
+      parts.push(
+        el(
+          'div',
+          { class: 'table-wrap pub-wrap' },
+          el(
+            'table',
+            { class: 'data-table pub-table' },
+            el(
+              'thead',
+              null,
+              el(
+                'tr',
+                null,
+                el('th', { scope: 'col', class: 'is-left' }, '日付'),
+                roster.staff.map((s) => el('th', { scope: 'col', class: s.id === member.id ? 'is-me' : null }, s.name, el('span', { class: 'pub-role' }, s.title ? `${s.role}・${s.title}` : s.role)))
+              )
+            ),
+            el(
+              'tbody',
+              null,
+              roster.days.map((day) =>
+                el(
+                  'tr',
+                  { class: day.closed ? 'is-closed' : null },
+                  el('th', { scope: 'row', class: `is-left ${dayClass(day)}` }, label(day)),
+                  roster.staff.map((s) => el('td', { class: s.id === member.id ? 'is-me' : null }, cellText(day.cells[s.id], s.id === member.id, day.date)))
+                )
+              )
+            )
+          )
+        )
+      );
+    }
+    parts.push(el('p', { class: 'hint hint--left' }, 'ほかの人の有給は「休」と表示されます。シフトが変わったときは、管理者が確定し直すと更新されます。'));
+    return el('section', { class: 'card req-card' }, parts);
+  }
+
+  function tabSwitch() {
+    return el(
+      'div',
+      { class: 'segment req-tabs', role: 'tablist', 'aria-label': '画面の切り替え' },
+      [
+        ['requests', '休み希望'],
+        ['roster', '確定シフト'],
+      ].map(([key, text]) =>
+        el(
+          'button',
+          {
+            type: 'button',
+            role: 'tab',
+            class: `segment__btn${view.tab === key ? ' is-selected' : ''}`,
+            'aria-selected': String(view.tab === key),
+            onclick: () => {
+              view.tab = key;
+              view.message = null;
+              if (key === 'roster' && (!view.pub || view.pub.staffId !== view.staffId)) loadPublished();
+              else K.app.rerender();
+            },
+          },
+          text
+        )
+      )
+    );
+  }
+
   function shortDate(date) {
     return `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}（${U.WEEKDAYS[K.calc.weekdayOf(date)]}）`;
   }
@@ -353,8 +528,9 @@
     const parts = [head, storePicker()];
     if (view.staffId) {
       const { member, store } = current();
-      parts.push(namePicker(member));
-      if (view.data) parts.push(requestCard(member, store));
+      parts.push(namePicker(member), tabSwitch());
+      if (view.tab === 'roster') parts.push(rosterCard(member));
+      else if (view.data) parts.push(requestCard(member, store));
       else parts.push(view.message ? el('p', { class: 'form-error' }, view.message.text) : el('p', { class: 'hint' }, '読み込んでいます…'));
     } else {
       parts.push(el('p', { class: 'hint' }, '店舗を選ぶと、申請の画面が開きます。'));

@@ -1,4 +1,4 @@
-// Firestore のルール（段階A：管理者は全店舗、スタッフは本人の情報と申請だけ）
+// Firestore のルール（管理者は全店舗。スタッフは本人の情報・申請と、所属店舗の確定シフトだけ）
 //
 // 使い方：Firebase の管理画面 → Firestore Database → 「ルール」タブに、この内容をそのまま貼り付けて「公開」。
 //
@@ -16,7 +16,9 @@
 //   ・スタッフ：自分の staffAccounts・自分のスタッフ記録・所属店舗・希望休の設定を読める。
 //       希望休（wishOffs）：自分の分を、日本時間の毎月25日〜月末に、翌月分だけ、上限の日数まで保存できる。
 //       有給希望（paidRequests）：自分の分を、同じ受付期間に「申請中」で出せる。取り下げは「申請中」のものだけ。
-//       承認・却下・日付の変更は管理者だけ。シフトなど、ほかのデータは読めない。
+//       承認・却下・日付の変更は管理者だけ。
+//       確定シフトの公開用の写し（publishedRosters）：自分の所属店舗のものだけ読める。
+//       シフトなど、ほかのデータは読めない。
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -143,6 +145,12 @@ service cloud.firestore {
       );
       allow update: if isAdmin();
       allow delete: if isAdmin() || (ownsStaff(resource.data.staffId) && resource.data.status == 'pending');
+    }
+
+    // 確定したシフトの公開用の写し（表示に必要なものだけ）：スタッフは自分の所属店舗のものだけ読める
+    match /publishedRosters/{id} {
+      allow read: if isAdmin() || inMyStore(resource.data.storeId);
+      allow write: if isAdmin();
     }
 
     // そのほかのデータ（シフト・勤務パターン・必要人数・シフト確定など）：管理者だけ

@@ -622,24 +622,38 @@
     const blank = view.check.blank;
     const note = view.check.total || blank ? `\n（注意：チェックの注意 ${view.check.total}件・未入力のスタッフ ${blank}人があります）` : '';
     if (!window.confirm(`${view.store.name}の${monthLabel}のシフトを確定しますか？\n確定すると、「確定を取り消す」を押すまで変更できません。${note}`)) return;
+    const { id: storeId } = view.store;
+    const month = view.month;
     try {
-      K.storage.confirmMonth(view.store.id, view.month, whoAmI());
+      K.storage.confirmMonth(storeId, month, whoAmI());
       K.app.rerender();
-      K.app.toast('シフトを確定しました');
     } catch (err) {
       K.app.toast(err.message);
+      return;
     }
+    // 共有モードのときは、スタッフが見る公開用の写しも作る
+    K.published
+      .publish(storeId, month)
+      .then((done) => K.app.toast(done ? 'シフトを確定しました（スタッフの画面にも表示されます）' : 'シフトを確定しました'))
+      .catch((err) => K.app.toast(`確定しました。ただしスタッフへの公開に失敗しました（${err.message}）。もう一度「確定を取り消す」→「シフトを確定」を試してください`));
   }
 
   function unconfirmShift() {
     if (!window.confirm('確定を取り消して、もう一度変更できるようにしますか？')) return;
+    const { id: storeId } = view.store;
+    const month = view.month;
     try {
-      K.storage.unconfirmMonth(view.store.id, view.month);
+      K.storage.unconfirmMonth(storeId, month);
       K.app.rerender();
-      K.app.toast('確定を取り消しました');
     } catch (err) {
       K.app.toast(err.message);
+      return;
     }
+    // スタッフの画面からも消す
+    K.published
+      .unpublish(storeId, month)
+      .then(() => K.app.toast('確定を取り消しました'))
+      .catch((err) => K.app.toast(`確定を取り消しました。ただしスタッフの画面から消せませんでした（${err.message}）`));
   }
 
   function publishBanner(pub) {

@@ -12,6 +12,7 @@
 //   checkStaff(email)           スタッフとして登録されているか（staffAccounts に本人のメールがあるか）
 //   loadStaffContext / loadMyRequests / saveWishOff / addPaidRequest / withdrawPaidRequest   スタッフ本人の申請
 //   subscribeRequests / adminSet / adminUpdate / adminDelete                                 管理者の申請の受け取り・変更
+//   publishRoster / unpublishRoster / loadPublishedRosters                                確定シフトの公開用の写し
 //   subscribe(onData, onError)  共有データを受け取り続ける（変わるたびに onData）。戻り値で止められる
 //   write(changes)              記録をまとめて保存する：[{ collection, id, data }]
 //   isEmpty()                   共有の保存場所が空か（店舗が1つもないか）
@@ -319,6 +320,27 @@
     await fsMod.deleteDoc(fsMod.doc(db, col, id));
   }
 
+  // ---- 確定シフトの公開用の写し（publishedRosters） ----
+
+  async function publishRoster(snapshot) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, 'publishedRosters', snapshot.id), JSON.parse(JSON.stringify(snapshot)));
+  }
+
+  async function unpublishRoster(id) {
+    const { fsMod, db } = await load();
+    await fsMod.deleteDoc(fsMod.doc(db, 'publishedRosters', id));
+  }
+
+  // スタッフ：所属店舗の写しを、指定した月の分だけ読む（ルールで、ほかの店舗は読めない）
+  async function loadPublishedRosters(storeId, months) {
+    const { fsMod, db } = await load();
+    const snap = await fsMod.getDocs(
+      fsMod.query(fsMod.collection(db, 'publishedRosters'), fsMod.where('storeId', '==', storeId), fsMod.where('month', 'in', months))
+    );
+    return snap.docs.map((d) => d.data());
+  }
+
   async function isEmpty() {
     const { fsMod, db } = await load();
     const snap = await fsMod.getDocs(fsMod.query(fsMod.collection(db, 'stores'), fsMod.limit(1)));
@@ -352,5 +374,8 @@
     adminSet,
     adminUpdate,
     adminDelete,
+    publishRoster,
+    unpublishRoster,
+    loadPublishedRosters,
   };
 })();

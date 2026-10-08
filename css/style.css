@@ -3512,3 +3512,87 @@ body.is-gate .bottom-nav {
   color: var(--text-muted);
   font-size: 0.82rem;
 }
+
+/* ==== 確定シフトの公開・新しい版のお知らせ（段階D） ==== */
+
+.req-tabs {
+  margin: 12px 0;
+}
+
+.pub-wrap {
+  max-height: 70vh;
+}
+
+.pub-table th,
+.pub-table td {
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+
+.pub-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+}
+
+.pub-table tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.pub-table .is-me {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  font-weight: 700;
+}
+
+.pub-table tr.is-closed td,
+.pub-table tr.is-closed th {
+  color: var(--text-muted);
+}
+
+.pub-table .is-sun {
+  color: #d14343;
+}
+
+.pub-table .is-sat {
+  color: #2f6fd6;
+}
+
+.pub-role {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.pub-mine .is-sun {
+  color: #d14343;
+}
+
+.pub-mine .is-sat {
+  color: #2f6fd6;
+}
+
+.pub-mine__value {
+  font-weight: 700;
+}
+
+.update-banner {
+  position: fixed;
+  left: 50%;
+  bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+  font-weight: 700;
+  transform: translateX(-50%);
+}
