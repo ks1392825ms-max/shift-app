@@ -667,6 +667,197 @@
     );
   }
 
+  // ---- スタッフ列の並べ替え（見出しをドラッグ。スマートフォンは長押ししてから） ----
+  // 並び順はシフト表の表示だけに使う（店舗ごとに保存。スタッフ・シフトの記録は変えない）
+
+  const LONG_PRESS_MS = 400;
+  const EDGE = 48; // 表の端からこの幅に来たら、表を横にスクロールする
+  let drag = null;
+
+  function staffHeads() {
+    return view && view.table ? [...view.table.querySelectorAll('thead th.roster__staff')] : [];
+  }
+
+  // index 番目のスタッフの列のマス（見出し・各日・下の合計）。どの行も「日付・スタッフ…・人数」の順なので、左から index + 1 番目
+  function columnCells(index) {
+    return view && view.table && index >= 0 ? [...view.table.rows].map((tr) => tr.cells[index + 1]).filter(Boolean) : [];
+  }
+
+  // マウス・ペン：押したまま少し動かしたら始める（指のときは onHeadTouchStart）
+  function onHeadPointerDown(e) {
+    if (e.pointerType === 'touch' || e.button !== 0) return;
+    beginDrag(e.currentTarget, e.clientX, e.clientY, false);
+  }
+
+  // タッチ：動かさずに長押ししたら始める（すぐ動かしたときは、今までどおり表のスクロール）
+  function onHeadTouchStart(e) {
+    if (e.touches.length !== 1) return;
+    beginDrag(e.currentTarget, e.touches[0].clientX, e.touches[0].clientY, true);
+  }
+
+  function beginDrag(th, x, y, touch) {
+    cancelDrag();
+    drag = { th, id: th.dataset.staff, wrap: th.closest('.roster-wrap'), startX: x, startY: y, x, touch, active: false, target: -1, edge: 0, timer: null };
+    if (touch) {
+      drag.timer = setTimeout(activateDrag, LONG_PRESS_MS);
+      window.addEventListener('touchmove', onDragTouchMove, { passive: false });
+      window.addEventListener('touchend', finishDrag);
+      window.addEventListener('touchcancel', cancelDrag);
+    } else {
+      window.addEventListener('pointermove', onDragPointerMove);
+      window.addEventListener('pointerup', finishDrag);
+      window.addEventListener('pointercancel', cancelDrag);
+    }
+    window.addEventListener('keydown', onDragKey);
+  }
+
+  function activateDrag() {
+    if (!drag) return;
+    drag.active = true;
+    // 見出しは点滅して浮き上がり、列のマスは半透明にする。差し込む位置には表の高さいっぱいの縦線
+    drag.th.classList.add('is-dragging', 'is-lifted');
+    for (const c of columnCells(staffHeads().indexOf(drag.th))) if (c !== drag.th) c.classList.add('is-drag-col');
+    drag.line = el('div', { class: 'roster-drop-line', 'aria-hidden': 'true' });
+    drag.wrap.append(drag.line);
+    document.body.classList.add('is-column-dragging');
+    if (drag.touch && navigator.vibrate) navigator.vibrate(10);
+    updateDropTarget();
+    requestAnimationFrame(edgeScroll);
+  }
+
+  function onDragPointerMove(e) {
+    if (!drag) return;
+    drag.x = e.clientX;
+    if (!drag.active && Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 6) activateDrag();
+    if (drag.active) updateDropTarget();
+  }
+
+  function onDragTouchMove(e) {
+    if (!drag) return;
+    const t = e.touches[0];
+    if (!drag.active) {
+      // 長押しの前に指が動いたら、並べ替えはやめて、スクロールに任せる
+      if (Math.abs(t.clientX - drag.startX) + Math.abs(t.clientY - drag.startY) > 10) cancelDrag();
+      return;
+    }
+    e.preventDefault();
+    drag.x = t.clientX;
+    updateDropTarget();
+  }
+
+  // 指（マウス）の位置から、差し込む位置（0〜列の数）を決めて、線を出す
+  function updateDropTarget() {
+    const heads = staffHeads();
+    let target = heads.length;
+    for (let i = 0; i < heads.length; i++) {
+      const r = heads[i].getBoundingClientRect();
+      if (drag.x < r.left + r.width / 2) {
+        target = i;
+        break;
+      }
+    }
+    drag.target = target;
+    heads.forEach((h, i) => {
+      h.classList.toggle('is-drop-before', i === target);
+      h.classList.toggle('is-drop-after', target === heads.length && i === heads.length - 1);
+    });
+    if (drag.line && heads.length) {
+      const last = heads[heads.length - 1];
+      const x = view.table.offsetLeft + (target < heads.length ? heads[target].offsetLeft : last.offsetLeft + last.offsetWidth);
+      drag.line.style.left = `${x - 2}px`;
+      drag.line.style.height = `${view.table.offsetHeight}px`;
+    }
+    const box = drag.wrap.getBoundingClientRect();
+    const left = box.left + (view.table.querySelector('.roster__corner') || { offsetWidth: 0 }).offsetWidth;
+    drag.edge = drag.x < left + EDGE ? -1 : drag.x > box.right - EDGE ? 1 : 0;
+  }
+
+  function edgeScroll() {
+    if (!drag || !drag.active) return;
+    if (drag.edge) {
+      drag.wrap.scrollLeft += drag.edge * 8;
+      updateDropTarget();
+    }
+    requestAnimationFrame(edgeScroll);
+  }
+
+  function onDragKey(e) {
+    if (e.key === 'Escape') cancelDrag();
+  }
+
+  function finishDrag() {
+    const d = drag;
+    cancelDrag();
+    if (!d || !d.active || d.target < 0) return;
+    const ids = view.staff.map((m) => m.id);
+    const from = ids.indexOf(d.id);
+    const to = d.target > from ? d.target - 1 : d.target;
+    if (from < 0 || from === to) return;
+    ids.splice(to, 0, ...ids.splice(from, 1));
+    saveColumnOrder(ids, '並び順を保存しました', d.id);
+  }
+
+  function cancelDrag() {
+    if (!drag) return;
+    clearTimeout(drag.timer);
+    window.removeEventListener('touchmove', onDragTouchMove, { passive: false });
+    window.removeEventListener('touchend', finishDrag);
+    window.removeEventListener('touchcancel', cancelDrag);
+    window.removeEventListener('pointermove', onDragPointerMove);
+    window.removeEventListener('pointerup', finishDrag);
+    window.removeEventListener('pointercancel', cancelDrag);
+    window.removeEventListener('keydown', onDragKey);
+    for (const h of staffHeads()) h.classList.remove('is-dragging', 'is-lifted', 'is-drop-before', 'is-drop-after');
+    if (view && view.table) for (const c of view.table.querySelectorAll('.is-drag-col')) c.classList.remove('is-drag-col');
+    if (drag.line) drag.line.remove();
+    document.body.classList.remove('is-column-dragging');
+    drag = null;
+  }
+
+  // キーボード：見出しを選んで Alt＋←／→ で1つずつ動かす
+  function onHeadKey(e) {
+    if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+    e.preventDefault();
+    const ids = view.staff.map((m) => m.id);
+    const from = ids.indexOf(e.currentTarget.dataset.staff);
+    const to = from + (e.key === 'ArrowLeft' ? -1 : 1);
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    [ids[from], ids[to]] = [ids[to], ids[from]];
+    saveColumnOrder(ids, '並び順を保存しました', ids[to]);
+    const moved = view.table.querySelector(`th.roster__staff[data-staff="${ids[to]}"]`);
+    if (moved) moved.focus();
+  }
+
+  // 並べ替えたあと、動かした列を少しの間だけ成功の色で光らせる
+  const MOVED_MS = 1600;
+  function flashMoved(id) {
+    const cells = columnCells(view.staff.findIndex((m) => m.id === id));
+    for (const c of cells) c.classList.add('is-just-moved');
+    setTimeout(() => cells.forEach((c) => c.classList.remove('is-just-moved')), MOVED_MS);
+  }
+
+  // 保存して表を作り直す（スクロール位置はそのまま）。movedId を渡すと、その列を光らせる
+  function saveColumnOrder(ids, message, movedId) {
+    const wrap = document.querySelector('.roster-wrap');
+    const pos = wrap ? [wrap.scrollLeft, wrap.scrollTop] : null;
+    try {
+      K.storage.setRosterOrder(view.store.id, ids);
+    } catch (err) {
+      K.app.toast(err.message);
+      return;
+    }
+    K.app.rerender();
+    const next = document.querySelector('.roster-wrap');
+    if (next && pos) [next.scrollLeft, next.scrollTop] = pos;
+    if (movedId) flashMoved(movedId);
+    K.app.toast(message);
+  }
+
+  function resetColumnOrder() {
+    if (!window.confirm('スタッフの列の並びを、設定（スタッフ）の並び順に戻します。よろしいですか？')) return;
+    saveColumnOrder([], '並び順を元に戻しました');
+  }
+
   // ---- 画面全体 ----
 
   function toolbar(month, store) {
@@ -692,7 +883,10 @@
         pub ? null : el('button', { type: 'button', class: 'check-btn weekly-btn', onclick: applyWeekly }, '曜日の設定を反映'),
         pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn ai-btn', onclick: openAutoSheet }, 'AIで作成'),
         !pub && autoCount ? el('button', { type: 'button', class: 'check-btn tool-btn undo-auto-btn', onclick: undoAuto }, `自動作成を取り消す（${autoCount}）`) : null,
-        pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn confirm-btn', onclick: confirmShift }, 'シフトを確定')
+        pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn confirm-btn', onclick: confirmShift }, 'シフトを確定'),
+        store.rosterOrder && store.rosterOrder.length
+          ? el('button', { type: 'button', class: 'check-btn tool-btn order-reset-btn', onclick: resetColumnOrder }, '並び順を元に戻す')
+          : null
       )
     );
   }
@@ -713,7 +907,8 @@
       month,
       store,
       dates,
-      staff: K.calc.rosterStaff(storeId, month),
+      // 列の並びは、シフト表で並べ替えた順（店舗ごと）
+      staff: K.calc.rosterStaff(storeId, month).sort(K.storage.compareRosterStaff(storeId)),
       map: K.calc.shiftMap(month, storeId),
       closed: new Set(dates.filter((d) => K.calc.isStoreClosed(store, d))),
       check: K.rules.checkMonth(storeId, month),
@@ -746,7 +941,17 @@
         view.staff.map((m) =>
           el(
             'th',
-            { class: `roster__staff${m.active ? '' : ' is-inactive'}`, scope: 'col' },
+            {
+              class: `roster__staff${m.active ? '' : ' is-inactive'}`,
+              scope: 'col',
+              'data-staff': m.id,
+              tabindex: '0',
+              title: 'ドラッグで左右に並べ替え（スマートフォンは長押ししてから動かす）',
+              onpointerdown: onHeadPointerDown,
+              ontouchstart: onHeadTouchStart,
+              onkeydown: onHeadKey,
+              oncontextmenu: (e) => e.preventDefault(),
+            },
             el('span', { class: 'roster__staff-name' }, m.name),
             el(
               'span',
@@ -797,5 +1002,12 @@
   }
 
   K.screens = K.screens || {};
-  K.screens.roster = { render, closeSheet, cleanup: () => closeSheet(false) };
+  K.screens.roster = {
+    render,
+    closeSheet,
+    cleanup: () => {
+      cancelDrag();
+      closeSheet(false);
+    },
+  };
 })();

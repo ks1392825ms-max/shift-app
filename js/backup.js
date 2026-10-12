@@ -163,6 +163,10 @@
       if (s.patternOrder !== undefined && !(Array.isArray(s.patternOrder) && s.patternOrder.length <= 500 && s.patternOrder.every(isId))) {
         delete s.patternOrder;
       }
+      // シフト表のスタッフ列の並び順（ある場合だけ）：正しくなければ使わない（設定の並び順に戻る）
+      if (s.rosterOrder !== undefined && !(Array.isArray(s.rosterOrder) && s.rosterOrder.length <= 500 && s.rosterOrder.every(isId))) {
+        delete s.rosterOrder;
+      }
     }
     cleanAddedFields(data);
     // 毎週の社用・必要人数の時間帯の並び順（ある場合だけ）：正しくなければ使わない

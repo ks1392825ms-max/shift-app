@@ -958,6 +958,34 @@
     });
   }
 
+  // シフト表のスタッフ列の並び順。店舗ごとに持つ（store.rosterOrder：スタッフIDの並び）。
+  // シフト表の表示だけに使う。スタッフの order（設定の並び順・自動作成で決める順）は変えない。
+  // 並びに入っていない人（あとから入った人など）は、設定の並び順で右に並ぶ。
+  function compareRosterStaff(storeId) {
+    const store = data.stores.find((s) => s.id === storeId);
+    const order = store && Array.isArray(store.rosterOrder) ? store.rosterOrder : [];
+    const rank = (m) => {
+      const i = order.indexOf(m.id);
+      return i < 0 ? order.length : i;
+    };
+    return (a, b) => rank(a) - rank(b) || a.order - b.order;
+  }
+
+  // ids：シフト表に並べるスタッフIDの順。空の配列で、設定の並び順に戻す
+  // （表示の順だけなので、確定済みの月でも変えられる）
+  function setRosterOrder(storeId, ids) {
+    findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    if (!Array.isArray(ids) || ids.length > 500 || !ids.every((id) => data.staff.some((m) => m.id === id))) {
+      throw new Error('並び順が正しくありません。');
+    }
+    const next = [...new Set(ids)];
+    const store = data.stores.find((s) => s.id === storeId);
+    if (JSON.stringify(store.rosterOrder || []) === JSON.stringify(next)) return;
+    commit((d) => {
+      Object.assign(d.stores.find((s) => s.id === storeId), { rosterOrder: next, updatedAt: U.nowIso() });
+    });
+  }
+
   // 間違えて登録したときの削除。辞めた人は「在籍中」を外す（過去のシフトを残すため）
   function deleteStaff(id) {
     findActive(data.staff, id, 'スタッフが見つかりませんでした。');
@@ -1634,6 +1662,8 @@
     addStaff,
     updateStaff,
     moveStaff,
+    compareRosterStaff,
+    setRosterOrder,
     deleteStaff,
     applyWeeklyPatterns,
     shiftStoreId,

@@ -905,6 +905,7 @@ button {
 /* ---- シフト表 ---- */
 /* 表の中だけをスクロールさせ、日付（左）・スタッフ名（上）・人数（右）を固定する */
 .roster-wrap {
+  position: relative; /* 並べ替えのときの縦線（.roster-drop-line）の基準 */
   max-height: calc(100dvh - 190px - var(--nav-h) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
   min-height: 320px;
   overflow: auto;
@@ -968,6 +969,111 @@ button {
 .roster__staff.is-inactive .roster__staff-name {
   color: var(--text-muted);
   text-decoration: line-through;
+}
+
+/* スタッフ列の並べ替え（見出しをドラッグ。スマートフォンは長押し） */
+.roster__staff {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* 長押し（ドラッグの開始）：並べ替え完了後と同じ緑で、ゆっくり3回点滅し、少し浮き上がる。
+   点滅が終わったあとは薄い緑の背景だけ残す（太い枠は残さない） */
+.roster thead th.roster__staff.is-lifted {
+  z-index: 5;
+  opacity: 0.9;
+  transform: translateY(-3px);
+  background: color-mix(in srgb, var(--roster-ok) 14%, var(--surface));
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22), inset 0 -2px 0 var(--store-color);
+  animation: roster-lift-blink 0.7s ease-in-out 3;
+}
+
+@keyframes roster-lift-blink {
+  50% {
+    background: color-mix(in srgb, var(--roster-ok) 30%, var(--surface));
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22), inset 0 0 0 3px var(--roster-ok), inset 0 -2px 0 var(--store-color);
+  }
+}
+
+/* ドラッグ中：列のマスは半透明。差し込む位置に、表の高さいっぱいの縦線（順番が変わる位置のときだけ） */
+.roster .is-drag-col {
+  opacity: 0.35;
+}
+
+.roster-drop-line {
+  position: absolute;
+  top: 0;
+  z-index: 6;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* 持ち上げた列のすぐ左右（落としても順番が変わらない位置）では、縦線を出さない
+   （移動先の印 is-drop-before / is-drop-after が、持ち上げた見出し自身か、そのすぐ右の見出しに付いているとき） */
+.roster-wrap:has(th.is-dragging.is-drop-before) .roster-drop-line,
+.roster-wrap:has(th.is-dragging + th.is-drop-before) .roster-drop-line,
+.roster-wrap:has(th.is-dragging.is-drop-after) .roster-drop-line {
+  display: none;
+}
+
+/* 並べ替えたあと：動かした列を少しの間だけ成功の色（緑）で光らせる */
+.roster {
+  --roster-ok: #16a34a;
+}
+
+@media (prefers-color-scheme: dark) {
+  .roster {
+    --roster-ok: #4ade80;
+  }
+}
+
+.roster .is-just-moved {
+  animation: roster-moved 1.6s ease-out;
+}
+
+.roster thead th.is-just-moved {
+  animation: roster-moved-head 1.6s ease-out;
+}
+
+@keyframes roster-moved {
+  from {
+    background: color-mix(in srgb, var(--roster-ok) 22%, var(--surface));
+  }
+}
+
+@keyframes roster-moved-head {
+  from {
+    background: color-mix(in srgb, var(--roster-ok) 30%, var(--surface));
+    box-shadow: inset 0 0 0 3px var(--roster-ok), inset 0 -2px 0 var(--store-color);
+  }
+}
+
+/* 動きを減らす設定の端末：点滅・浮き上がり・光る動きをなくし、枠だけで知らせる */
+@media (prefers-reduced-motion: reduce) {
+  .roster thead th.roster__staff.is-lifted {
+    transform: none;
+    animation: none;
+  }
+
+  .roster .is-just-moved,
+  .roster thead th.is-just-moved {
+    animation: none;
+  }
+
+  .roster thead th.is-just-moved {
+    box-shadow: inset 0 0 0 3px var(--roster-ok), inset 0 -2px 0 var(--store-color);
+  }
+}
+
+body.is-column-dragging,
+body.is-column-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .roster .role-badge {

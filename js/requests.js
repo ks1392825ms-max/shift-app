@@ -3,7 +3,8 @@
 //   settings/requests             { defaultLimit（希望休の初期の上限）, openDay（受付開始日＝25） }
 //   requestQuotas/{スタッフID_月}  { staffId, storeId, month, limit, note }  スタッフ別・月別の上限（夏休みなど）
 //   wishOffs/{スタッフID_月}       { staffId, storeId, month, dates: [日付…], updatedAt, updatedBy }
-//   paidRequests/{ID}              { staffId, storeId, month, date, status: pending/approved/rejected, note, … }
+//   paidRequests/{スタッフID_日付_回数} { staffId, storeId, month, date, status: pending/approved/rejected, note, … }
+//                                  同じ日は3回まで。2回目・3回目は、前の回が却下のときだけ（Firestore のルールでも止めている）
 // 受付は日本時間の毎月25日〜月末に、翌月分。Firestore のルールでも同じ期間・上限で止めている。
 // 読み書きは backend（K.cloud。テストでは偽物）を通す。
 (function () {
@@ -14,6 +15,7 @@
   const DEFAULTS = { defaultLimit: 2, openDay: 25 };
   const MAX_LIMIT = 31;
   const STATUS_LABELS = { pending: '申請中', approved: '承認済み', rejected: '却下' };
+  const MAX_PAID_ATTEMPTS = 3; // 同じ日の有給希望は3回まで（却下のあとに出し直す分を含む）
 
   let backend = null;
   let clock = () => new Date(); // テストでは日付を固定する
@@ -119,8 +121,13 @@
     const err = checkDate(store, month, date);
     if (err) throw new Error(err);
     if ((existing || []).some((r) => r.date === date && r.status !== 'rejected')) throw new Error('この日は、すでに有給希望を出しています。');
+    // 記録の名前は「スタッフID_日付_回数」。使われていない一番小さい回数で出す
+    const used = new Set((existing || []).map((r) => r.id));
+    let attempt = 1;
+    while (used.has(`${staffId}_${date}_${attempt}`)) attempt += 1;
+    if (attempt > MAX_PAID_ATTEMPTS) throw new Error(`同じ日の有給希望は${MAX_PAID_ATTEMPTS}回までです。管理者に相談してください。`);
     const cleanNote = String(note || '').trim().slice(0, 50);
-    return requireBackend().addPaidRequest({ staffId, storeId, month, date, note: cleanNote, email });
+    return requireBackend().addPaidRequest({ staffId, storeId, month, date, note: cleanNote, email, attempt });
   }
 
   async function withdrawPaid(request) {

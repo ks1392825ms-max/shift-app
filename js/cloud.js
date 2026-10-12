@@ -244,21 +244,30 @@
     });
   }
 
-  async function addPaidRequest({ staffId, storeId, month, date, note, email }) {
+  // 記録の名前は「スタッフID_日付_回数」（回数は requests.js が決める）。
+  // 同じ名前がすでにあると、スタッフには書き換えが許されていないのでルールが断る（すでにある申請は上書きしない）
+  async function addPaidRequest({ staffId, storeId, month, date, note, email, attempt }) {
     const { fsMod, db } = await load();
     const now = new Date().toISOString();
-    const ref = await fsMod.addDoc(fsMod.collection(db, 'paidRequests'), {
-      staffId,
-      storeId,
-      month,
-      date,
-      status: 'pending',
-      note: note || '',
-      createdAt: now,
-      updatedAt: now,
-      createdBy: email || '',
-    });
-    return ref.id;
+    const id = `${staffId}_${date}_${attempt}`;
+    const ref = fsMod.doc(db, 'paidRequests', id);
+    try {
+      await fsMod.setDoc(ref, {
+        staffId,
+        storeId,
+        month,
+        date,
+        status: 'pending',
+        note: note || '',
+        createdAt: now,
+        updatedAt: now,
+        createdBy: email || '',
+      });
+    } catch (err) {
+      if (err && err.code === 'permission-denied') throw new Error('この日は、すでに有給希望を出しています。画面を読み込み直してください。');
+      throw err;
+    }
+    return id;
   }
 
   async function withdrawPaidRequest(id) {
