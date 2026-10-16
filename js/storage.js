@@ -1166,10 +1166,123 @@
       }
       // 手で直したシフトは、自動作成の印（autoRunId）を外す（「自動作成を取り消す」で消えないように）
       if (existing) delete existing.autoRunId;
+      // 手で直したマスは、当日の欠勤・休暇の情報も外す（古い情報が残らないように）
+      if (existing) delete existing.absence;
       if (existing) Object.assign(existing, fields, { deleted: false, updatedAt: now });
       else d.shifts.push({ id, staffId, date, ...fields, createdAt: now, updatedAt: now, deleted: false });
     });
     return getShift(staffId, date);
+  }
+
+  // ---- 当日の欠勤・休暇（急な休み） ----
+  // 通常の希望休とは別に、店長が登録する（事前の申請は求めない）。種類はアプリが決めず、店長が本人の申出・就業規則に沿って選ぶ。
+  // マスの種類は、年次有給休暇なら「有給」、それ以外は「通常休」（古い版のアプリでも休み・有給として表示される）。
+  // absence：{ type, status（handling：対応中 / settled：確定）, reason（任意）, planned（もともとのマス）, reportedAt, settledAt }
+  // 確定済みの月でも、欠勤・休暇の登録・変更・確定・取り消しだけはできる（ほかのマスの変更は、今までどおり確定を取り消してから）。
+  const ABSENCE_TYPES = { emergency: '緊急欠勤（種類は未確定）', annual: '年次有給休暇', childCare: '子の看護等休暇', other: 'その他' };
+  const ABSENCE_STATUS = { handling: '対応中', settled: '確定' };
+  const MAX_ABSENCE_REASON = 50;
+
+  function absenceTarget(staffId, date, storeId) {
+    const member = findActive(data.staff, staffId, 'スタッフが見つかりませんでした。');
+    if (!U.isValidDate(date)) throw new Error('日付が正しくありません。');
+    const store = findActive(data.stores, storeId, '店舗を選んでください。');
+    const existing = data.shifts.find((x) => x.id === shiftId(staffId, date) && !x.deleted) || null;
+    if (existing && shiftStoreId(existing) !== store.id) {
+      const other = data.stores.find((x) => x.id === shiftStoreId(existing));
+      throw new Error(`この日は${other ? other.name : '別の店舗'}のシフトが入っています。`);
+    }
+    if (!existing && member.storeId !== store.id) {
+      const home = data.stores.find((x) => x.id === member.storeId);
+      throw new Error(`${member.name}さんは${home ? home.name : '別の店舗'}の所属です。${store.name}のシフトには入力できません。`);
+    }
+    return { member, store, existing };
+  }
+
+  function cleanAbsenceFields({ type, reason }) {
+    if (!ABSENCE_TYPES[type]) throw new Error('休みの種類を選んでください（本人の申出・就業規則に沿って選びます）。');
+    return { type, reason: cleanText(reason, { label: '理由', max: MAX_ABSENCE_REASON, required: false }) };
+  }
+
+  // 登録する：その日のマスを休み（年次有給休暇なら有給）にして、もともとのマスを覚えておく。状態は「対応中」
+  function registerAbsence(staffId, date, storeId, fields) {
+    const { store, existing } = absenceTarget(staffId, date, storeId);
+    if (existing && existing.absence) throw new Error('この日は、すでに欠勤・休暇が登録されています。');
+    const { type, reason } = cleanAbsenceFields(fields);
+    const planned = existing ? { kind: existing.kind, patternId: existing.patternId || null, breaks: Array.isArray(existing.breaks) ? copy(existing.breaks) : [] } : null;
+    const id = shiftId(staffId, date);
+    const now = U.nowIso();
+    commit((d) => {
+      const s = d.shifts.find((x) => x.id === id);
+      const next = {
+        kind: type === 'annual' ? 'paid' : 'off',
+        patternId: null,
+        storeId: store.id,
+        breaks: [],
+        absence: { type, status: 'handling', reason, planned, reportedAt: now, settledAt: null },
+      };
+      if (s) {
+        delete s.autoRunId;
+        Object.assign(s, next, { deleted: false, updatedAt: now });
+      } else d.shifts.push({ id, staffId, date, ...next, createdAt: now, updatedAt: now, deleted: false });
+    });
+    return getShift(staffId, date);
+  }
+
+  function absenceShift(staffId, date, storeId) {
+    const { existing } = absenceTarget(staffId, date, storeId);
+    if (!existing || !existing.absence) throw new Error('この日に、欠勤・休暇は登録されていません。');
+    return existing;
+  }
+
+  // 種類・理由を変える（状態はそのまま）
+  function updateAbsence(staffId, date, storeId, fields) {
+    absenceShift(staffId, date, storeId);
+    const { type, reason } = cleanAbsenceFields(fields);
+    const id = shiftId(staffId, date);
+    commit((d) => {
+      const s = d.shifts.find((x) => x.id === id);
+      Object.assign(s.absence, { type, reason });
+      s.kind = type === 'annual' ? 'paid' : 'off';
+      s.updatedAt = U.nowIso();
+    });
+    return getShift(staffId, date);
+  }
+
+  // 確定する（店長が勤務状況を確定したとき）
+  function settleAbsence(staffId, date, storeId) {
+    const s0 = absenceShift(staffId, date, storeId);
+    if (s0.absence.status === 'settled') throw new Error('この欠勤・休暇は、すでに確定しています。');
+    const id = shiftId(staffId, date);
+    commit((d) => {
+      const s = d.shifts.find((x) => x.id === id);
+      const now = U.nowIso();
+      Object.assign(s.absence, { status: 'settled', settledAt: now });
+      s.updatedAt = now;
+    });
+    return getShift(staffId, date);
+  }
+
+  // 取り消す：もともとのマスに戻す（もともと空欄なら空欄に）
+  function cancelAbsence(staffId, date, storeId) {
+    const s0 = absenceShift(staffId, date, storeId);
+    const planned = s0.absence.planned;
+    const id = shiftId(staffId, date);
+    commit((d) => {
+      const s = d.shifts.find((x) => x.id === id);
+      const now = U.nowIso();
+      delete s.absence;
+      if (planned) Object.assign(s, { kind: planned.kind, patternId: planned.patternId || null, breaks: planned.breaks || [], updatedAt: now });
+      else Object.assign(s, { deleted: true, updatedAt: now });
+    });
+    return getShift(staffId, date);
+  }
+
+  // その店舗・その月の欠勤・休暇（日付順）
+  function getAbsences({ storeId, month } = {}) {
+    return getShifts({ storeId, month })
+      .filter((x) => x.absence)
+      .sort((a, b) => a.date.localeCompare(b.date));
   }
 
   // 30分刻みの時間帯のチェック。within（{start, end}）を渡すと、その範囲内かも確かめる
@@ -1322,6 +1435,7 @@
     commit((d) => {
       const s = d.shifts.find((x) => x.id === id);
       s.deleted = true;
+      delete s.absence;
       s.updatedAt = U.nowIso();
     });
   }
@@ -1671,6 +1785,14 @@
     getShift,
     setShift,
     clearShift,
+    ABSENCE_TYPES,
+    ABSENCE_STATUS,
+    MAX_ABSENCE_REASON,
+    registerAbsence,
+    updateAbsence,
+    settleAbsence,
+    cancelAbsence,
+    getAbsences,
     setShiftBreaks,
     getBusinessTimes,
     moveBusinessTime,

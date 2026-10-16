@@ -57,6 +57,12 @@
       c.cls += ' has-wish';
       c.label += '（希望休）';
     }
+    // 当日の欠勤・休暇（急な休み）：右上に「急」の印。対応中は点線の枠
+    const absence = shift && shift.absence;
+    if (absence) {
+      c.cls += ` has-absence${absence.status === 'handling' ? ' is-absence-handling' : ''}`;
+      c.label += `（当日の欠勤・休暇：${K.storage.ABSENCE_TYPES[absence.type]}・${K.storage.ABSENCE_STATUS[absence.status]}）`;
+    }
     // 連勤・労働時間・パターン外のチェックに引っかかったマス
     const issues = view.check.cells.get(`${member.id}|${date}`);
     if (issues) {
@@ -79,7 +85,8 @@
           title: issues ? issues.join('、') : null,
         },
         c.text,
-        wish ? el('span', { class: 'cell__wish', 'aria-hidden': 'true' }, '希') : null
+        wish ? el('span', { class: 'cell__wish', 'aria-hidden': 'true' }, '希') : null,
+        absence ? el('span', { class: 'cell__absence', 'aria-hidden': 'true' }, '急') : null
       )
     );
   }
@@ -193,6 +200,15 @@
     view.table.querySelector('tfoot').replaceWith(footer());
     const oldButton = document.querySelector('.check-btn:not(.export-btn):not(.weekly-btn):not(.tool-btn)');
     if (oldButton) oldButton.replaceWith(checkButton());
+    // 欠勤・急な休みのボタン（件数）も新しくする
+    const oldAbsence = document.querySelector('.absence-btn');
+    const nextAbsence = absenceButton();
+    if (oldAbsence && nextAbsence) oldAbsence.replaceWith(nextAbsence);
+    else if (oldAbsence) oldAbsence.remove();
+    else if (nextAbsence) {
+      const anchor = document.querySelector('.check-btn:not(.export-btn):not(.weekly-btn):not(.tool-btn)');
+      if (anchor) anchor.after(nextAbsence);
+    }
   }
 
   function focusCell(staffId, date) {
@@ -265,9 +281,9 @@
 
   function openSheet(member, date) {
     closeSheet(false);
-    // 確定済みの月は、確定を取り消すまで入力できない
+    // 確定済みの月は、確定を取り消すまで入力できない（当日の欠勤・休暇の登録・確定・取り消しだけはできる）
     if (K.storage.getPublication(view.store.id, view.month)) {
-      K.app.toast('確定済みです。変更するときは「確定を取り消す」を押してください');
+      openAbsenceSheet(member, date);
       return;
     }
     const current = view.map.get(`${member.id}|${date}`) || null;
@@ -342,6 +358,12 @@
       ),
       el('p', { class: 'sheet__label' }, '社用（出勤するが、予約可能人数に含めない）'),
       patternOptions('business'),
+      el('p', { class: 'sheet__label' }, '当日の欠勤・休暇（子どもの発熱など、急な休み）'),
+      el(
+        'button',
+        { type: 'button', class: 'btn btn--ghost sheet__absence-btn', onclick: () => openAbsenceSheet(member, date) },
+        current && current.absence ? `欠勤・休暇の内容を見る（${K.storage.ABSENCE_STATUS[current.absence.status]}）` : '欠勤・休暇を登録'
+      ),
       el(
         'div',
         { class: 'sheet__foot' },
@@ -371,6 +393,163 @@
   }
 
   // ---- チェック結果 ----
+
+  // ---- 当日の欠勤・休暇（急な休み） ----
+  // 本人からの連絡を受けて店長が登録する。種類は店長が本人の申出・就業規則に沿って選ぶ（アプリは決めない）。
+  // 代わりの勤務は自動で入れない（店長がシフト表で調整）。確定済みの月でも、登録・変更・確定・取り消しだけはできる。
+
+  // その日の人員不足（自動チェックと同じもの）
+  function shortageOf(date) {
+    return view.check.issues.filter((i) => i.type === 'shortage' && i.date === date).map((i) => i.message);
+  }
+
+  // 確定済みの月で、確定した欠勤・休暇が変わったら、スタッフの確定シフト（写し）を作り直す
+  function republishIfNeeded(message) {
+    const locked = Boolean(K.storage.getPublication(view.store.id, view.month));
+    if (!locked || !K.storage.isCloud()) {
+      K.app.toast(message);
+      return;
+    }
+    K.published
+      .publish(view.store.id, view.month)
+      .then(() => K.app.toast(`${message}スタッフの確定シフトも更新しました。`))
+      .catch((err) => K.app.toast(`${message}ただし、スタッフの確定シフトを更新できませんでした（${err.message}）。`));
+  }
+
+  function openAbsenceSheet(member, date) {
+    closeSheet(false);
+    const T = K.storage.ABSENCE_TYPES;
+    const ST = K.storage.ABSENCE_STATUS;
+    const locked = Boolean(K.storage.getPublication(view.store.id, view.month));
+    const current = K.storage.getShift(member.id, date, view.store.id);
+    const ab = current && current.absence;
+    let type = ab ? ab.type : null;
+    const radios = Object.entries(T).map(([key, label]) =>
+      el(
+        'label',
+        { class: 'absence-type' },
+        el('input', { type: 'radio', name: 'absence-type', value: key, checked: type === key, onchange: () => (type = key) }),
+        el('span', null, label)
+      )
+    );
+    const reasonInput = el('input', {
+      type: 'text',
+      class: 'field__input absence-reason',
+      maxlength: String(K.storage.MAX_ABSENCE_REASON),
+      value: ab ? ab.reason : '',
+      placeholder: '任意',
+      'aria-label': '理由（任意）',
+    });
+    const act = (fn, message, wasSettled) => {
+      try {
+        fn();
+      } catch (err) {
+        K.app.toast(err.message);
+        return;
+      }
+      refreshAll();
+      if (wasSettled) republishIfNeeded(message);
+      else K.app.toast(message);
+      openAbsenceSheet(member, date);
+    };
+    const shortage = shortageOf(date);
+    const actions = !ab
+      ? [
+          el(
+            'button',
+            { type: 'button', class: 'btn btn--primary', onclick: () => act(() => K.storage.registerAbsence(member.id, date, view.store.id, { type, reason: reasonInput.value }), '欠勤・休暇を登録しました（対応中）。') },
+            '登録する（対応中）'
+          ),
+        ]
+      : [
+          el(
+            'button',
+            { type: 'button', class: 'btn btn--ghost', onclick: () => act(() => K.storage.updateAbsence(member.id, date, view.store.id, { type, reason: reasonInput.value }), '種類・理由を保存しました。', ab.status === 'settled') },
+            '種類・理由を保存'
+          ),
+          ab.status === 'handling'
+            ? el('button', { type: 'button', class: 'btn btn--primary', onclick: () => act(() => K.storage.settleAbsence(member.id, date, view.store.id), '欠勤・休暇を確定しました。', true) }, '確定する')
+            : null,
+          el(
+            'button',
+            {
+              type: 'button',
+              class: 'btn btn--ghost',
+              onclick: () => {
+                if (!window.confirm('この欠勤・休暇の登録を取り消して、もとのマスに戻しますか？')) return;
+                act(() => K.storage.cancelAbsence(member.id, date, view.store.id), '登録を取り消して、もとのマスに戻しました。', ab.status === 'settled');
+              },
+            },
+            '取り消す（もとのマスに戻す）'
+          ),
+        ];
+    const panel = el(
+      'div',
+      { class: 'sheet absence-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sheet-title' },
+      sheetHead(`${shortDate(date)} 欠勤・休暇`, `${view.store.name}　${member.name}さん`),
+      locked
+        ? el('p', { class: 'sheet__note' }, 'この月は確定済みです。欠勤・休暇の登録・変更・確定・取り消しだけができます（代わりの勤務の調整は「確定を取り消す」から）。')
+        : null,
+      ab
+        ? el('p', { class: `absence-status absence-status--${ab.status}` }, `${ST[ab.status]}：${T[ab.type]}`)
+        : el('p', { class: 'sheet__note' }, '本人からの連絡（電話・LINE WORKS など）を受けて、店長が登録します。事前の申請は要りません。'),
+      el('p', { class: 'sheet__label' }, '休みの種類（本人の申出・就業規則に沿って、店長が選びます）'),
+      el('div', { class: 'absence-types', role: 'radiogroup', 'aria-label': '休みの種類' }, radios),
+      el('p', { class: 'sheet__label' }, `理由（任意・${K.storage.MAX_ABSENCE_REASON}文字まで。スタッフの画面・印刷には出ません）`),
+      reasonInput,
+      el('div', { class: 'actions absence-actions' }, actions),
+      el('p', { class: 'sheet__label' }, 'この日の勤務への影響'),
+      shortage.length
+        ? el('ul', { class: 'absence-impact is-short' }, shortage.map((m) => el('li', null, `人員不足：${m}`)))
+        : el('p', { class: 'absence-impact' }, K.calc.dayInfo(view.store, date).bands.length ? '必要人数は足りています。' : '必要人数が設定されていないため、不足は計算できません（設定 > 必要人数）。'),
+      el('p', { class: 'sheet__note' }, '代わりの人は自動では入れません。同じ店舗の調整・他店舗からの応援・予約の変更などを検討し、シフト表で調整してください。解消できないときは、店長・代表で確認してください。')
+    );
+    showSheet(panel, { staffId: member.id, date, kind: 'absence' });
+  }
+
+  function absenceButton() {
+    const list = K.storage.getAbsences({ storeId: view.store.id, month: view.month });
+    if (!list.length) return null;
+    const handling = list.filter((a) => a.absence.status === 'handling').length;
+    return el(
+      'button',
+      { type: 'button', class: `check-btn tool-btn absence-btn${handling ? ' has-issues' : ''}`, onclick: openAbsenceList },
+      handling ? `欠勤・急な休み（対応中 ${handling}件）` : `欠勤・急な休み（${list.length}件）`
+    );
+  }
+
+  function openAbsenceList() {
+    closeSheet(false);
+    const T = K.storage.ABSENCE_TYPES;
+    const ST = K.storage.ABSENCE_STATUS;
+    const list = K.storage.getAbsences({ storeId: view.store.id, month: view.month });
+    const rows = list.map((a) => {
+      const member = K.storage.getStaffMember(a.staffId);
+      const shortage = shortageOf(a.date);
+      return el(
+        'li',
+        { class: `absence-row${shortage.length ? ' is-short' : ''}` },
+        el(
+          'div',
+          { class: 'absence-row__main' },
+          el('span', { class: 'absence-row__date' }, shortDate(a.date)),
+          el('span', { class: 'absence-row__name' }, member ? `${member.name}さん` : '（不明なスタッフ）'),
+          el('span', { class: 'absence-row__type' }, T[a.absence.type]),
+          el('span', { class: `req-status req-status--${a.absence.status === 'settled' ? 'approved' : 'pending'}` }, ST[a.absence.status])
+        ),
+        shortage.length ? el('p', { class: 'absence-row__short' }, `店長・代表への確認事項：人員不足 ${shortage.join('／')}`) : el('p', { class: 'absence-row__ok' }, '必要人数の不足はありません'),
+        member ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: () => openAbsenceSheet(member, a.date) }, '開く') : null
+      );
+    });
+    const panel = el(
+      'div',
+      { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sheet-title' },
+      sheetHead(`${Number(view.month.slice(5))}月の欠勤・急な休み`, view.store.name),
+      el('p', { class: 'sheet__note' }, '対応中のものは、勤務の調整が終わったら「開く」から確定してください。不足が残る日は、店長・代表で確認してください。'),
+      el('ul', { class: 'absence-list' }, rows)
+    );
+    showSheet(panel, { kind: 'absence-list' });
+  }
 
   function checkButton() {
     const { total, blank } = view.check;
@@ -538,6 +717,41 @@
     return user ? user.email : 'この端末';
   }
 
+  // 作成結果の確認（別々に表示）：① 早番不足 ② 連続勤務（早早・遅遅） ③ 必要人数不足 ④ 回数の偏り。⑤ 制約あり（対象外）はお知らせとして
+  // くわしい日付と理由は下のお知らせ
+  function autoProblems(problems) {
+    if (!problems) return null;
+    const rows = [
+      ['早番不足（早番が0人の日）', problems.earlyZero.length ? `${problems.earlyZero.length}日：${problems.earlyZero.map((x) => `${shortDate(x.date)} ${x.reason}`).join('／')}` : null],
+      ['連続勤務（早早・遅遅）', problems.repeats.length ? `${problems.repeats.length}か所：${problems.repeats.map((r) => `${r.name}さん ${shortDate(r.dates[0])}〜（${r.reason}）`).join('／')}` : null],
+      ['必要人数不足', problems.shortDays.length ? `${problems.shortDays.length}日：${problems.shortDays.join('、')}` : null],
+      ['早番と遅番の回数の差（3回以上）', problems.imbalance && problems.imbalance.length ? problems.imbalance.map((x) => `${x.name}さん 早番${x.early}回・遅番${x.late}回`).join('／') : null],
+    ];
+    const bad = rows.filter(([, v]) => v);
+    const constrained = problems.constrained || [];
+    return el(
+      'div',
+      { class: 'auto-checks' },
+      el(
+        'div',
+        { class: `auto-problems${bad.length ? '' : ' auto-problems--ok'}`, role: 'status' },
+        el('p', { class: 'auto-problems__title' }, bad.length ? '条件を満たせない日があります（無理に勤務を変えていません）' : '早番不足・連続勤務・必要人数不足はありません'),
+        el(
+          'ul',
+          null,
+          rows.map(([label, v]) => el('li', { class: v ? 'is-bad' : 'is-ok' }, `${label}：${v || 'なし'}`))
+        )
+      ),
+      constrained.length
+        ? el(
+            'p',
+            { class: 'auto-constrained' },
+            `制約あり（交互の対象外。無理に変えていません）：${constrained.map((c) => `${c.name}さん（${c.reason}・同じ番の続き${c.count}回）`).join('、')}。パートは契約の時間のため対象外です。`
+          )
+        : el('p', { class: 'auto-constrained' }, 'パートは契約の時間のため、早番・遅番の交互の対象外です。')
+    );
+  }
+
   function openAutoSheet() {
     closeSheet(false);
     const monthLabel = `${Number(view.month.slice(0, 4))}年${Number(view.month.slice(5))}月`;
@@ -574,6 +788,7 @@
       result.assignments.length
         ? el('p', { class: 'auto-summary' }, `勤務 ${works}マス・休み ${offs}マスを入れます。`)
         : el('p', { class: 'auto-summary' }, '入れられる空きマスはありませんでした。'),
+      autoProblems(result.problems),
       result.summary.length
         ? el(
             'div',
@@ -581,13 +796,14 @@
             el(
               'table',
               { class: 'data-table auto-table' },
-              el('thead', null, el('tr', null, el('th', { scope: 'col', class: 'is-left' }, 'スタッフ'), el('th', { scope: 'col' }, '勤務'), el('th', { scope: 'col' }, '休み'))),
+              el('thead', null, el('tr', null, el('th', { scope: 'col', class: 'is-left' }, 'スタッフ'), el('th', { scope: 'col' }, '勤務'), el('th', { scope: 'col' }, '休み'), el('th', { scope: 'col' }, '連休'))),
               el(
                 'tbody',
                 null,
-                result.summary.map((s) => el('tr', null, el('th', { scope: 'row', class: 'is-left' }, s.name), el('td', null, `${s.work}`), el('td', null, `${s.off}`)))
+                result.summary.map((s) => el('tr', null, el('th', { scope: 'row', class: 'is-left' }, s.name), el('td', null, `${s.work}`), el('td', null, `${s.off}`), el('td', null, `${s.renkyu}回`)))
               )
-            )
+            ),
+            el('p', { class: 'hint hint--left' }, '連休：この月に、休み（通常休・有給。定休日を休みに数える設定のときは定休日も）が2日以上続いたところの回数（入力済みのマスを含む）。連休・早番と遅番の公平さは、正社員どうしでそろえます（パートは契約と希望を優先）。')
           )
         : null,
       result.notes.length ? el('ul', { class: 'auto-notes' }, result.notes.map((n) => el('li', null, n))) : null,
@@ -879,6 +1095,7 @@
         'div',
         { class: 'roster-toolbar__actions' },
         checkButton(),
+        absenceButton(),
         el('button', { type: 'button', class: 'check-btn export-btn', onclick: openExportSheet }, '出力'),
         pub ? null : el('button', { type: 'button', class: 'check-btn weekly-btn', onclick: applyWeekly }, '曜日の設定を反映'),
         pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn ai-btn', onclick: openAutoSheet }, 'AIで作成'),

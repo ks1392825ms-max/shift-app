@@ -590,7 +590,11 @@
     const blanks = [];
     for (const m of staff) {
       const s = map.get(`${m.id}|${date}`);
-      if (s && KIND_LABELS[s.kind]) offs.push(`${m.name}（${KIND_LABELS[s.kind]}）`);
+      if (s && KIND_LABELS[s.kind]) {
+        // 当日の欠勤・休暇（急な休み）は、種類と状態も出す（管理者の画面だけ）
+        const ab = s.absence;
+        offs.push(`${m.name}（${KIND_LABELS[s.kind]}${ab ? `・${K.storage.ABSENCE_TYPES[ab.type]}・${K.storage.ABSENCE_STATUS[ab.status]}` : ''}）`);
+      }
       else if (!s && m.active) blanks.push(m.name);
     }
     if (offs.length) others.push(`休み：${offs.join('、')}`);

@@ -2468,9 +2468,10 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
   border-top: 1px solid var(--border);
 }
 
+/* 日付・勤務の枠・時間・実働の4列。勤務の枠は、長い勤務パターンの名前（12文字ほど）が収まる幅にする（行ごとに列がそろうよう固定幅。長すぎる名前は2行まで） */
 .staff-day {
   display: grid;
-  grid-template-columns: 5.2em 76px 1fr auto;
+  grid-template-columns: 5.8em 11em minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -2492,6 +2493,7 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
   font-weight: 700;
   font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .staff-day__date.is-sat {
@@ -2514,9 +2516,25 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
 
 .staff-day__cell {
   min-width: 0;
-  height: 30px;
+  height: auto;
+  min-height: 30px;
+  padding: 3px 6px;
+  overflow: hidden;
   font-size: 0.8rem;
   gap: 3px;
+  white-space: normal;
+}
+
+/* 勤務パターンの名前：2行まで折り返し、入らない分は「…」（枠の外に出さない） */
+.staff-day__label {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .staff-day.has-issue .staff-day__cell {
@@ -2547,6 +2565,51 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* スマホ：勤務の枠を少し狭く・文字を少し小さく（12文字ほどの名前が2行に収まる） */
+@media (max-width: 480px) {
+  .staff-day {
+    grid-template-columns: 5.4em 6.8em minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .staff-day__cell {
+    font-size: 0.72rem;
+  }
+
+  .staff-day__sub {
+    font-size: 0.74rem;
+  }
+}
+
+/* とても狭い画面（320px ほど）：1行に4列は入らないので、実働の時間を時間の欄の下（2段目）に置く */
+@media (max-width: 359px) {
+  .staff-day {
+    grid-template-columns: 4.8em 6.4em minmax(0, 1fr);
+    grid-template-areas:
+      'date cell info'
+      'date cell hours';
+    row-gap: 0;
+  }
+
+  .staff-day__date {
+    grid-area: date;
+  }
+
+  .staff-day__cell {
+    grid-area: cell;
+  }
+
+  .staff-day__info {
+    grid-area: info;
+  }
+
+  .staff-day__hours {
+    grid-area: hours;
+    justify-self: start;
+    font-size: 0.74rem;
+  }
 }
 
 .week-list {
@@ -3336,6 +3399,174 @@ body.is-gate .bottom-nav {
   line-height: 1.3;
 }
 
+/* AIシフト作成の確認画面：条件を満たせない日 */
+.auto-problems {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 0.85rem;
+}
+
+.auto-problems ul {
+  margin: 4px 0;
+  padding-left: 1.2em;
+}
+
+.auto-problems__title {
+  margin: 0;
+  font-weight: 800;
+}
+
+.auto-problems__hint {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.auto-problems--ok {
+  border-color: var(--border);
+  background: none;
+  color: var(--text-muted);
+}
+
+.auto-problems li.is-ok {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.auto-problems li.is-bad {
+  font-weight: 700;
+}
+
+.auto-constrained {
+  margin: 4px 0 8px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/* 当日の欠勤・休暇（急な休み）：右上に「急」。対応中は点線の枠 */
+.cell.has-absence {
+  position: relative;
+}
+
+.cell.is-absence-handling {
+  outline: 2px dashed var(--warn);
+  outline-offset: -3px;
+}
+
+.cell__absence {
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--warn);
+  color: #fff;
+  font-size: 0.55rem;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.sheet__absence-btn {
+  width: 100%;
+}
+
+.absence-types {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px;
+}
+
+.absence-type {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.absence-reason {
+  width: 100%;
+}
+
+.absence-actions {
+  flex-wrap: wrap;
+}
+
+.absence-status {
+  margin: 0;
+  font-weight: 700;
+}
+
+.absence-status--handling {
+  color: var(--warn);
+}
+
+.absence-impact {
+  margin: 0;
+  padding-left: 1.2em;
+  font-size: 0.85rem;
+}
+
+.absence-impact.is-short {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.absence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.absence-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.absence-row.is-short {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.absence-row__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.absence-row__date,
+.absence-row__name {
+  font-weight: 700;
+}
+
+.absence-row__short,
+.absence-row__ok {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.absence-row__short {
+  color: var(--warn);
+  font-weight: 700;
+}
+
 .legend-chip--wish {
   position: relative;
   display: inline-block;
@@ -3501,6 +3732,23 @@ body.is-gate .bottom-nav {
 .req-status--rejected {
   color: var(--text-muted);
   border-style: dashed;
+}
+
+/* 土日祝の休み（店長の許可が必要）：希望休一覧の欄 */
+.req-holiday-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.req-holiday-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 /* 管理者の「申請」タブ */

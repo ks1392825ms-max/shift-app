@@ -316,6 +316,59 @@
     };
   }
 
+  // ---- 負担の見える化（集計のスタッフ別）：早番・遅番・連休・早早／遅遅 ----
+  // 数え方は AIシフト作成（autoshift.js）・自動チェック（rules.js）と同じ。読むだけで、データは変えない。
+
+  // 勤務パターンの番（slot がなければ、9:00 までに始まるものを早番とする）
+  function slotOfPattern(p) {
+    return p.slot || (U.toMinutes(p.start) <= 9 * 60 ? 'early' : 'late');
+  }
+
+  // member の、その店舗・その月の数（入力済みのマスで数える）
+  //   early / late：早番・遅番の勤務日（通常勤務・社用）
+  //   renkyu：休み（通常休・有給。設定で定休日も）が2日以上続いた回数
+  //   repeats：前日も勤務で同じ番だった回数（休みを挟んだら数えない。前月末からの続きも数える）
+  //   eligible：早早・遅遅と回数の差を確かめる人か（パートと、早番・遅番の片方しか使えない人は対象外）
+  function staffSlotStats(member, month, storeId = member.storeId) {
+    const store = K.storage.getStore(storeId);
+    const checks = K.storage.getChecks(storeId);
+    const dates = monthDates(month);
+    const shiftOn = (date) => K.storage.getShift(member.id, date, storeId);
+    const slotOn = (date) => {
+      const s = shiftOn(date);
+      if (!s || (s.kind !== 'work' && s.kind !== 'business') || !s.patternId) return null;
+      const p = K.storage.getPattern(s.patternId);
+      return p ? slotOfPattern(p) : null;
+    };
+    const offOn = (date) => {
+      const s = shiftOn(date);
+      if (s) return s.kind === 'off' || s.kind === 'paid';
+      return Boolean(checks.closedDayAsOff && store && isStoreClosed(store, date));
+    };
+    let early = 0;
+    let late = 0;
+    let repeats = 0;
+    let renkyu = 0;
+    let run = 0;
+    let prev = slotOn(addDays(dates[0], -1));
+    for (const date of dates) {
+      const sl = slotOn(date);
+      if (sl === 'early') early += 1;
+      if (sl === 'late') late += 1;
+      if (sl && prev === sl) repeats += 1;
+      prev = sl;
+      if (offOn(date)) run += 1;
+      else {
+        if (run >= 2) renkyu += 1;
+        run = 0;
+      }
+    }
+    if (run >= 2) renkyu += 1;
+    const slots = new Set((member.patternIds || []).map((id) => K.storage.getPattern(id)).filter((p) => p && !p.deleted).map(slotOfPattern));
+    const eligible = member.employment !== 'part' && slots.size === 2;
+    return { early, late, renkyu, repeats, eligible };
+  }
+
   K.calc = {
     SLOT_MINUTES,
     monthDates,
@@ -333,5 +386,7 @@
     staffMonthTotals,
     staffMonthDetail,
     storeMonthSummary,
+    slotOfPattern,
+    staffSlotStats,
   };
 })();

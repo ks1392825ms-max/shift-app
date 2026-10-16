@@ -1,4 +1,4 @@
-// 管理者の「申請」タブ：希望休一覧・有給申請一覧（承認・却下・日付変更）・希望休の上限
+// 管理者の「申請」タブ：希望休一覧（土日祝の休みの許可を含む）・有給申請一覧（承認・却下・日付変更）・希望休の上限
 // 表示する店舗は、画面上部で選んだ店舗。共有モードでログインしたときだけ使える
 (function () {
   'use strict';
@@ -42,6 +42,46 @@
     K.app.rerender();
   }
 
+  // ---- 土日祝の休み（店長の許可が必要） ----
+  const HOLIDAY_STATUS = { pending: '承認待ち', approved: '許可済み', rejected: '不許可（出勤）' };
+
+  function holidayWishCell(m, store, dates) {
+    const list = dates.filter((d) => R().needsApproval(d));
+    if (!list.length) return el('td', { class: 'is-left' }, '—');
+    return el(
+      'td',
+      { class: 'is-left' },
+      el(
+        'ul',
+        { class: 'req-holiday-list' },
+        list.map((date) => {
+          const status = R().holidayWishStatus(m.id, date, store.id);
+          return el(
+            'li',
+            { class: 'req-holiday-item' },
+            el('span', null, shortDate(date)),
+            el('span', { class: `req-status req-status--${status}` }, HOLIDAY_STATUS[status]),
+            status === 'pending'
+              ? el(
+                  'button',
+                  {
+                    type: 'button',
+                    class: 'btn btn--primary btn--small',
+                    onclick: () =>
+                      run(
+                        () => R().approveHolidayOff({ staffId: m.id, date, storeId: store.id, confirmOverwrite: (text) => window.confirm(text) }),
+                        `${m.name}さんの${shortDate(date)}の休みを許可しました。シフト表に「休み」を入れました。`
+                      ),
+                  },
+                  '許可'
+                )
+              : null
+          );
+        })
+      )
+    );
+  }
+
   // ---- 希望休一覧（スタッフ別） ----
   function wishView(store) {
     const staff = K.storage.getStaff({ storeId: store.id });
@@ -54,16 +94,18 @@
         null,
         el('th', { scope: 'row', class: 'is-left' }, m.name, m.title ? el('span', { class: 'title-badge' }, ` ${m.title}`) : null),
         el('td', { class: 'is-left' }, dates.length ? dates.map(shortDate).join('・') : hasWishDoc(m.id) ? '希望なし' : el('span', { class: 'req-unsent' }, '未提出')),
-        el('td', null, `${dates.length}／${limit}日`)
+        el('td', null, `${dates.length}／${limit}日`),
+        holidayWishCell(m, store, dates)
       );
     });
     return el(
       'div',
       { class: 'table-wrap' },
+      el('p', { class: 'hint hint--left' }, '土日祝は原則出勤です。土日祝の希望休は、「許可」を押すまで休みになりません（AIシフト作成でも出勤として扱います）。許可すると、シフト表のその日に「休み」が入ります。'),
       el(
         'table',
         { class: 'data-table req-table' },
-        el('thead', null, el('tr', null, el('th', { scope: 'col', class: 'is-left' }, 'スタッフ'), el('th', { scope: 'col', class: 'is-left' }, '希望休'), el('th', { scope: 'col' }, '日数／上限'))),
+        el('thead', null, el('tr', null, el('th', { scope: 'col', class: 'is-left' }, 'スタッフ'), el('th', { scope: 'col', class: 'is-left' }, '希望休'), el('th', { scope: 'col' }, '日数／上限'), el('th', { scope: 'col', class: 'is-left' }, '土日祝の休み（許可が必要）'))),
         el('tbody', null, rows)
       )
     );

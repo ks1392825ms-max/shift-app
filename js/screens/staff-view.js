@@ -68,9 +68,10 @@
       cls = r.shift.kind;
       main = el(
         'span',
-        { class: `cell cell--${r.shift.kind} staff-day__cell`, style: p ? { '--pattern-color': p.color } : null },
+        { class: `cell cell--${r.shift.kind} staff-day__cell`, style: p ? { '--pattern-color': p.color } : null, title: p ? p.label : null },
         r.shift.kind === 'business' ? el('span', { class: 'cell__tag' }, '社') : null,
-        p ? p.label : '?'
+        // 長い名前は2行まで折り返し、入らない分は「…」にする（枠の外に出さない。全体は title で見られる）
+        el('span', { class: 'staff-day__label' }, p ? p.label : '?')
       );
       const parts = [];
       if (r.day) {
@@ -84,6 +85,9 @@
       cls = r.shift.kind;
       main = el('span', { class: `cell cell--${r.shift.kind} staff-day__cell` }, KIND_TEXT[r.shift.kind]);
       sub = KIND_LABELS[r.shift.kind];
+      // 当日の欠勤・休暇（急な休み）：種類と状態（管理者の画面だけ）
+      const ab = r.shift.absence;
+      if (ab) sub += `・${K.storage.ABSENCE_TYPES[ab.type]}（${K.storage.ABSENCE_STATUS[ab.status]}）`;
     } else if (closed) {
       cls = 'closed';
       main = el('span', { class: 'cell cell--closed staff-day__cell' }, '定休');

@@ -45,6 +45,20 @@
     return r && typeof r === 'object' && isId(r.id) && ISO_RE.test(r.createdAt) && ISO_RE.test(r.updatedAt) && typeof r.deleted === 'boolean';
   }
 
+  // 当日の欠勤・休暇の情報（storage.js の registerAbsence が作る形）。マスは休み（年次有給休暇なら有給）
+  function isAbsence(a, kind) {
+    if (!a || typeof a !== 'object') return false;
+    const types = ['emergency', 'annual', 'childCare', 'other'];
+    const plannedOk =
+      a.planned === null ||
+      (a.planned && typeof a.planned === 'object' && ['work', 'off', 'paid', 'business'].includes(a.planned.kind) &&
+        (a.planned.patternId === null || isId(a.planned.patternId)) && (a.planned.breaks === undefined || (Array.isArray(a.planned.breaks) && a.planned.breaks.every(isRange))));
+    return (
+      types.includes(a.type) && ['handling', 'settled'].includes(a.status) && isStr(a.reason || '', 50) && plannedOk &&
+      ISO_RE.test(a.reportedAt) && (a.settledAt === null || ISO_RE.test(a.settledAt)) && kind === (a.type === 'annual' ? 'paid' : 'off')
+    );
+  }
+
   const CHECKERS = {
     stores: (r) =>
       isStr(r.name, 10) && r.name.trim() && COLOR_RE.test(r.color) && isTime(r.open) && isTime(r.close) && r.open < r.close &&
@@ -86,6 +100,8 @@
     // 自動作成の印（段階C）
     for (const s of data.shifts) {
       if (s.autoRunId !== undefined && !isId(s.autoRunId)) delete s.autoRunId;
+      // 当日の欠勤・休暇：形が正しくなければ情報だけ捨てる（マスの休み・有給は残す）
+      if (s.absence !== undefined && !isAbsence(s.absence, s.kind)) delete s.absence;
     }
     for (const s of data.stores) {
       const ok =

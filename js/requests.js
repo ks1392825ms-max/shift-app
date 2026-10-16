@@ -222,6 +222,34 @@
   }
 
   // 日付を変える（申請中のものだけ。元の日付も残す）
+  // ---- 土日祝の休み：店長の許可が必要 ----
+  // 土日祝（土曜・日曜・祝日）の希望休は、店長が許可するまで休みにしない（AIシフト作成でも勤務の候補のまま）。
+  // 許可したかどうかは、シフト表のその日で表す：休み（通常休・有給）＝許可済み、勤務＝不許可（出勤）、空欄＝承認待ち
+
+  function needsApproval(date) {
+    const w = K.calc.weekdayOf(date);
+    return w === 0 || w === 6 || Boolean(K.holidays.holidayName(date));
+  }
+
+  function holidayWishStatus(staffId, date, storeId) {
+    const s = K.storage.getShift(staffId, date, storeId);
+    if (!s) return 'pending';
+    return s.kind === 'off' || s.kind === 'paid' ? 'approved' : 'rejected';
+  }
+
+  // 許可する：シフト表のその日に「通常休」を入れる。勤務が入っている日は、confirmOverwrite() が true のときだけ変える
+  function approveHolidayOff({ staffId, date, storeId, confirmOverwrite }) {
+    if (!needsApproval(date)) throw new Error('土日祝の日だけ許可できます。');
+    const existing = K.storage.getShift(staffId, date, storeId);
+    if (existing && (existing.kind === 'off' || existing.kind === 'paid')) throw new Error('この日は、すでに休みが入っています。');
+    if (existing) {
+      const kinds = { work: '通常勤務', business: '社用' };
+      if (!confirmOverwrite(`この日はすでに「${kinds[existing.kind] || existing.kind}」が入っています。休みに変えますか？`)) return false;
+    }
+    K.storage.setShift(staffId, date, { kind: 'off', storeId });
+    return true;
+  }
+
   async function changePaidDate(request, newDate, { email, store }) {
     if (request.status !== 'pending') throw new Error('申請中のものだけ日付を変えられます。');
     if (!U.isValidDate(newDate)) throw new Error('日付が正しくありません。');
@@ -263,6 +291,9 @@
     setDefaultLimit,
     setQuota,
     approvePaid,
+    needsApproval,
+    holidayWishStatus,
+    approveHolidayOff,
     rejectPaid,
     changePaidDate,
   };

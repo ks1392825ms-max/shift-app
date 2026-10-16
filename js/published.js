@@ -5,6 +5,7 @@
 // 写しに入れるのは表示に必要なものだけ：店舗名・月・確定日時・スタッフの表示名と肩書きと St／As・日ごとの勤務時間／休／社用。
 // 入れないもの：メールアドレス・備考・勤務条件（週休・固定休など）・新人や戦力外の印・希望休や有給の申請。
 // 有給は、ほかの人に分からないよう「休」として入れる（本人の画面では、本人の承認済みの有給を「有」と表示する）。
+// 当日の欠勤・休暇（急な休み）：確定したものだけを「休」として入れる（種類・理由は入れない）。対応中のあいだは、もとのマスのまま。
 (function () {
   'use strict';
   const K = window.ShiftApp;
@@ -20,7 +21,9 @@
       const closed = K.calc.isStoreClosed(store, date);
       const cells = {};
       for (const m of staff) {
-        const s = map.get(`${m.id}|${date}`);
+        let s = map.get(`${m.id}|${date}`);
+        // 対応中の欠勤・休暇は、もとのマス（勤務・休み。もともと空欄なら空欄）で入れる
+        if (s && s.absence && s.absence.status !== 'settled') s = s.absence.planned ? { kind: s.absence.planned.kind, patternId: s.absence.planned.patternId } : null;
         if (!s) {
           if (closed) cells[m.id] = { k: 'closed' };
           continue;

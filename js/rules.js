@@ -17,6 +17,8 @@
     ['workDay', '勤務曜日外'],
     ['otherStore', '他店舗と重複'],
     ['weeklyOff', '週休'],
+    ['earlyZero', '早番0人'],
+    ['slotRepeat', '早早・遅遅'],
     ['blank', '未入力'],
   ];
   const TYPE_LABELS = Object.fromEntries(TYPES);
@@ -28,6 +30,17 @@
   function addDays(dateStr, delta) {
     const [y, m, d] = dateStr.split('-').map(Number);
     return U.toDateStr(new Date(y, m - 1, d + delta));
+  }
+
+  // 勤務パターンの番（slot がなければ、9:00 までに始まるものを早番とする。autoshift.js と同じ）
+  function slotOfPattern(p) {
+    return p.slot || (U.toMinutes(p.start) <= 9 * 60 ? 'early' : 'late');
+  }
+
+  function slotOfShift(s) {
+    if (!isAtWork(s) || !s.patternId) return null;
+    const p = K.storage.getPattern(s.patternId);
+    return p ? slotOfPattern(p) : null;
   }
 
   function mdLabel(dateStr) {
@@ -96,6 +109,21 @@
       result.dates.set(date, flag);
     }
 
+    // ---- 早番0人（日ごと）：出勤している人（人数に数える人）が全員遅番の日。早番の勤務パターンを持つ人がいる店舗だけ ----
+    const usesEarly = staff.some((m) => K.calc.countsAsStaff(m) && (m.patternIds || []).some((id) => {
+      const p = K.storage.getPattern(id);
+      return p && !p.deleted && slotOfPattern(p) === 'early';
+    }));
+    if (usesEarly) {
+      for (const date of dates) {
+        if (K.calc.isStoreClosed(store, date)) continue;
+        const working = staff.filter((m) => K.calc.countsAsStaff(m) && slotOfShift(map.get(`${m.id}|${date}`)));
+        if (working.length && !working.some((m) => slotOfShift(map.get(`${m.id}|${date}`)) === 'early')) {
+          result.issues.push({ type: 'earlyZero', date, message: `早番0人（出勤${working.length}人がすべて遅番）` });
+        }
+      }
+    }
+
     // ---- スタッフごと ----
     for (const member of staff) {
       // 連勤（月の前から続いている分も数える）
@@ -134,6 +162,29 @@
           staffId: member.id,
           message: `${member.name}さん　休日${off}日（目安${checks.monthlyOffDays}日）${blankNote}`,
         });
+      }
+
+      // 早早・遅遅（前日も勤務で同じ番。休みを挟んだら数えない）。パートと、早番・遅番の片方しか使えない人は確かめない
+      const mySlots = new Set((member.patternIds || []).map((id) => K.storage.getPattern(id)).filter((p) => p && !p.deleted).map(slotOfPattern));
+      if (member.employment !== 'part' && mySlots.size === 2) {
+        let rep = null;
+        for (const date of dates) {
+          const prev = addDays(date, -1);
+          const sl = slotOfShift(map.get(`${member.id}|${date}`));
+          if (sl && slotOfShift(shiftAt(member.id, prev)) === sl) {
+            const label = sl === 'early' ? '早番' : '遅番';
+            if (rep && rep.slot === sl && rep.last === prev) {
+              rep.days += 1;
+              rep.last = date;
+              rep.issue.message = `${member.name}さん　${label}が${rep.days}日続く（${mdLabel(rep.first)}〜${mdLabel(date)}）`;
+            } else {
+              const issue = { type: 'slotRepeat', date, staffId: member.id, message: `${member.name}さん　${label}が2日続く（${mdLabel(prev)}〜${mdLabel(date)}）` };
+              result.issues.push(issue);
+              rep = { slot: sl, first: prev, last: date, days: 2, issue };
+            }
+            addCell(member.id, date, sl === 'early' ? '早早' : '遅遅');
+          }
+        }
       }
 
       // 未入力

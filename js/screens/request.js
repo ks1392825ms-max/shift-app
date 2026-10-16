@@ -177,6 +177,9 @@
       const result = R().toggleWish(view.draft, date, limit);
       view.draft = result.dates;
       if (result.error) view.message = { ok: false, text: result.error };
+      else if (result.dates.includes(date) && R().needsApproval(date)) {
+        view.message = { ok: true, text: `${shortDate(date)}は土日祝です。土日祝の休みは店長の許可が必要です（冠婚葬祭など、やむを得ない事情のとき）。許可されるまで休みは確定しません。年次有給休暇など、法令上の休暇の申出は、この限りではありません（有給は「有給希望」から申請してください）。` };
+      }
     } else {
       const err = R().checkDate(store, R().requestWindow().month, date);
       if (err) view.message = { ok: false, text: err };
@@ -464,7 +467,7 @@
         'p',
         { class: 'hint hint--left' },
         view.mode === 'wish'
-          ? `休みたい日を押してください。通常の希望休は${limit}日まで選べます（今 ${view.draft.length}／${limit}日）。`
+          ? `休みたい日を押してください。通常の希望休は${limit}日まで選べます（今 ${view.draft.length}／${limit}日）。土日祝は原則出勤です。土日祝の休みは店長の許可が必要で、許可されるまで確定しません。年次有給休暇など、法令上の休暇の申出は、この限りではありません（有給は「有給希望」から申請してください）。`
           : '有給を希望する日を押して、「有給希望を申請」を押してください。管理者が承認すると確定します。'
       ),
       calendar(store, w.month, editable),

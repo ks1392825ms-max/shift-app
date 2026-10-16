@@ -26,6 +26,7 @@
 
   function storeCard(store, summary, check) {
     const days = countDays(check);
+    const earlyZero = check.issues.filter((i) => i.type === 'earlyZero').length;
     const c = summary.staffCount;
     return el(
       'section',
@@ -44,7 +45,8 @@
         stat('延べ社用', `${summary.businessDays}日`),
         stat('延べ有給', `${summary.paidDays}日`),
         stat('人員不足の日', `${days.short}日`, days.short > 0),
-        stat('人員過多の日', `${days.over}日`, days.over > 0)
+        stat('人員過多の日', `${days.over}日`, days.over > 0),
+        stat('早番0人の日', `${earlyZero}日`, earlyZero > 0)
       ),
       el(
         'p',
@@ -57,6 +59,10 @@
   function staffTable(store, month, check) {
     const staff = K.calc.rosterStaff(store.id, month);
     if (!staff.length) return el('p', { class: 'hint' }, `${store.name}のスタッフはいません。`);
+    // 負担の見える化：早番・遅番・連休・早早／遅遅（入力済みのマスで数える）
+    const stats = new Map(staff.map((m) => [m.id, K.calc.staffSlotStats(m, month, store.id)]));
+    const fullRenkyu = staff.filter((m) => m.employment !== 'part').map((m) => stats.get(m.id).renkyu);
+    const renkyuMax = fullRenkyu.length >= 2 ? Math.max(...fullRenkyu) : null; // 連休がこれより2回以上少ない正社員に色
     return el(
       'div',
       { class: 'table-wrap' },
@@ -69,7 +75,7 @@
           el(
             'tr',
             null,
-            ['スタッフ', '出勤', '社用', '休', '有', '未入力', '実働'].map((h, i) => el('th', { scope: 'col', class: i === 0 ? 'is-left' : null }, h))
+            ['スタッフ', '出勤', '社用', '休', '有', '未入力', '実働', '早番', '遅番', '連休', '早早・遅遅'].map((h, i) => el('th', { scope: 'col', class: i === 0 ? 'is-left' : null }, h))
           )
         ),
         el(
@@ -87,12 +93,32 @@
               el('td', { class: short ? 'is-short' : null, title: short ? `目安${short.target}日` : null }, `${d.totals.off}${short ? '△' : ''}`),
               el('td', null, String(d.totals.paid)),
               el('td', { class: d.totals.blank ? 'is-muted' : null }, String(d.totals.blank)),
-              el('td', null, U.formatHours(d.totals.minutes))
+              el('td', null, U.formatHours(d.totals.minutes)),
+              ...burdenCells(m, stats.get(m.id), renkyuMax)
             );
           })
         )
+      ),
+      el(
+        'p',
+        { class: 'hint hint--left' },
+        '早番・遅番：早番／遅番の勤務日（印のないパターンは 9:00 までに始まれば早番）。連休：休み（通常休・有給。設定で定休日も）が2日以上続いた回数。早早・遅遅：前日も勤務で同じ番だった回数（休みを挟んだら数えない）。色つき：早番と遅番の差が3回以上・連休がほかの正社員より2回以上少ない・早早／遅遅がある。パートと、早番・遅番の片方しか使えない人は「—」（対象外）です。'
       )
     );
+  }
+
+  // スタッフ別の表の「早番・遅番・連休・早早／遅遅」の4つのマス
+  function burdenCells(m, st, renkyuMax) {
+    const unbalanced = st.eligible && Math.abs(st.early - st.late) >= 3;
+    const lowRenkyu = renkyuMax !== null && m.employment !== 'part' && st.renkyu <= renkyuMax - 2;
+    return [
+      el('td', { class: unbalanced ? 'is-short' : null, title: unbalanced ? '早番と遅番の差が3回以上' : null }, String(st.early)),
+      el('td', { class: unbalanced ? 'is-short' : null, title: unbalanced ? '早番と遅番の差が3回以上' : null }, String(st.late)),
+      el('td', { class: lowRenkyu ? 'is-short' : null, title: lowRenkyu ? 'ほかの正社員より連休が2回以上少ない' : null }, String(st.renkyu)),
+      st.eligible
+        ? el('td', { class: st.repeats ? 'is-short' : null, title: st.repeats ? '前日も勤務で同じ番' : null }, String(st.repeats))
+        : el('td', { class: 'is-muted', title: 'パート、または早番・遅番の片方しか使えない人は対象外' }, '—'),
+    ];
   }
 
   function renderStore(container, month) {
