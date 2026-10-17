@@ -98,6 +98,16 @@
       el('option', { value: '', selected: !(member && member.weeklyOffDays) }, 'なし'),
       [1, 2, 3].map((n) => el('option', { value: String(n), selected: Boolean(member && member.weeklyOffDays === n) }, `週${n}日`))
     );
+    const monthlyOffInput = el('input', {
+      id: 'staff-monthly-off',
+      class: 'field__input field__input--num',
+      type: 'number',
+      inputmode: 'numeric',
+      min: '0',
+      max: '31',
+      placeholder: '空欄',
+      value: member && Number.isInteger(member.monthlyOffDays) ? String(member.monthlyOffDays) : '',
+    });
     const holidayOffInput = el('input', { id: 'staff-holiday-off', type: 'checkbox', checked: Boolean(member && member.fixedOff && member.fixedOff.holidays) });
     const noteInput = el('textarea', { id: 'staff-note', class: 'field__input', rows: '2', maxlength: '100', placeholder: '例：日曜は店舗Bで勤務' }, member ? member.note || '' : '');
     const emailInput = el('input', {
@@ -226,6 +236,7 @@
         isNew: isNewInput.checked,
         excludeFromCount: excludeInput.checked,
         weeklyOffDays: weeklyOffSelect.value,
+        monthlyOffDays: monthlyOffInput.value.trim(),
         fixedOff: { weekdays: [...state.fixedOff], holidays: holidayOffInput.checked },
         workWeekdays: [...state.workWeekdays],
         note: noteInput.value,
@@ -370,6 +381,17 @@
       el(
         'div',
         { class: 'field' },
+        el('label', { class: 'field__label', for: 'staff-monthly-off' }, '月の休日数'),
+        el('div', { class: 'num-with-unit' }, monthlyOffInput, el('span', null, '日')),
+        el(
+          'p',
+          { class: 'field__note' },
+          '空欄なら、設定 > チェックの「月の休日数の目安」を使います。入れると、この人だけこの日数で確かめ、AIシフト作成もこの日数まで休みを入れます（定休日・固定休・希望休も1日として数えます。週休より優先）。'
+        )
+      ),
+      el(
+        'div',
+        { class: 'field' },
         el('p', { class: 'field__label' }, '固定休（必ず休みの曜日）'),
         weekdayChips('固定休', state.fixedOff),
         el('label', { class: 'check-line' }, holidayOffInput, '祝日も休み'),
@@ -457,6 +479,7 @@
             patternLabels || '勤務パターン未設定',
             hasWeekly ? '曜日の設定あり' : null,
             member.weeklyOffDays ? `週${member.weeklyOffDays}休` : null,
+            Number.isInteger(member.monthlyOffDays) ? `月${member.monthlyOffDays}休` : null,
             K.storage.getSamePersonStaff(member.id).length ? 'ほかの店舗でも勤務' : null,
           ]
             .filter(Boolean)

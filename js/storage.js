@@ -742,7 +742,7 @@
     };
   }
 
-  // 勤務条件（AIシフト作成でも使う）：雇用形態・新人・戦力外・週休・固定休・この店舗で働く曜日・備考・ログイン用メール
+  // 勤務条件（AIシフト作成でも使う）：雇用形態・新人・戦力外・週休・月の休日数・固定休・この店舗で働く曜日・備考・ログイン用メール
   function normalizeStaffConditions(fields) {
     const employment = fields.employment || 'full';
     if (!EMPLOYMENTS.includes(employment)) throw new Error('雇用形態を選んでください。');
@@ -751,6 +751,12 @@
     if (weeklyOffDays !== null) {
       weeklyOffDays = Number(weeklyOffDays);
       if (!Number.isInteger(weeklyOffDays) || weeklyOffDays < 1 || weeklyOffDays > 6) throw new Error('週休の日数が正しくありません。');
+    }
+    // 本人の月の休日数（空＝設定 > チェックの「月の休日数の目安」を使う）
+    let monthlyOffDays = fields.monthlyOffDays === '' || fields.monthlyOffDays === undefined || fields.monthlyOffDays === null ? null : fields.monthlyOffDays;
+    if (monthlyOffDays !== null) {
+      monthlyOffDays = Number(monthlyOffDays);
+      if (!Number.isInteger(monthlyOffDays) || monthlyOffDays < 0 || monthlyOffDays > 31) throw new Error('月の休日数が正しくありません（0〜31日）。');
     }
 
     const weekdays = (list, label) => {
@@ -774,6 +780,7 @@
       isNew: Boolean(fields.isNew),
       excludeFromCount: Boolean(fields.excludeFromCount),
       weeklyOffDays,
+      monthlyOffDays,
       fixedOff,
       workWeekdays,
       note,

@@ -118,6 +118,7 @@
       if (m.employment !== undefined && !['full', 'part'].includes(m.employment)) delete m.employment;
       for (const key of ['isNew', 'excludeFromCount']) if (m[key] !== undefined && typeof m[key] !== 'boolean') delete m[key];
       if (m.weeklyOffDays !== undefined && m.weeklyOffDays !== null && !isInt(m.weeklyOffDays, 1, 6)) delete m.weeklyOffDays;
+      if (m.monthlyOffDays !== undefined && m.monthlyOffDays !== null && !isInt(m.monthlyOffDays, 0, 31)) delete m.monthlyOffDays;
       if (m.fixedOff !== undefined && !(m.fixedOff && isWeekdays(m.fixedOff.weekdays) && typeof m.fixedOff.holidays === 'boolean')) delete m.fixedOff;
       if (m.workWeekdays !== undefined && !isWeekdays(m.workWeekdays)) delete m.workWeekdays;
       if (m.note !== undefined && !isStr(m.note, 100)) delete m.note;

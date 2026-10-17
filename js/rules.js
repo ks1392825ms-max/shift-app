@@ -151,16 +151,17 @@
         }
       }
 
-      // 月の休日数（目安より少ないときだけ）
+      // 月の休日数（目安より少ないときだけ）。本人の月の休日数があれば、そちらを使う
       const totals = K.calc.staffMonthTotals(member, map, dates, store);
       const off = totals.off + (checks.countPaidLeaveAsOff ? totals.paid : 0);
-      if (off < checks.monthlyOffDays) {
-        result.offShort.set(member.id, { off, target: checks.monthlyOffDays });
+      const offTarget = Number.isInteger(member.monthlyOffDays) ? member.monthlyOffDays : checks.monthlyOffDays;
+      if (off < offTarget) {
+        result.offShort.set(member.id, { off, target: offTarget });
         const blankNote = totals.blank ? `・未入力${totals.blank}日` : '';
         result.issues.push({
           type: 'offDays',
           staffId: member.id,
-          message: `${member.name}さん　休日${off}日（目安${checks.monthlyOffDays}日）${blankNote}`,
+          message: `${member.name}さん　休日${off}日（目安${offTarget}日）${blankNote}`,
         });
       }
 
