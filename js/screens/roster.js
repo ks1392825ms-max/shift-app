@@ -9,8 +9,33 @@
   const KIND_LABELS = { work: '通常勤務', off: '通常休', paid: '有給', business: '社用' };
   const TIMED_KINDS = ['work', 'business'];
 
-  // 選んだら次の日へ進むか（入力シートの設定）
-  let autoAdvance = true;
+  // 選んだら次の日へ進むか（入力シートの設定）。最初はオフ（1回選ぶと閉じる）。オンにしたら、このブラウザで覚えておく
+  const ADVANCE_KEY = 'shift-app-auto-advance';
+  let autoAdvance = (() => {
+    try {
+      return localStorage.getItem(ADVANCE_KEY) === '1';
+    } catch (err) {
+      return false;
+    }
+  })();
+  function setAutoAdvance(on) {
+    autoAdvance = on;
+    try {
+      localStorage.setItem(ADVANCE_KEY, on ? '1' : '0');
+    } catch (err) {
+      // 保存できなくても、この画面を開いている間は使える
+    }
+  }
+
+  // 次の日へ進んだときに、前の日に何を入れたかを知らせる文
+  function choiceText(choice) {
+    if (choice === null) return '未入力';
+    if (TIMED_KINDS.includes(choice.kind)) {
+      const p = K.storage.getPattern(choice.patternId);
+      return `${choice.kind === 'business' ? '社用 ' : ''}${p ? p.label : ''}`;
+    }
+    return KIND_TEXT[choice.kind] || KIND_LABELS[choice.kind] || '';
+  }
 
   // いま表示しているシフト表の情報（マスを更新するときに使う）
   let view = null;
@@ -22,10 +47,11 @@
 
   // ---- マス ----
 
-  function cellContent(shift, closed) {
+  // closedText：定休日なら「定休」、臨時休業の日なら「休業」
+  function cellContent(shift, closed, closedText = '定休') {
     if (!shift) {
       return closed
-        ? { cls: 'cell--closed', text: '定休', label: '定休日' }
+        ? { cls: 'cell--closed', text: closedText, label: closedText === '休業' ? '臨時休業' : '定休日' }
         : { cls: 'cell--blank', text: '', label: '未入力' };
     }
     if (TIMED_KINDS.includes(shift.kind)) {
@@ -44,7 +70,7 @@
 
   function cell(member, date) {
     const shift = view.map.get(`${member.id}|${date}`);
-    const c = cellContent(shift, view.closed.has(date));
+    const c = cellContent(shift, view.closed.has(date), K.calc.closedLabel(view.store, date));
     // 休憩・社用時間が設定されている日は、右上に小さな印を付ける
     const detailed = shift && shift.kind === 'work' && K.calc.hasTimeDetails(member, shift, date);
     if (detailed) {
@@ -149,7 +175,10 @@
           el('span', { class: 'roster__day' }, String(d)),
           el('span', { class: 'roster__wd' }, holiday ? '祝' : U.WEEKDAYS[w]),
           holiday ? el('span', { class: 'roster__closed-tag roster__holiday-tag' }, holiday) : null,
-          closed ? el('span', { class: 'roster__closed-tag' }, '定休') : null,
+          closed ? el('span', { class: 'roster__closed-tag' }, K.calc.closedLabel(view.store, date)) : null,
+          !closed && K.calc.hoursOf(view.store, date).special
+            ? el('span', { class: 'roster__closed-tag roster__special-tag', title: `特別営業時間 ${U.formatTime(K.calc.hoursOf(view.store, date).open)}〜${U.formatTime(K.calc.hoursOf(view.store, date).close)}` }, '特別')
+            : null,
           n.business ? el('span', { class: 'roster__business-tag' }, `社用${n.business}`) : null
         )
       ),
@@ -274,14 +303,15 @@
     const index = view.dates.indexOf(date);
     const next = view.dates[index + 1];
     if (autoAdvance && next) {
-      openSheet(member, next);
+      openSheet(member, next, { date, text: choiceText(choice) });
       focusCell(member.id, next);
     } else {
       closeSheet();
     }
   }
 
-  function openSheet(member, date) {
+  // done：「次の日へ進む」で開いたとき、前の日に入れた内容 { date, text }
+  function openSheet(member, date, done = null) {
     closeSheet(false);
     // 確定済みの月は、確定を取り消すまで入力できない（当日の欠勤・休暇の登録・確定・取り消しだけはできる）
     if (K.storage.getPublication(view.store.id, view.month)) {
@@ -340,7 +370,7 @@
     const advanceInput = el('input', {
       type: 'checkbox',
       checked: autoAdvance,
-      onchange: (event) => (autoAdvance = event.currentTarget.checked),
+      onchange: (event) => setAutoAdvance(event.currentTarget.checked),
     });
 
     const panel = el(
@@ -348,7 +378,10 @@
       { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sheet-title' },
       // どの店舗のシフトを入力しているかを、必ず表示する
       sheetHead(shortDate(date), `${view.store.name}　${member.name}さん`),
-      view.closed.has(date) ? el('p', { class: 'sheet__note' }, 'この日は店舗の定休日です。') : null,
+      done ? el('p', { class: 'sheet__done', role: 'status' }, `${shortDate(done.date)} を「${done.text}」にしました → ${shortDate(date)} を入力中`) : null,
+      view.closed.has(date)
+        ? el('p', { class: 'sheet__note' }, K.calc.closedPeriodOf(view.store, date) ? `この日は臨時休業です（${K.calc.closedPeriodOf(view.store, date).note || '休業'}）。` : 'この日は店舗の定休日です。')
+        : null,
       el('p', { class: 'sheet__label' }, '通常勤務'),
       patternOptions('work'),
       el('p', { class: 'sheet__label' }, '休み'),
@@ -1227,6 +1260,8 @@
         '社用（人数に含めない）',
         el('span', { class: 'legend-chip cell--closed' }, '定休'),
         '定休日（通常休として数えます）',
+        el('span', { class: 'legend-chip cell--closed' }, '休業'),
+        '臨時休業（設定 > 店舗。定休日と同じ扱い）',
         el('span', { class: 'legend-chip legend-chip--dot' }, el('span', { class: 'legend-dot', 'aria-hidden': 'true' })),
         '休憩・社用時間あり',
         K.storage.isCloud() ? el('span', { class: 'legend-chip legend-chip--wish' }, el('span', { class: 'cell__wish' }, '希')) : null,

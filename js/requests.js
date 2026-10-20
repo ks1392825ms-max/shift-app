@@ -90,10 +90,15 @@
     return { dates: [...set].sort(), error: null };
   }
 
-  // 申請できる日か（申請する月の日付で、店舗の定休日でない）
+  // 定休日・臨時休業の日を選んだときの案内
+  function closedMessage(store, date) {
+    return K.calc.closedPeriodOf(store, date) ? '臨時休業の日は選べません。' : '定休日は選べません。';
+  }
+
+  // 申請できる日か（申請する月の日付で、店舗の定休日・臨時休業の日でない）
   function checkDate(store, month, date) {
     if (!U.isValidDate(date) || date.slice(0, 7) !== month) return `${monthLabel(month)}の日付を選んでください。`;
-    if (store && K.calc.isStoreClosed(store, date)) return '定休日は選べません。';
+    if (store && K.calc.isStoreClosed(store, date)) return closedMessage(store, date);
     return null;
   }
 
@@ -148,7 +153,7 @@
     if (type === 'move') {
       if (!U.isValidDate(newDate) || newDate.slice(0, 7) !== target.month) throw new Error(`${monthLabel(target.month)}の日付を選んでください。`);
       if (newDate === target.date) throw new Error('今と同じ日付です。');
-      if (store && K.calc.isStoreClosed(store, newDate)) throw new Error('定休日は選べません。');
+      if (store && K.calc.isStoreClosed(store, newDate)) throw new Error(closedMessage(store, newDate));
     }
     const mine = (existing || []).filter((c) => c.kind === kind && c.targetId === target.id);
     if (mine.some((c) => c.status === 'pending' || (c.status === 'approved' && !c.reflectedAt))) throw new Error('この申請には、すでに変更申請を出しています。');
@@ -360,7 +365,7 @@
   async function changePaidDate(request, newDate, { email, store }) {
     if (request.status !== 'pending') throw new Error('申請中のものだけ日付を変えられます。');
     if (!U.isValidDate(newDate)) throw new Error('日付が正しくありません。');
-    if (store && K.calc.isStoreClosed(store, newDate)) throw new Error('定休日は選べません。');
+    if (store && K.calc.isStoreClosed(store, newDate)) throw new Error(closedMessage(store, newDate));
     if (newDate === request.date) return false;
     await requireBackend().changePaidDateLogged(request, newDate, email || '');
     return true;

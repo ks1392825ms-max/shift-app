@@ -90,7 +90,7 @@
       if (ab) sub += `・${K.storage.ABSENCE_TYPES[ab.type]}（${K.storage.ABSENCE_STATUS[ab.status]}）`;
     } else if (closed) {
       cls = 'closed';
-      main = el('span', { class: 'cell cell--closed staff-day__cell' }, '定休');
+      main = el('span', { class: 'cell cell--closed staff-day__cell' }, typeof closed === 'string' ? closed : '定休');
     } else {
       main = el('span', { class: 'cell cell--blank staff-day__cell' }, '');
       sub = '未入力';
@@ -231,7 +231,7 @@
           el(
             'ul',
             { class: 'staff-days' },
-            detail.rows.map((r) => dayRow(member, r, K.calc.isStoreClosed(store, r.date), result.cells.get(`${member.id}|${r.date}`)))
+            detail.rows.map((r) => dayRow(member, r, K.calc.isStoreClosed(store, r.date) && K.calc.closedLabel(store, r.date), result.cells.get(`${member.id}|${r.date}`)))
           )
         ),
         weeks,

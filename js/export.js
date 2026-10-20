@@ -29,7 +29,7 @@
       const closed = K.calc.isStoreClosed(store, date);
       const cells = staff.map((m) => {
         const s = map.get(`${m.id}|${date}`);
-        if (!s) return closed ? { kind: 'closed', text: '定休' } : { kind: 'blank', text: '' };
+        if (!s) return closed ? { kind: 'closed', text: K.calc.closedLabel(store, date) } : { kind: 'blank', text: '' };
         if (s.kind === 'off') return { kind: 'off', text: '休' };
         if (s.kind === 'paid') return { kind: 'paid', text: '有' };
         const p = K.storage.getPattern(s.patternId);
@@ -43,7 +43,7 @@
     return { store, staff, rows, title: `${store.name}　${y}年${m}月　シフト表${confirmed}` };
   }
 
-  const LEGEND = '休＝通常休　有＝有給　社＝社用（人数に含めない）　定休＝定休日　St／As／計＝その日の通常勤務の人数';
+  const LEGEND = '休＝通常休　有＝有給　社＝社用（人数に含めない）　定休＝定休日　休業＝臨時休業　St／As／計＝その日の通常勤務の人数';
 
   // ---- 画像（PNG） ----
 
@@ -189,7 +189,7 @@
         } else if (c.kind === 'closed') {
           ctx.fillStyle = COLORS.muted;
           ctx.font = `600 10px ${FONT}`;
-          ctx.fillText('定休', x + STAFF_W / 2, cy);
+          ctx.fillText(c.text || '定休', x + STAFF_W / 2, cy);
         }
       });
 

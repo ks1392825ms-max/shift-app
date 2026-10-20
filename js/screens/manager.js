@@ -2,7 +2,7 @@
 // ・担当店舗の希望休・有給の申請を一覧で見て、受付期間（25日〜月末・翌月分）だけ、承認・却下・申請中に戻すことができる
 //   変えられるのは「申請中」のものと、自分が判断したものだけ（自分の申請・ほかの幹部やオーナーが判断したものは変えられない）
 // ・担当店舗の判断の履歴を見る
-// ・全店舗の確定・公開済みのシフト（公開用の写し）を見る（作成中のシフトは読めない）
+// ・担当店舗の確定・公開済みのシフト（公開用の写し）を見る（作成中のシフト・担当外の店舗は読めない）
 // 読み書きの決まりは Firestore のルールでも強制している（画面のボタンは、その決まりに合わせて出し分けるだけ）
 (function () {
   'use strict';
@@ -202,7 +202,7 @@
         ['paid', '有給', pend(view.data.paidRequests)],
         ['change', '変更申請', pend(view.data.changeRequests || [])],
         ['log', '判断の履歴', 0],
-        ['roster', '確定シフト（全店舗）', 0],
+        ['roster', '確定シフト（担当店舗）', 0],
       ].map(([key, label, n]) =>
         el(
           'button',
@@ -328,7 +328,7 @@
     );
   }
 
-  // ---- 確定シフト（全店舗・確定済みの写しだけ） ----
+  // ---- 確定シフト（担当店舗・確定済みの写しだけ） ----
   function rosterMonths() {
     const thisMonth = R().todayJst().slice(0, 7);
     return [thisMonth, R().nextMonthOf(thisMonth)];
@@ -339,7 +339,7 @@
     K.app.rerender();
     try {
       const months = rosterMonths();
-      const rosters = await backend().loadAllPublishedRosters(months);
+      const rosters = await backend().loadManagerPublishedRosters(view.ctx.stores.map((s) => s.id), months);
       const first = months.find((m) => rosters.some((r) => r.month === m)) || months[0];
       const firstStore = (rosters.find((r) => r.month === first) || {}).storeId || null;
       view.pub = { loading: false, rosters, month: first, storeId: firstStore, error: null };
@@ -353,7 +353,7 @@
     if (!cell) return '';
     if (cell.k === 'work') return cell.t;
     if (cell.k === 'business') return `社用 ${cell.t}`;
-    if (cell.k === 'closed') return '定休';
+    if (cell.k === 'closed') return cell.t || '定休';
     if (cell.k === 'off') return '休';
     return '';
   }
@@ -425,7 +425,7 @@
           el(
             'tbody',
             null,
-            roster.days.map((d) => el('tr', null, el('th', { scope: 'row' }, shortDate(d.date), d.holiday ? el('span', { class: 'detail-item__note' }, ` ${d.holiday}`) : null), roster.staff.map((m) => el('td', null, cellText(d.cells[m.id])))))
+            roster.days.map((d) => el('tr', null, el('th', { scope: 'row' }, shortDate(d.date), d.holiday ? el('span', { class: 'detail-item__note' }, ` ${d.holiday}`) : null, d.hours ? el('span', { class: 'detail-item__note' }, ` 特別営業 ${d.hours}`) : null), roster.staff.map((m) => el('td', null, cellText(d.cells[m.id])))))
           )
         )
       )

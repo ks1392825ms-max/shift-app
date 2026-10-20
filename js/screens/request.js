@@ -500,7 +500,7 @@
     if (!cell) return '';
     if (cell.k === 'work') return cell.t;
     if (cell.k === 'business') return `社用 ${cell.t}`;
-    if (cell.k === 'closed') return '定休';
+    if (cell.k === 'closed') return cell.t || '定休';
     if (cell.k === 'off') return mine && view.pub.myPaid.has(date) ? '有' : '休';
     return '';
   }
@@ -553,7 +553,7 @@
         '自分のシフトだけ'
       )
     );
-    const label = (day) => `${Number(day.date.slice(5, 7))}/${Number(day.date.slice(8, 10))}（${U.WEEKDAYS[K.calc.weekdayOf(day.date)]}）`;
+    const label = (day) => `${Number(day.date.slice(5, 7))}/${Number(day.date.slice(8, 10))}（${U.WEEKDAYS[K.calc.weekdayOf(day.date)]}）${day.hours ? ` 特別営業 ${day.hours}` : ''}`;
     const dayClass = (day) => {
       const w = K.calc.weekdayOf(day.date);
       return w === 0 || day.holiday ? 'is-sun' : w === 6 ? 'is-sat' : '';

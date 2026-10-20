@@ -227,7 +227,7 @@
               // 店舗ごとに3つ（St・As・計）のマスを並べる（定休日は1つにまとめる）
               stores.flatMap((s, si) => {
                 const day = summaries[si].days[i];
-                if (day.closed) return [el('td', { colspan: '3', class: 'is-muted compare-table__closed' }, '定休')];
+                if (day.closed) return [el('td', { colspan: '3', class: 'is-muted compare-table__closed' }, K.calc.closedLabel(s, date))];
                 const flag = checks[si].dates.get(date);
                 const cls = (short, over) => (short ? 'is-short' : over ? 'is-over' : null);
                 return [

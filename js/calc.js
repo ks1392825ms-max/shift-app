@@ -22,7 +22,39 @@
   }
 
   // 店舗の定休日か（毎週の曜日と、第○週の○曜日）
+  // その日を含む臨時休業（期間）。なければ null
+  function closedPeriodOf(store, dateStr) {
+    return (Array.isArray(store.closedPeriods) ? store.closedPeriods : []).find((p) => p.start <= dateStr && dateStr <= p.end) || null;
+  }
+
+  // 休みの日の表示：臨時休業なら「休業」、定休日なら「定休」
+  function closedLabel(store, dateStr) {
+    return closedPeriodOf(store, dateStr) ? '休業' : '定休';
+  }
+
+  // その日の営業時間：{ open, close, special（特別営業時間か）, note, explicit（曜日ごと・特別の時間を入れた日か） }
+  // 特別営業時間 → 曜日ごとの営業時間 → 店舗の営業時間（今まで）の順に使う
+  function hoursOf(store, dateStr) {
+    const sp = (Array.isArray(store.specialHours) ? store.specialHours : []).find((h) => h.date === dateStr);
+    if (sp) return { open: sp.open, close: sp.close, special: true, note: sp.note || '', explicit: true };
+    const wh = store.weekHours && store.weekHours[String(weekdayOf(dateStr))];
+    if (wh) return { open: wh.open, close: wh.close, special: false, note: '', explicit: true };
+    return { open: store.open, close: store.close, special: false, note: '', explicit: false };
+  }
+
+  // 必要人数の時間帯を、その日の営業時間の中だけにする（曜日ごと・特別の営業時間を入れた日だけ。外にはみ出した分は数えない）
+  function clipBands(bands, hours) {
+    if (!hours.explicit) return bands;
+    const open = U.toMinutes(hours.open);
+    const close = U.toMinutes(hours.close);
+    return bands
+      .map((b) => ({ ...b, start: U.fromMinutes(Math.max(U.toMinutes(b.start), open)), end: U.fromMinutes(Math.min(U.toMinutes(b.end), close)) }))
+      .filter((b) => U.toMinutes(b.start) < U.toMinutes(b.end));
+  }
+
+  // 定休日（毎週・第○週）か、臨時休業（期間）の日か
   function isStoreClosed(store, dateStr) {
+    if (closedPeriodOf(store, dateStr)) return true;
     const w = weekdayOf(dateStr);
     if (store.closedWeekdays.includes(w)) return true;
     const nth = (store.closedNthWeekdays || []).find((x) => x.weekday === w);
@@ -78,9 +110,12 @@
     const naturalType = holiday || w === 0 || w === 6 ? 'holiday' : 'weekday';
     const override = K.storage.getDayOverride(store.id, dateStr);
     const dayType = override && override.mode === 'type' ? override.dayType : naturalType;
-    const bands =
-      override && override.mode === 'custom' ? override.bands : K.storage.getStaffingRules({ storeId: store.id, dayType });
-    return { holiday, dayType, naturalType, override, bands, closed: isStoreClosed(store, dateStr) };
+    const hours = hoursOf(store, dateStr);
+    const bands = clipBands(
+      override && override.mode === 'custom' ? override.bands : K.storage.getStaffingRules({ storeId: store.id, dayType }),
+      hours
+    );
+    return { holiday, dayType, naturalType, override, bands, hours, closed: isStoreClosed(store, dateStr) };
   }
 
   // 1日の実働時間（分）：勤務時間 − 休憩
@@ -157,8 +192,8 @@
     const info = dayInfo(store, dateStr);
     const bands = info.closed ? [] : info.bands.map((b) => ({ ...b, ...toRange(b.start, b.end) }));
 
-    let from = U.toMinutes(store.open);
-    let to = U.toMinutes(store.close);
+    let from = U.toMinutes(info.hours.open);
+    let to = U.toMinutes(info.hours.close);
     for (const d of [...days, ...bands]) {
       from = Math.min(from, d.start);
       to = Math.max(to, d.end);
@@ -372,6 +407,9 @@
   K.calc = {
     SLOT_MINUTES,
     monthDates,
+    closedPeriodOf,
+    closedLabel,
+    hoursOf,
     weekdayOf,
     isStoreClosed,
     countsAsStaff,

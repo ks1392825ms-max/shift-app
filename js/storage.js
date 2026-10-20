@@ -537,6 +537,183 @@
     });
   }
 
+  // ---- 臨時休業（期間）：店舗ごと・入れた期間だけ（年末年始など）。くり返さない ----
+  // store.closedPeriods：[{ id, start, end, note }]（start・end は "2026-12-29" の形。両端の日を含む）
+  const MAX_CLOSED_PERIODS = 400;
+  const MAX_CLOSED_DAYS = 62;
+  const MAX_SPECIAL_HOURS = 400;
+
+  function closedPeriodsOf(store) {
+    return Array.isArray(store && store.closedPeriods) ? store.closedPeriods : [];
+  }
+
+  // 追加する。期間の中に入力済みの勤務があれば、その件数を返す（勤務は変えない）
+  function addClosedPeriod(storeId, fields) {
+    const store = findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    const start = String((fields && fields.start) || '');
+    const end = String((fields && fields.end) || start);
+    if (!U.isValidDate(start) || !U.isValidDate(end)) throw new Error('休業の開始日と終了日を選んでください。');
+    if (start > end) throw new Error('終了日は開始日と同じか、後の日にしてください。');
+    const days = Math.round((new Date(`${end}T00:00:00Z`) - new Date(`${start}T00:00:00Z`)) / 86400000) + 1;
+    if (days > MAX_CLOSED_DAYS) throw new Error(`臨時休業は${MAX_CLOSED_DAYS}日以内にしてください。`);
+    const note = cleanText((fields && fields.note) || '', { label: 'メモ', max: 20, required: false });
+    const list = closedPeriodsOf(store);
+    if (list.length >= MAX_CLOSED_PERIODS) throw new Error(`臨時休業は${MAX_CLOSED_PERIODS}件までです。古いものを削除してください。`);
+    const overlap = list.find((p) => p.start <= end && start <= p.end);
+    if (overlap) throw new Error(`${overlap.start}〜${overlap.end} の臨時休業と重なっています。`);
+    const period = { id: U.uuid(), start, end, note };
+    commit((d) => {
+      const s = d.stores.find((x) => x.id === storeId);
+      s.closedPeriods = [...closedPeriodsOf(s), period].sort((a, b) => a.start.localeCompare(b.start));
+      s.specialHours = (s.specialHours || []).filter((h) => h.date < start || h.date > end); // 休業にした日の特別営業時間は外す
+      s.updatedAt = U.nowIso();
+    });
+    const worked = active(data.shifts).filter((s) => s.storeId === storeId && s.date >= start && s.date <= end && (s.kind === 'work' || s.kind === 'business')).length;
+    return { period, worked };
+  }
+
+  function removeClosedPeriod(storeId, periodId) {
+    const store = findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    if (!closedPeriodsOf(store).some((p) => p.id === periodId)) throw new Error('臨時休業が見つかりませんでした。');
+    commit((d) => {
+      const s = d.stores.find((x) => x.id === storeId);
+      s.closedPeriods = closedPeriodsOf(s).filter((p) => p.id !== periodId);
+      s.updatedAt = U.nowIso();
+    });
+  }
+
+  // ---- カレンダーから：日付ごと・曜日ごとに休業にする／戻す ----
+  // 休業の日は closedPeriods（続いた日は1つの期間）にまとめて持つ。日付で足し引きしたあと、続いた日をつなぎ直す
+
+  function addDaysStr(date, n) {
+    const t = new Date(`${date}T00:00:00Z`);
+    t.setUTCDate(t.getUTCDate() + n);
+    return t.toISOString().slice(0, 10);
+  }
+
+  // 期間の一覧 → 日付ごとのメモ（Map：日付 → メモ）
+  function closedDayMap(store) {
+    const days = new Map();
+    for (const p of closedPeriodsOf(store)) {
+      for (let d = p.start; d <= p.end; d = addDaysStr(d, 1)) days.set(d, p.note || '');
+    }
+    return days;
+  }
+
+  // 日付ごとのメモ → 期間の一覧（続いた日で、メモが同じものを1つにまとめる）
+  function periodsFromDays(days, oldList) {
+    const dates = [...days.keys()].sort();
+    const list = [];
+    for (const d of dates) {
+      const last = list[list.length - 1];
+      if (last && addDaysStr(last.end, 1) === d && last.note === days.get(d)) last.end = d;
+      else list.push({ start: d, end: d, note: days.get(d) });
+    }
+    // 前と同じ期間は、id をそのまま使う
+    return list.map((p) => {
+      const same = oldList.find((o) => o.start === p.start && o.end === p.end && (o.note || '') === p.note);
+      return { id: same ? same.id : U.uuid(), ...p };
+    });
+  }
+
+  function workedOn(storeId, dates) {
+    const set = new Set(dates);
+    return active(data.shifts).filter((x) => x.storeId === storeId && set.has(x.date) && (x.kind === 'work' || x.kind === 'business')).length;
+  }
+
+  // dates を休業にする（on）／戻す（off）。休業にした日の特別営業時間は外す。戻り値：入力済みの勤務の件数（休業にした日だけ）
+  function setClosedDays(storeId, dates, on, note = '') {
+    const store = findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    if (!dates.length || dates.some((d) => !U.isValidDate(d))) throw new Error('日付が正しくありません。');
+    const memo = cleanText(note, { label: 'メモ', max: 20, required: false });
+    const days = closedDayMap(store);
+    for (const d of dates) {
+      if (on) days.set(d, days.has(d) ? days.get(d) : memo);
+      else days.delete(d);
+    }
+    const list = periodsFromDays(days, closedPeriodsOf(store));
+    if (list.length > MAX_CLOSED_PERIODS) throw new Error(`臨時休業は${MAX_CLOSED_PERIODS}件までです。古いものを削除してください。`);
+    const dateSet = new Set(dates);
+    commit((d) => {
+      const s = d.stores.find((x) => x.id === storeId);
+      s.closedPeriods = list;
+      if (on) s.specialHours = (s.specialHours || []).filter((h) => !dateSet.has(h.date));
+      s.updatedAt = U.nowIso();
+    });
+    return { worked: on ? workedOn(storeId, dates) : 0 };
+  }
+
+  // その日を休業に／戻す（カレンダーの日付）
+  function setClosedDay(storeId, date, on, note = '') {
+    return setClosedDays(storeId, [date], on, note);
+  }
+
+  // その月のその曜日を、すべて休業に／戻す（カレンダーの曜日）。毎週の定休日・第○週の定休日の日は対象にしない
+  function setClosedWeekdayInMonth(storeId, month, weekday, on) {
+    const store = findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    if (!/^\d{4}-\d{2}$/.test(month) || !Number.isInteger(weekday) || weekday < 0 || weekday > 6) throw new Error('月・曜日が正しくありません。');
+    const plain = { ...store, closedPeriods: [] };
+    const dates = K.calc.monthDates(month).filter((d) => K.calc.weekdayOf(d) === weekday && !K.calc.isStoreClosed(plain, d));
+    if (!dates.length) return { worked: 0, count: 0 };
+    return { ...setClosedDays(storeId, dates, on), count: dates.length };
+  }
+
+  // ---- 曜日ごとの営業時間・特別営業時間 ----
+  // store.weekHours：{ "0"〜"6": { open, close } }（入れた曜日だけ。ない曜日は store.open〜store.close）
+  // store.specialHours：[{ id, date, open, close, note }]（その日だけ。くり返さない）
+  function checkHours(open, close) {
+    if (!U.isValidTime(open) || !U.isValidTime(close)) throw new Error('営業時間が正しくありません。');
+    if (U.toMinutes(open) >= U.toMinutes(close)) throw new Error('閉店時刻は開店時刻より後にしてください。');
+  }
+
+  // 7曜日分をまとめて保存する。hours：{ "0"〜"6": { open, close } }。store.open〜close と同じ曜日も、そのまま持つ
+  function setWeekHours(storeId, hours) {
+    findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    const clean = {};
+    for (let w = 0; w < 7; w += 1) {
+      const h = hours && hours[String(w)];
+      if (!h) continue;
+      checkHours(h.open, h.close);
+      clean[String(w)] = { open: h.open, close: h.close };
+    }
+    commit((d) => {
+      const s = d.stores.find((x) => x.id === storeId);
+      s.weekHours = clean;
+      s.updatedAt = U.nowIso();
+    });
+  }
+
+  // その日の特別営業時間を入れる（休業の日なら、休業を外す）。同じ日があれば書き換える
+  function setSpecialHours(storeId, date, fields) {
+    const store = findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    if (!U.isValidDate(date)) throw new Error('日付が正しくありません。');
+    checkHours(fields && fields.open, fields && fields.close);
+    const note = cleanText((fields && fields.note) || '', { label: 'メモ', max: 20, required: false });
+    const list = (store.specialHours || []).filter((h) => h.date !== date);
+    if (list.length >= MAX_SPECIAL_HOURS) throw new Error(`特別営業時間は${MAX_SPECIAL_HOURS}件までです。古いものを削除してください。`);
+    const old = (store.specialHours || []).find((h) => h.date === date);
+    const item = { id: old ? old.id : U.uuid(), date, open: fields.open, close: fields.close, note };
+    const days = closedDayMap(store);
+    const wasClosed = days.delete(date);
+    commit((d) => {
+      const s = d.stores.find((x) => x.id === storeId);
+      s.specialHours = [...list, item].sort((a, b) => a.date.localeCompare(b.date));
+      if (wasClosed) s.closedPeriods = periodsFromDays(days, closedPeriodsOf(s));
+      s.updatedAt = U.nowIso();
+    });
+    return item;
+  }
+
+  function removeSpecialHours(storeId, date) {
+    const store = findActive(data.stores, storeId, '店舗が見つかりませんでした。');
+    if (!(store.specialHours || []).some((h) => h.date === date)) throw new Error('特別営業時間が見つかりませんでした。');
+    commit((d) => {
+      const s = d.stores.find((x) => x.id === storeId);
+      s.specialHours = (s.specialHours || []).filter((h) => h.date !== date);
+      s.updatedAt = U.nowIso();
+    });
+  }
+
   // ---- 勤務パターン ----
 
   // 勤務パターンは「全店舗共通」（storeId なし。以前からのパターンはすべてこれ）か「その店舗専用」（storeId あり）
@@ -1770,6 +1947,13 @@
     restoreStore,
     moveStore,
     updateStore,
+    addClosedPeriod,
+    removeClosedPeriod,
+    setClosedDay,
+    setClosedWeekdayInMonth,
+    setWeekHours,
+    setSpecialHours,
+    removeSpecialHours,
     getPatterns,
     comparePatterns,
     movePattern,

@@ -513,11 +513,11 @@
     return { wishRequests, wishCounts, paidRequests, changeRequests, quotas, logs };
   }
 
-  // 幹部：全店舗の確定シフトの写しを、指定した月の分だけ読む（作成中のシフトは読めない）
-  async function loadAllPublishedRosters(months) {
-    const { fsMod, db } = await load();
-    const snap = await fsMod.getDocs(fsMod.query(fsMod.collection(db, 'publishedRosters'), fsMod.where('month', 'in', months)));
-    return snap.docs.map((d) => d.data());
+  // 幹部：担当店舗の確定シフトの写しを、店舗ごと・指定した月の分だけ読む（作成中のシフトは読めない）
+  // ルールで担当店舗の分だけを許しているので、店舗で絞らずにまとめて読むと、読み込み全体が断られる
+  async function loadManagerPublishedRosters(storeIds, months) {
+    const lists = await Promise.all(storeIds.map((storeId) => loadPublishedRosters(storeId, months)));
+    return lists.flat();
   }
 
   async function isEmpty() {
@@ -561,7 +561,7 @@
     submitNoWish,
     decideRequest,
     changePaidDateLogged,
-    loadAllPublishedRosters,
+    loadManagerPublishedRosters,
     loadManagerContext,
     loadManagerRequests,
     addChangeRequest,

@@ -25,7 +25,8 @@
         // 対応中の欠勤・休暇は、もとのマス（勤務・休み。もともと空欄なら空欄）で入れる
         if (s && s.absence && s.absence.status !== 'settled') s = s.absence.planned ? { kind: s.absence.planned.kind, patternId: s.absence.planned.patternId } : null;
         if (!s) {
-          if (closed) cells[m.id] = { k: 'closed' };
+          // 臨時休業の日は t に「休業」を入れる（定休日は今までどおり t なし）
+          if (closed) cells[m.id] = K.calc.closedPeriodOf(store, date) ? { k: 'closed', t: '休業' } : { k: 'closed' };
           continue;
         }
         if (s.kind === 'work' || s.kind === 'business') {
@@ -36,7 +37,10 @@
           cells[m.id] = { k: 'off' };
         }
       }
-      return { date, closed, holiday: K.holidays.holidayName(date) || '', cells };
+      // 特別営業時間の日は、時間とメモを入れる（スタッフ・幹部の確定シフトに出す）
+      const h = K.calc.hoursOf(store, date);
+      const special = !closed && h.special ? { hours: `${U.formatTime(h.open)}〜${U.formatTime(h.close)}${h.note ? ` ${h.note}` : ''}` } : {};
+      return { date, closed, holiday: K.holidays.holidayName(date) || '', ...special, cells };
     });
     return {
       id: `${storeId}_${month}`,

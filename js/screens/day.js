@@ -607,8 +607,8 @@
       el(
         'p',
         { class: 'day-summary' },
-        `${store.name}　営業 ${U.formatTime(store.open)}〜${U.formatTime(store.close)}`,
-        closed ? el('span', { class: 'day-summary__closed' }, '定休日') : null,
+        `${store.name}　${K.calc.hoursOf(store, date).special ? '特別営業' : '営業'} ${U.formatTime(K.calc.hoursOf(store, date).open)}〜${U.formatTime(K.calc.hoursOf(store, date).close)}${K.calc.hoursOf(store, date).note ? `（${K.calc.hoursOf(store, date).note}）` : ''}`,
+        closed ? el('span', { class: 'day-summary__closed' }, K.calc.closedPeriodOf(store, date) ? `臨時休業${K.calc.closedPeriodOf(store, date).note ? `（${K.calc.closedPeriodOf(store, date).note}）` : ''}` : '定休日') : null,
         el('span', { class: 'day-summary__closed' }, K.staffingUI.DAY_TYPE_LABELS[result.info.dayType]),
         result.info.holiday ? el('span', { class: 'day-summary__holiday' }, result.info.holiday) : null,
         el('span', { class: 'day-summary__counts' }, `通常勤務 St ${n.stylist}・As ${n.assistant}・計 ${n.total}人`),

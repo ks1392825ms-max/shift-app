@@ -108,6 +108,24 @@
         Array.isArray(s.closedNthWeekdays) &&
         s.closedNthWeekdays.every((x) => x && isInt(x.weekday, 0, 6) && Array.isArray(x.weeks) && x.weeks.length && x.weeks.every((w) => isInt(w, 1, 5)));
       if (s.closedNthWeekdays !== undefined && !ok) delete s.closedNthWeekdays;
+      // 曜日ごとの営業時間・特別営業時間：形の正しいものだけ残す
+      const hoursOk = (h) => h && isTime(h.open) && isTime(h.close) && h.open < h.close;
+      if (s.weekHours !== undefined) {
+        s.weekHours = s.weekHours && typeof s.weekHours === 'object' && !Array.isArray(s.weekHours)
+          ? Object.fromEntries(Object.entries(s.weekHours).filter(([w, h]) => /^[0-6]$/.test(w) && hoursOk(h)).map(([w, h]) => [w, { open: h.open, close: h.close }]))
+          : {};
+      }
+      if (s.specialHours !== undefined) {
+        s.specialHours = Array.isArray(s.specialHours)
+          ? s.specialHours.filter((h) => h && isId(h.id) && U.isValidDate(h.date) && hoursOk(h) && (h.note === undefined || (typeof h.note === 'string' && h.note.length <= 20)))
+          : [];
+      }
+      // 臨時休業（期間）：形の正しいものだけ残す
+      if (s.closedPeriods !== undefined) {
+        s.closedPeriods = Array.isArray(s.closedPeriods)
+          ? s.closedPeriods.filter((p) => p && isId(p.id) && U.isValidDate(p.start) && U.isValidDate(p.end) && p.start <= p.end && (p.note === undefined || (typeof p.note === 'string' && p.note.length <= 20)))
+          : [];
+      }
     }
     for (const p of data.shiftPatterns) {
       if (p.dayType !== undefined && p.dayType !== null && !['weekday', 'holiday'].includes(p.dayType)) p.dayType = null;

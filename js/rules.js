@@ -16,6 +16,7 @@
     ['fixedOff', '固定休'],
     ['workDay', '勤務曜日外'],
     ['otherStore', '他店舗と重複'],
+    ['outsideHours', '営業時間外'],
     ['weeklyOff', '週休'],
     ['earlyZero', '早番0人'],
     ['slotRepeat', '早早・遅遅'],
@@ -248,6 +249,20 @@
             message: `${member.name}さん　${U.WEEKDAYS[w]}曜は${store.name}で働く曜日ではありません`,
           });
           addCell(member.id, date, '勤務曜日外');
+        }
+        // 休業の日・営業時間（曜日ごと・特別の時間を入れた日）の外の勤務は、知らせるだけ（勤務は変えない）
+        const sh = map.get(`${member.id}|${date}`);
+        if (K.calc.closedPeriodOf(store, date)) {
+          result.issues.push({ type: 'outsideHours', date, staffId: member.id, message: `${member.name}さん　臨時休業の日に勤務が入っています` });
+          addCell(member.id, date, '臨時休業の日');
+        } else {
+          const hours = K.calc.hoursOf(store, date);
+          const pat = sh && sh.patternId ? K.storage.getPattern(sh.patternId) : null;
+          if (hours.explicit && pat && (U.toMinutes(pat.start) < U.toMinutes(hours.open) || U.toMinutes(pat.end) > U.toMinutes(hours.close))) {
+            const label = `${U.formatTime(hours.open)}〜${U.formatTime(hours.close)}`;
+            result.issues.push({ type: 'outsideHours', date, staffId: member.id, message: `${member.name}さん　営業時間（${label}）の外に勤務が入っています` });
+            addCell(member.id, date, '営業時間外');
+          }
         }
         if (otherWork.has(date)) {
           const other = K.storage.getStore(otherWork.get(date));
