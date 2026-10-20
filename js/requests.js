@@ -1,11 +1,14 @@
 // 希望休・有給希望（共有モードだけで使う）
-// データは Firestore に置く（この端末には保存しない）：
-//   settings/requests             { defaultLimit（希望休の初期の上限）, openDay（受付開始日＝25） }
-//   requestQuotas/{スタッフID_月}  { staffId, storeId, month, limit, note }  スタッフ別・月別の上限（夏休みなど）
-//   wishOffs/{スタッフID_月}       { staffId, storeId, month, dates: [日付…], updatedAt, updatedBy }
-//   paidRequests/{スタッフID_日付_回数} { staffId, storeId, month, date, status: pending/approved/rejected, note, … }
-//                                  同じ日は3回まで。2回目・3回目は、前の回が却下のときだけ（Firestore のルールでも止めている）
+// データは Firestore に置く（この端末には保存しない）。記録の形は js/records.js：
+//   settings/requests              { defaultLimit（希望休の初期の上限）, openDay（受付開始日＝25） }  オーナーだけが変える
+//   requestQuotas/{スタッフID_月}   { staffId, storeId, month, limit, note }  スタッフ別・月別の上限（夏休みなど）
+//   wishRequests/{スタッフID_日付}  希望休（1日ごと）：status＝pending（申請中）/ approved（承認）/ rejected（却下・理由つき）
+//   wishCounts/{スタッフID_月}      希望休の日数（月の上限を Firestore のルールで確かめるため）
+//   paidRequests/{スタッフID_日付_回数} 有給希望：status と判断の項目。同じ日は3回まで（2回目・3回目は前の回が却下のときだけ）
+//   changeRequests/{種類_記録_回数}  変更申請（承認済みの希望休・有給の取り消し・日付の変更）。承認されたら、オーナーがシフト表に反映する
+//   decisionLogs/…                  判断の履歴（誰が・いつ・どう変えたか）。追加するだけ
 // 受付は日本時間の毎月25日〜月末に、翌月分。Firestore のルールでも同じ期間・上限で止めている。
+// 希望休も有給も、承認されたものだけが AIシフト作成で休み（有給）になる。承認済みの申請は、スタッフは消せない（変更申請）。
 // 読み書きは backend（K.cloud。テストでは偽物）を通す。
 (function () {
   'use strict';
@@ -14,14 +17,15 @@
 
   const DEFAULTS = { defaultLimit: 2, openDay: 25 };
   const MAX_LIMIT = 31;
-  const STATUS_LABELS = { pending: '申請中', approved: '承認済み', rejected: '却下' };
+  const STATUS_LABELS = { pending: '申請中', approved: '承認済み', rejected: '却下', cancelled: '取り消し済み' };
+  const CHANGE_TYPE_LABELS = { cancel: '取り消し', move: '日付の変更' };
   const MAX_PAID_ATTEMPTS = 3; // 同じ日の有給希望は3回まで（却下のあとに出し直す分を含む）
 
   let backend = null;
   let clock = () => new Date(); // テストでは日付を固定する
 
   // 管理者が受け取っている申請データ（シフト表の「希」の印などに使う）
-  const admin = { settings: null, wishOffs: [], paidRequests: [], quotas: [] };
+  const admin = { settings: null, wishRequests: [], wishCounts: [], paidRequests: [], changeRequests: [], quotas: [], logs: [] };
 
   function attach(b) {
     backend = b;
@@ -106,14 +110,69 @@
 
   // ---- スタッフ ----
 
-  async function saveWishOffs({ staffId, storeId, month, dates, limit, store, email }) {
+  // 希望休を送る：選んだ日（draft）と、送信済みの希望休（saved：1日ごとの記録）を比べて、足す日・消す日を決める
+  // 承認済みの日は外せない（変更申請）。却下の日は draft に入れず、removeWish で消してから出し直す
+  // 上限は、送信済みの日数（却下を含む）で数える（Firestore のルールの wishCounts と同じ）
+  async function saveWishes({ staffId, storeId, month, draft, saved, limit, store, email }) {
     requireOpen(month);
-    if (dates.length > limit) throw new Error(limitMessage(limit));
-    for (const d of dates) {
+    const savedList = saved || [];
+    const want = new Set(draft);
+    const missingApproved = savedList.filter((w) => w.status === 'approved' && !want.has(w.date));
+    if (missingApproved.length) throw new Error(`承認済みの希望休（${missingApproved.map((w) => shortMd(w.date)).join('・')}）は、ここでは外せません。変更が必要なときは変更申請をしてください。`);
+    const has = new Map(savedList.map((w) => [w.date, w]));
+    const toRemove = savedList.filter((w) => w.status === 'pending' && !want.has(w.date));
+    const toAdd = [...want].filter((d) => !has.has(d)).sort();
+    if (savedList.length - toRemove.length + toAdd.length > limit) throw new Error(limitMessage(limit));
+    for (const d of toAdd) {
       const err = checkDate(store, month, d);
       if (err) throw new Error(err);
     }
-    await requireBackend().saveWishOff({ staffId, storeId, month, dates: [...new Set(dates)].sort(), email });
+    const b = requireBackend();
+    for (const w of toRemove) await b.removeWishRequest({ staffId, storeId, date: w.date, email });
+    for (const d of toAdd) await b.addWishRequest({ staffId, storeId, date: d, email });
+    if (!savedList.length && !toAdd.length) await b.submitNoWish({ staffId, storeId, month, email }); // 「希望なし」で送信
+    return { added: toAdd.length, removed: toRemove.length };
+  }
+
+  // 申請中・却下の希望休を1日消す（却下のあと、ほかの日を出し直すため）。承認済みは消せない
+  async function removeWish(wish, { email }) {
+    requireOpen(wish.month);
+    if (wish.status === 'approved') throw new Error('承認済みの希望休は消せません。変更が必要なときは変更申請をしてください。');
+    await requireBackend().removeWishRequest({ staffId: wish.staffId, storeId: wish.storeId, date: wish.date, email });
+  }
+
+  // ---- 変更申請（承認済みの希望休・有給の取り消し・日付の変更） ----
+  // existing：その人のその月の変更申請。同じ対象に、申請中・承認済み（反映前）のものがあれば出せない
+  async function requestChange({ kind, target, type, newDate, note, store, email, existing }) {
+    if (!target || target.status !== 'approved') throw new Error('変更申請は、承認済みの希望休・有給にだけ出せます。');
+    if (type === 'move') {
+      if (!U.isValidDate(newDate) || newDate.slice(0, 7) !== target.month) throw new Error(`${monthLabel(target.month)}の日付を選んでください。`);
+      if (newDate === target.date) throw new Error('今と同じ日付です。');
+      if (store && K.calc.isStoreClosed(store, newDate)) throw new Error('定休日は選べません。');
+    }
+    const mine = (existing || []).filter((c) => c.kind === kind && c.targetId === target.id);
+    if (mine.some((c) => c.status === 'pending' || (c.status === 'approved' && !c.reflectedAt))) throw new Error('この申請には、すでに変更申請を出しています。');
+    const used = new Set(mine.map((c) => c.id));
+    let attempt = 1;
+    while (used.has(K.records.changeId(kind, target.id, attempt))) attempt += 1;
+    if (attempt > K.records.MAX_CHANGE_ATTEMPTS) throw new Error(`同じ申請への変更申請は${K.records.MAX_CHANGE_ATTEMPTS}回までです。オーナーに相談してください。`);
+    const change = K.records.newChange({ kind, target, type, newDate, note, email, now: U.nowIso(), attempt });
+    await requireBackend().addChangeRequest(change);
+    return change.id;
+  }
+
+  async function withdrawChange(change) {
+    if (change.status !== 'pending') throw new Error('申請中の変更申請だけ取り下げられます。');
+    await requireBackend().withdrawChangeRequest(change.id);
+  }
+
+  function changeText(c) {
+    const what = c.kind === 'wish' ? '希望休' : '有給';
+    return c.type === 'move' ? `${what} ${shortMd(c.date)} → ${shortMd(c.newDate)} に日付の変更` : `${what} ${shortMd(c.date)} の取り消し`;
+  }
+
+  function shortMd(date) {
+    return `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
   }
 
   async function requestPaid({ staffId, storeId, month, date, note, store, email, existing }) {
@@ -139,23 +198,41 @@
 
   function setAdminData(d) {
     admin.settings = d.settings || null;
-    admin.wishOffs = d.wishOffs || [];
+    admin.wishRequests = d.wishRequests || [];
+    admin.wishCounts = d.wishCounts || [];
     admin.paidRequests = d.paidRequests || [];
+    admin.changeRequests = d.changeRequests || [];
     admin.quotas = d.quotas || [];
+    admin.logs = d.logs || [];
   }
 
   function clearAdminData() {
     setAdminData({});
   }
 
+  const byDate = (a, b) => a.date.localeCompare(b.date) || (a.createdAt || '').localeCompare(b.createdAt || '');
+
+  // 希望休（1日ごと）の一覧
+  function adminWishes({ month, storeId, staffId } = {}) {
+    return admin.wishRequests
+      .filter((w) => (!month || w.month === month) && (!storeId || w.storeId === storeId) && (!staffId || w.staffId === staffId))
+      .sort(byDate);
+  }
+
+  // 承認済みの希望休の日付（AIシフト作成で休みにする日）
   function adminWishDates(staffId, month) {
-    const w = admin.wishOffs.find((x) => x.staffId === staffId && x.month === month);
-    return w ? [...w.dates] : [];
+    return adminWishes({ month, staffId }).filter((w) => w.status === 'approved').map((w) => w.date);
+  }
+
+  // その日の希望休の状態（なければ null）。シフト表の印に使う
+  function adminWishStatus(staffId, date) {
+    const w = admin.wishRequests.find((x) => x.staffId === staffId && x.date === date);
+    return w ? w.status : null;
   }
 
   // 希望休を一度でも送信したか（0日で送信した「希望なし」も含む）
   function adminHasWish(staffId, month) {
-    return admin.wishOffs.some((x) => x.staffId === staffId && x.month === month);
+    return admin.wishCounts.some((c) => c.staffId === staffId && c.month === month) || admin.wishRequests.some((w) => w.staffId === staffId && w.month === month);
   }
 
   function adminSettings() {
@@ -171,9 +248,74 @@
   }
 
   function adminPaid({ month, storeId } = {}) {
-    return admin.paidRequests
-      .filter((r) => (!month || r.month === month) && (!storeId || r.storeId === storeId))
-      .sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || '').localeCompare(b.createdAt || ''));
+    return admin.paidRequests.filter((r) => (!month || r.month === month) && (!storeId || r.storeId === storeId)).sort(byDate);
+  }
+
+  // 承認済みの有給の日付（AIシフト作成で「有給」を入れる日）
+  function adminApprovedPaidDates(staffId, month) {
+    return admin.paidRequests.filter((r) => r.staffId === staffId && r.month === month && r.status === 'approved').map((r) => r.date);
+  }
+
+  // 変更申請の一覧（対象の月で絞る）
+  function adminChanges({ month, storeId } = {}) {
+    return admin.changeRequests.filter((c) => (!month || c.month === month) && (!storeId || c.storeId === storeId)).sort(byDate);
+  }
+
+  // 承認された変更申請を、シフト表に反映する（オーナーだけ）
+  //   シフト表：元の日の「休み／有給」を空欄に戻す（取り消し・日付の変更）。日付の変更なら、新しい日に「休み／有給」を入れる
+  //   申請の記録：元の申請を「取り消し済み」にし、日付の変更なら新しい日の承認済みの記録を作る。変更申請に反映の印（どれも履歴が残る）
+  // 確定済みの月は、先に「確定を取り消す」が必要（シフト表を変えるため）
+  async function reflectChange(change, { email, confirmOverwrite }) {
+    if (change.status !== 'approved') throw new Error('承認された変更申請だけ反映できます。');
+    if (change.reflectedAt) throw new Error('この変更申請は、すでに反映しています。');
+    const list = change.kind === 'wish' ? admin.wishRequests : admin.paidRequests;
+    const target = list.find((x) => x.id === change.targetId);
+    if (!target || target.status !== 'approved') throw new Error('対象の申請が承認済みではないため、反映できません（すでに変えられた可能性があります）。');
+    const { staffId, storeId, date } = change;
+    if (K.storage.getPublication(storeId, change.month)) {
+      throw new Error(`${Number(change.month.slice(5))}月のシフトは確定済みです。反映するときは、シフト表の「確定を取り消す」を押してから行ってください。`);
+    }
+    const cellKind = change.kind === 'wish' ? 'off' : 'paid';
+    let newTarget = null;
+    if (change.type === 'move') {
+      const ex = K.storage.getShift(staffId, change.newDate, storeId);
+      if (ex && ex.kind !== cellKind) {
+        const kinds = { work: '通常勤務', off: '通常休', paid: '有給', business: '社用' };
+        if (!confirmOverwrite(`${shortMd(change.newDate)}には「${kinds[ex.kind] || ex.kind}」が入っています。${cellKind === 'off' ? '休み' : '有給'}に変えますか？`)) return false;
+      }
+      if (change.kind === 'wish') {
+        const id = K.records.wishId(staffId, change.newDate);
+        if (admin.wishRequests.some((w) => w.id === id)) throw new Error(`${shortMd(change.newDate)}の希望休の記録がすでにあります。先にその記録を確かめてください。`);
+        newTarget = { id, data: { ...K.records.newWish({ staffId, storeId, date: change.newDate, email, now: U.nowIso() }), status: 'approved', reason: '', fromChange: change.id } };
+      } else {
+        let attempt = 1;
+        while (admin.paidRequests.some((p) => p.id === `${staffId}_${change.newDate}_${attempt}`)) attempt += 1;
+        newTarget = {
+          id: `${staffId}_${change.newDate}_${attempt}`,
+          data: { staffId, storeId, month: change.month, date: change.newDate, status: 'approved', note: target.note || '', reason: '', originalDate: date, createdAt: U.nowIso(), updatedAt: U.nowIso(), createdBy: email, fromChange: change.id },
+        };
+      }
+    }
+    // シフト表（確定済みでないことは上で確かめた）
+    const old = K.storage.getShift(staffId, date, storeId);
+    if (old && (old.kind === 'off' || old.kind === 'paid')) K.storage.clearShift(staffId, date);
+    if (change.type === 'move') K.storage.setShift(staffId, change.newDate, { kind: cellKind, storeId });
+    await requireBackend().reflectChangeRequest({ change, target, newTarget, email });
+    return true;
+  }
+
+  // 申請中の件数（AIシフト作成のお知らせ・確定の前の確認に使う）
+  function pendingCounts(storeId, month) {
+    return {
+      wishes: adminWishes({ month, storeId }).filter((w) => w.status === 'pending').length,
+      paid: adminPaid({ month, storeId }).filter((r) => r.status === 'pending').length,
+      changes: adminChanges({ month, storeId }).filter((c) => c.status === 'pending').length,
+    };
+  }
+
+  // 判断の履歴（新しい順）
+  function adminLogs({ month, storeId } = {}) {
+    return admin.logs.filter((l) => (!month || l.month === month) && (!storeId || l.storeId === storeId)).sort((a, b) => (b.at || '').localeCompare(a.at || ''));
   }
 
   async function setDefaultLimit(value, email) {
@@ -202,70 +344,52 @@
     });
   }
 
-  // 有給を承認する：申請を「承認済み」にして、シフト表のその日に「有給」を入れる
-  // 既存のシフトがある日は、confirmOverwrite() が true のときだけ上書きする
-  async function approvePaid(request, { email, confirmOverwrite }) {
-    if (request.status !== 'pending') throw new Error('申請中のものだけ承認できます。');
-    const existing = K.storage.getShift(request.staffId, request.date, request.storeId);
-    if (existing && existing.kind !== 'paid') {
-      const kinds = { work: '通常勤務', off: '通常休', business: '社用' };
-      if (!confirmOverwrite(`この日はすでに「${kinds[existing.kind] || existing.kind}」が入っています。有給に変えますか？`)) return false;
+  // 判断する（承認・却下・申請中に戻す）。kind は 'wish'（希望休）か 'paid'（有給）。却下は理由が必須（50文字以内）
+  // シフト表は変えない（承認済みの分は、AIシフト作成で空いているマスに入る。確定の前にオーナーが確かめる）
+  // role：'owner'（全店舗・いつでも）/ 'manager'（段階③。担当店舗・受付期間だけ）
+  async function decide(kind, record, { status, reason, email, role = 'owner' }) {
+    if (role === 'manager') {
+      const w = requestWindow();
+      if (!w.open || record.month !== w.month) throw new Error('幹部が判断できるのは、受付期間（25日〜月末）の翌月分だけです。');
     }
-    if (!existing || existing.kind !== 'paid') K.storage.setShift(request.staffId, request.date, { kind: 'paid', storeId: request.storeId });
-    await requireBackend().adminUpdate('paidRequests', request.id, { status: 'approved', decidedAt: U.nowIso(), decidedBy: email || '', updatedAt: U.nowIso() });
+    K.records.cleanReason(status, reason); // 理由の確認（画面にすぐ知らせるため。ルールでも確かめる）
+    return requireBackend().decideRequest(kind, record, { status, reason, email, role });
+  }
+
+  // 有給の日付を変える（オーナーだけ・申請中のものだけ。元の日付も残し、履歴を残す）
+  async function changePaidDate(request, newDate, { email, store }) {
+    if (request.status !== 'pending') throw new Error('申請中のものだけ日付を変えられます。');
+    if (!U.isValidDate(newDate)) throw new Error('日付が正しくありません。');
+    if (store && K.calc.isStoreClosed(store, newDate)) throw new Error('定休日は選べません。');
+    if (newDate === request.date) return false;
+    await requireBackend().changePaidDateLogged(request, newDate, email || '');
     return true;
   }
 
-  async function rejectPaid(request, { email }) {
-    if (request.status !== 'pending') throw new Error('申請中のものだけ却下できます。');
-    await requireBackend().adminUpdate('paidRequests', request.id, { status: 'rejected', decidedAt: U.nowIso(), decidedBy: email || '', updatedAt: U.nowIso() });
+  // 確定の前に確かめること：申請中のまま・承認済みなのにシフト表が違う
+  function unresolved(storeId, month) {
+    const wishes = adminWishes({ month, storeId });
+    const paid = adminPaid({ month, storeId });
+    const shiftOf = (r) => K.storage.getShift(r.staffId, r.date, storeId);
+    return {
+      pendingWishes: wishes.filter((w) => w.status === 'pending'),
+      pendingPaid: paid.filter((r) => r.status === 'pending'),
+      wishConflicts: wishes.filter((w) => w.status === 'approved' && shiftOf(w) && ['work', 'business'].includes(shiftOf(w).kind)),
+      paidConflicts: paid.filter((r) => r.status === 'approved' && (!shiftOf(r) || shiftOf(r).kind !== 'paid')),
+      pendingChanges: adminChanges({ month, storeId }).filter((c) => c.status === 'pending'),
+      unreflectedChanges: adminChanges({ month, storeId }).filter((c) => c.status === 'approved' && !c.reflectedAt),
+    };
   }
 
-  // 日付を変える（申請中のものだけ。元の日付も残す）
-  // ---- 土日祝の休み：店長の許可が必要 ----
-  // 土日祝（土曜・日曜・祝日）の希望休は、店長が許可するまで休みにしない（AIシフト作成でも勤務の候補のまま）。
-  // 許可したかどうかは、シフト表のその日で表す：休み（通常休・有給）＝許可済み、勤務＝不許可（出勤）、空欄＝承認待ち
-
+  // 土日祝か（スタッフの画面の案内に使う）
   function needsApproval(date) {
     const w = K.calc.weekdayOf(date);
     return w === 0 || w === 6 || Boolean(K.holidays.holidayName(date));
   }
 
-  function holidayWishStatus(staffId, date, storeId) {
-    const s = K.storage.getShift(staffId, date, storeId);
-    if (!s) return 'pending';
-    return s.kind === 'off' || s.kind === 'paid' ? 'approved' : 'rejected';
-  }
-
-  // 許可する：シフト表のその日に「通常休」を入れる。勤務が入っている日は、confirmOverwrite() が true のときだけ変える
-  function approveHolidayOff({ staffId, date, storeId, confirmOverwrite }) {
-    if (!needsApproval(date)) throw new Error('土日祝の日だけ許可できます。');
-    const existing = K.storage.getShift(staffId, date, storeId);
-    if (existing && (existing.kind === 'off' || existing.kind === 'paid')) throw new Error('この日は、すでに休みが入っています。');
-    if (existing) {
-      const kinds = { work: '通常勤務', business: '社用' };
-      if (!confirmOverwrite(`この日はすでに「${kinds[existing.kind] || existing.kind}」が入っています。休みに変えますか？`)) return false;
-    }
-    K.storage.setShift(staffId, date, { kind: 'off', storeId });
-    return true;
-  }
-
-  async function changePaidDate(request, newDate, { email, store }) {
-    if (request.status !== 'pending') throw new Error('申請中のものだけ日付を変えられます。');
-    if (!U.isValidDate(newDate)) throw new Error('日付が正しくありません。');
-    if (store && K.calc.isStoreClosed(store, newDate)) throw new Error('定休日は選べません。');
-    if (newDate === request.date) return;
-    await requireBackend().adminUpdate('paidRequests', request.id, {
-      date: newDate,
-      month: newDate.slice(0, 7),
-      originalDate: request.originalDate || request.date,
-      updatedAt: U.nowIso(),
-      changedBy: email || '',
-    });
-  }
-
   K.requests = {
     STATUS_LABELS,
+    CHANGE_TYPE_LABELS,
     attach,
     setClock,
     todayJst,
@@ -277,24 +401,33 @@
     limitMessage,
     toggleWish,
     checkDate,
-    saveWishOffs,
+    saveWishes,
+    removeWish,
     requestPaid,
     withdrawPaid,
+    requestChange,
+    withdrawChange,
+    changeText,
+    adminChanges,
+    reflectChange,
     setAdminData,
     clearAdminData,
+    adminWishes,
     adminWishDates,
+    adminWishStatus,
     adminHasWish,
     adminSettings,
     adminQuota,
     adminLimit,
     adminPaid,
+    adminApprovedPaidDates,
+    pendingCounts,
+    adminLogs,
     setDefaultLimit,
     setQuota,
-    approvePaid,
-    needsApproval,
-    holidayWishStatus,
-    approveHolidayOff,
-    rejectPaid,
+    decide,
     changePaidDate,
+    unresolved,
+    needsApproval,
   };
 })();

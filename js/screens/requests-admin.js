@@ -1,4 +1,4 @@
-// 管理者の「申請」タブ：希望休一覧（土日祝の休みの許可を含む）・有給申請一覧（承認・却下・日付変更）・希望休の上限
+// オーナーの「申請」タブ：希望休一覧・有給申請一覧（どちらも承認・却下・申請中に戻す。有給は日付の変更も）・判断の履歴・希望休の上限
 // 表示する店舗は、画面上部で選んだ店舗。共有モードでログインしたときだけ使える
 (function () {
   'use strict';
@@ -42,43 +42,58 @@
     K.app.rerender();
   }
 
-  // ---- 土日祝の休み（店長の許可が必要） ----
-  const HOLIDAY_STATUS = { pending: '承認待ち', approved: '許可済み', rejected: '不許可（出勤）' };
+  // ---- 判断（承認・却下・申請中に戻す） ----
+  const ROLE_LABELS = { owner: 'オーナー', manager: '幹部' };
 
-  function holidayWishCell(m, store, dates) {
-    const list = dates.filter((d) => R().needsApproval(d));
-    if (!list.length) return el('td', { class: 'is-left' }, '—');
-    return el(
-      'td',
-      { class: 'is-left' },
+  function decidedText(r) {
+    if (!r.decidedBy) return null;
+    const at = r.decidedAt ? `${Number(r.decidedAt.slice(5, 7))}/${Number(r.decidedAt.slice(8, 10))}` : '';
+    return `${ROLE_LABELS[r.decidedRole] || ''} ${r.decidedBy} ${at}`.trim();
+  }
+
+  // 却下の理由を聞く（必須・50文字以内。スタッフにも表示される）。やめたら null
+  function askReason() {
+    const reason = window.prompt('却下の理由を入れてください（50文字以内・スタッフにも表示されます）', '');
+    if (reason === null) return null;
+    return reason;
+  }
+
+  function decideButtons(kind, r, who) {
+    if (r.status === 'cancelled') return []; // 取り消し済み（変更申請の反映済み）は、もう判断しない
+    const act = (status, label) =>
       el(
-        'ul',
-        { class: 'req-holiday-list' },
-        list.map((date) => {
-          const status = R().holidayWishStatus(m.id, date, store.id);
-          return el(
-            'li',
-            { class: 'req-holiday-item' },
-            el('span', null, shortDate(date)),
-            el('span', { class: `req-status req-status--${status}` }, HOLIDAY_STATUS[status]),
-            status === 'pending'
-              ? el(
-                  'button',
-                  {
-                    type: 'button',
-                    class: 'btn btn--primary btn--small',
-                    onclick: () =>
-                      run(
-                        () => R().approveHolidayOff({ staffId: m.id, date, storeId: store.id, confirmOverwrite: (text) => window.confirm(text) }),
-                        `${m.name}さんの${shortDate(date)}の休みを許可しました。シフト表に「休み」を入れました。`
-                      ),
-                  },
-                  '許可'
-                )
-              : null
-          );
-        })
-      )
+        'button',
+        {
+          type: 'button',
+          class: `btn btn--small ${status === 'approved' ? 'btn--primary' : 'btn--ghost'}`,
+          onclick: () => {
+            let reason = '';
+            if (status === 'rejected') {
+              reason = askReason();
+              if (reason === null) return;
+            }
+            const done = { approved: '承認しました。', rejected: '却下しました。', pending: '申請中に戻しました。' }[status];
+            run(() => R().decide(kind, r, { status, reason, email: email(), role: 'owner' }), `${who}さんの${shortDate(r.date)}を${done}`);
+          },
+        },
+        label
+      );
+    return [
+      r.status !== 'approved' ? act('approved', '承認') : null,
+      r.status !== 'rejected' ? act('rejected', '却下') : null,
+      r.status !== 'pending' ? act('pending', '申請中に戻す') : null,
+    ].filter(Boolean);
+  }
+
+  function decisionLine(kind, r, who) {
+    return el(
+      'li',
+      { class: 'req-holiday-item req-decision' },
+      el('span', null, shortDate(r.date)),
+      el('span', { class: `req-status req-status--${r.status}` }, R().STATUS_LABELS[r.status] || r.status),
+      decidedText(r) ? el('span', { class: 'req-decision__by' }, decidedText(r)) : null,
+      ...decideButtons(kind, r, who),
+      r.status === 'rejected' && r.reason ? el('span', { class: 'req-reason' }, `理由：${r.reason}`) : null
     );
   }
 
@@ -87,37 +102,46 @@
     const staff = K.storage.getStaff({ storeId: store.id });
     if (!staff.length) return el('p', { class: 'empty-row' }, `${store.name}のスタッフがいません。`);
     const rows = staff.map((m) => {
-      const dates = R().adminWishDates(m.id, month);
+      const list = R().adminWishes({ month, staffId: m.id });
       const limit = R().adminLimit(m.id, month);
       return el(
         'tr',
         null,
         el('th', { scope: 'row', class: 'is-left' }, m.name, m.title ? el('span', { class: 'title-badge' }, ` ${m.title}`) : null),
-        el('td', { class: 'is-left' }, dates.length ? dates.map(shortDate).join('・') : hasWishDoc(m.id) ? '希望なし' : el('span', { class: 'req-unsent' }, '未提出')),
-        el('td', null, `${dates.length}／${limit}日`),
-        holidayWishCell(m, store, dates)
+        el(
+          'td',
+          { class: 'is-left' },
+          list.length
+            ? el('ul', { class: 'req-holiday-list' }, list.map((w) => decisionLine('wish', w, m.name)))
+            : R().adminHasWish(m.id, month)
+              ? '希望なし'
+              : el('span', { class: 'req-unsent' }, '未提出')
+        ),
+        el('td', null, `${list.length}／${limit}日`)
       );
     });
+    const pend = R().pendingCounts(store.id, month);
     return el(
       'div',
       { class: 'table-wrap' },
-      el('p', { class: 'hint hint--left' }, '土日祝は原則出勤です。土日祝の希望休は、「許可」を押すまで休みになりません（AIシフト作成でも出勤として扱います）。許可すると、シフト表のその日に「休み」が入ります。'),
+      el(
+        'p',
+        { class: 'hint hint--left' },
+        `希望休は、平日・土日祝とも、承認したものだけが AIシフト作成で休みになります（申請中 ${pend.wishes}件）。却下には理由が必要で、スタッフにも表示されます。判断はいつでも変えられ、履歴に残ります。`
+      ),
       el(
         'table',
         { class: 'data-table req-table' },
-        el('thead', null, el('tr', null, el('th', { scope: 'col', class: 'is-left' }, 'スタッフ'), el('th', { scope: 'col', class: 'is-left' }, '希望休'), el('th', { scope: 'col' }, '日数／上限'), el('th', { scope: 'col', class: 'is-left' }, '土日祝の休み（許可が必要）'))),
+        el('thead', null, el('tr', null, el('th', { scope: 'col', class: 'is-left' }, 'スタッフ'), el('th', { scope: 'col', class: 'is-left' }, '希望休と判断'), el('th', { scope: 'col' }, '日数／上限'))),
         el('tbody', null, rows)
       )
     );
   }
 
-  function hasWishDoc(staffId) {
-    return R().adminHasWish(staffId, month);
-  }
-
   // ---- 有給申請一覧 ----
   function paidRow(r, store) {
     const member = K.storage.getStaffMember(r.staffId);
+    const who = member ? member.name : '（不明なスタッフ）';
     const dateInput = el('input', { type: 'date', class: 'field__input req-date-input', value: r.date, 'aria-label': '変更する日付' });
     return el(
       'li',
@@ -125,35 +149,27 @@
       el(
         'div',
         { class: 'req-paid-row__main' },
-        el('span', { class: 'req-paid-row__name' }, member ? member.name : '（不明なスタッフ）'),
+        el('span', { class: 'req-paid-row__name' }, who),
         el('span', null, shortDate(r.date)),
         r.originalDate ? el('span', { class: 'detail-item__note' }, `（${shortDate(r.originalDate)}から変更）`) : null,
         el('span', { class: `req-status req-status--${r.status}` }, R().STATUS_LABELS[r.status] || r.status),
-        r.note ? el('span', { class: 'detail-item__note' }, `理由：${r.note}`) : null
+        decidedText(r) ? el('span', { class: 'req-decision__by' }, decidedText(r)) : null,
+        r.note ? el('span', { class: 'detail-item__note' }, `備考：${r.note}`) : null,
+        r.status === 'rejected' && r.reason ? el('span', { class: 'req-reason' }, `却下の理由：${r.reason}`) : null
       ),
-      r.status === 'pending'
-        ? el(
-            'div',
-            { class: 'req-paid-row__actions' },
-            el(
-              'button',
-              {
-                type: 'button',
-                class: 'btn btn--primary btn--small',
-                onclick: () =>
-                  run(() => R().approvePaid(r, { email: email(), confirmOverwrite: (text) => window.confirm(text) }), `${member ? member.name : ''}さんの${shortDate(r.date)}の有給を承認しました。シフト表に「有給」を入れました。`),
-              },
-              '承認'
-            ),
-            el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: () => run(() => R().rejectPaid(r, { email: email() }), '却下しました。') }, '却下'),
-            dateInput,
-            el(
+      el(
+        'div',
+        { class: 'req-paid-row__actions' },
+        ...decideButtons('paid', r, who),
+        r.status === 'pending' ? dateInput : null,
+        r.status === 'pending'
+          ? el(
               'button',
               { type: 'button', class: 'btn btn--ghost btn--small', onclick: () => run(() => R().changePaidDate(r, dateInput.value, { email: email(), store }), '日付を変更しました。') },
               '日付を変更'
             )
-          )
-        : null
+          : null
+      )
     );
   }
 
@@ -166,7 +182,95 @@
         ? el('section', { class: 'req-group' }, el('h3', { class: 'card__title card__title--section' }, `${title}（${items.length}件）`), el('ul', { class: 'req-paid-list' }, items.map((r) => paidRow(r, store))))
         : null;
     };
-    return el('div', null, [group('pending', '申請中'), group('approved', '承認済み有給'), group('rejected', '却下')].filter(Boolean));
+    return el(
+      'div',
+      null,
+      el('p', { class: 'hint hint--left' }, '承認した有給は、AIシフト作成で空いているマスに「有給」として入ります（入力済みのマスは変えません）。確定の前に、食い違いがないか確かめる案内が出ます。'),
+      ...[group('pending', '申請中'), group('approved', '承認済み有給'), group('rejected', '却下')].filter(Boolean)
+    );
+  }
+
+  // ---- 変更申請（承認済みの希望休・有給の取り消し・日付の変更） ----
+  function changeView(store) {
+    const list = R().adminChanges({ month, storeId: store.id });
+    const head = el('p', { class: 'hint hint--left' }, '承認済みの希望休・有給について、スタッフが出した取り消し・日付の変更の申請です。承認したあと「シフト表に反映」を押すと、シフト表のマスを直し、元の申請を「取り消し済み」にします（日付の変更なら、新しい日の承認済みの申請を作ります）。確定済みの月は、先に「確定を取り消す」が必要です。');
+    if (!list.length) return el('div', null, head, el('p', { class: 'empty-row' }, `${R().monthLabel(month)}の変更申請はありません。`));
+    return el(
+      'div',
+      null,
+      head,
+      el(
+        'ul',
+        { class: 'req-paid-list' },
+        list.map((c) => {
+          const member = K.storage.getStaffMember(c.staffId);
+          const who = member ? member.name : '（不明なスタッフ）';
+          return el(
+            'li',
+            { class: 'req-paid-row req-change-row', 'data-id': c.id },
+            el(
+              'div',
+              { class: 'req-paid-row__main' },
+              el('span', { class: 'req-paid-row__name' }, who),
+              el('span', null, R().changeText(c)),
+              el('span', { class: `req-status req-status--${c.status}` }, R().STATUS_LABELS[c.status] || c.status),
+              decidedText(c) ? el('span', { class: 'req-decision__by' }, decidedText(c)) : null,
+              c.note ? el('span', { class: 'detail-item__note' }, `理由：${c.note}`) : null,
+              c.status === 'rejected' && c.reason ? el('span', { class: 'req-reason' }, `却下の理由：${c.reason}`) : null,
+              c.reflectedAt ? el('span', { class: 'req-decision__by' }, `反映済み：${c.reflectedBy} ${Number(c.reflectedAt.slice(5, 7))}/${Number(c.reflectedAt.slice(8, 10))}`) : null
+            ),
+            el(
+              'div',
+              { class: 'req-paid-row__actions' },
+              ...(c.reflectedAt ? [] : decideButtons('change', c, who)),
+              c.status === 'approved' && !c.reflectedAt
+                ? el(
+                    'button',
+                    {
+                      type: 'button',
+                      class: 'btn btn--primary btn--small',
+                      onclick: () =>
+                        run(() => R().reflectChange(c, { email: email(), confirmOverwrite: (text) => window.confirm(text) }), `${who}さんの変更申請をシフト表に反映しました。`),
+                    },
+                    'シフト表に反映'
+                  )
+                : null
+            )
+          );
+        })
+      )
+    );
+  }
+
+  // ---- 判断の履歴 ----
+  const STATUS_SHORT = { pending: '申請中', approved: '承認', rejected: '却下', cancelled: '取り消し済み', '': '（新規）' };
+
+  function logView(store) {
+    const logs = R().adminLogs({ month, storeId: store.id });
+    if (!logs.length) return el('p', { class: 'empty-row' }, `${R().monthLabel(month)}の判断の履歴はありません。`);
+    return el(
+      'div',
+      null,
+      el('p', { class: 'hint hint--left' }, '誰が・いつ・どの申請を・どう判断したかの記録です。履歴は書き換え・削除できません。'),
+      el(
+        'ul',
+        { class: 'req-log-list' },
+        logs.map((l) => {
+          const member = K.storage.getStaffMember(l.staffId);
+          const at = l.at ? `${Number(l.at.slice(5, 7))}/${Number(l.at.slice(8, 10))} ${new Date(l.at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}` : '';
+          const change = l.from === l.to ? l.note || '変更' : `${STATUS_SHORT[l.from] || l.from} → ${STATUS_SHORT[l.to] || l.to}`;
+          return el(
+            'li',
+            { class: 'req-log-item' },
+            el('span', { class: 'req-log-item__time' }, at),
+            ' ',
+            `${member ? member.name : '（不明なスタッフ）'}　${{ wish: '希望休', paid: '有給', change: '変更申請' }[l.kind] || ''} ${l.date ? shortDate(l.date) : ''}　${change}`,
+            el('span', { class: 'req-decision__by' }, `　${ROLE_LABELS[l.role] || ''} ${l.by}`),
+            l.reason ? el('span', { class: 'req-reason' }, `理由：${l.reason}`) : null
+          );
+        })
+      )
+    );
   }
 
   // ---- 希望休の上限 ----
@@ -237,6 +341,8 @@
       [
         ['wish', '希望休一覧'],
         ['paid', '有給申請一覧'],
+        ['change', '変更申請'],
+        ['log', '判断の履歴'],
         ['limit', '希望休の上限'],
       ].map(([key, label]) =>
         el(
@@ -253,6 +359,8 @@
             },
           },
           label,
+          key === 'change' && R().pendingCounts(store.id, month).changes ? el('span', { class: 'req-badge' }, String(R().pendingCounts(store.id, month).changes)) : null,
+          key === 'wish' && R().pendingCounts(store.id, month).wishes ? el('span', { class: 'req-badge' }, String(R().pendingCounts(store.id, month).wishes)) : null,
           key === 'paid' && R().adminPaid({ month, storeId: store.id }).some((r) => r.status === 'pending')
             ? el('span', { class: 'req-badge' }, String(R().adminPaid({ month, storeId: store.id }).filter((r) => r.status === 'pending').length))
             : null
@@ -277,7 +385,7 @@
       el('p', { class: 'hint' }, w.open ? `${R().monthLabel(w.month)}分の申請を受付中です（今月末まで）。` : `${R().monthLabel(w.month)}分の申請は、${Number(w.opensOn.slice(5, 7))}月25日から受け付けます。`),
       tabs,
       message ? el('p', { class: message.ok ? 'sync__result' : 'form-error', role: 'status' }, message.text) : null,
-      tab === 'wish' ? wishView(store) : tab === 'paid' ? paidView(store) : limitView(store),
+      tab === 'wish' ? wishView(store) : tab === 'paid' ? paidView(store) : tab === 'change' ? changeView(store) : tab === 'log' ? logView(store) : limitView(store),
     ];
     container.append(...parts.filter(Boolean));
   }

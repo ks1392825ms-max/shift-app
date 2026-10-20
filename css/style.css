@@ -3714,6 +3714,20 @@ body.is-gate .bottom-nav {
   font-weight: 700;
 }
 
+/* 変更申請の入力欄（押した行のすぐ下） */
+.req-change-row {
+  display: block;
+  padding: 4px 12px 12px;
+}
+
+.req-change-row .req-paid-form {
+  margin-top: 4px;
+}
+
+.req-change-form [hidden] {
+  display: none !important;
+}
+
 .req-status {
   padding: 1px 8px;
   border: 1px solid var(--border);
@@ -3732,6 +3746,73 @@ body.is-gate .bottom-nav {
 .req-status--rejected {
   color: var(--text-muted);
   border-style: dashed;
+}
+
+/* 希望休の承認制（段階②）：申請中は点線・塗りなし、却下は薄く */
+.cell.has-wish.is-wish-pending {
+  outline-style: dotted;
+}
+
+.cell.has-wish.is-wish-pending .cell__wish {
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.req-day.is-wish.is-wish-pending {
+  border: 2px dashed var(--accent);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.req-day.is-wish.is-wish-pending .req-day__num {
+  color: var(--text);
+}
+
+.req-day.is-wish-rejected .req-day__mark {
+  color: var(--text-muted);
+}
+
+.req-reason {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.req-decision {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.req-decision__by {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.req-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.req-log-item {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.req-log-item__time {
+  color: var(--text-muted);
+  font-size: 0.72rem;
 }
 
 /* 土日祝の休み（店長の許可が必要）：希望休一覧の欄 */

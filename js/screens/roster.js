@@ -52,10 +52,12 @@
       c.label += '（休憩・社用時間あり）';
     }
     // スタッフが出した希望休の日（共有モードのとき）。シフトのデータは変えず、印を付けるだけ
-    const wish = K.storage.isCloud() && K.requests.adminWishDates(member.id, date.slice(0, 7)).includes(date);
+    // 承認済み＝「希」、申請中＝「希?」（却下は印なし）
+    const wishStatus = K.storage.isCloud() ? K.requests.adminWishStatus(member.id, date) : null;
+    const wish = wishStatus === 'approved' || wishStatus === 'pending';
     if (wish) {
-      c.cls += ' has-wish';
-      c.label += '（希望休）';
+      c.cls += ` has-wish${wishStatus === 'pending' ? ' is-wish-pending' : ''}`;
+      c.label += wishStatus === 'pending' ? '（希望休：申請中）' : '（希望休：承認済み）';
     }
     // 当日の欠勤・休暇（急な休み）：右上に「急」の印。対応中は点線の枠
     const absence = shift && shift.absence;
@@ -85,7 +87,7 @@
           title: issues ? issues.join('、') : null,
         },
         c.text,
-        wish ? el('span', { class: 'cell__wish', 'aria-hidden': 'true' }, '希') : null,
+        wish ? el('span', { class: 'cell__wish', 'aria-hidden': 'true' }, wishStatus === 'pending' ? '希?' : '希') : null,
         absence ? el('span', { class: 'cell__absence', 'aria-hidden': 'true' }, '急') : null
       )
     );
@@ -837,7 +839,7 @@
     const monthLabel = `${Number(view.month.slice(5))}月`;
     const blank = view.check.blank;
     const note = view.check.total || blank ? `\n（注意：チェックの注意 ${view.check.total}件・未入力のスタッフ ${blank}人があります）` : '';
-    if (!window.confirm(`${view.store.name}の${monthLabel}のシフトを確定しますか？\n確定すると、「確定を取り消す」を押すまで変更できません。${note}`)) return;
+    if (!window.confirm(`${view.store.name}の${monthLabel}のシフトを確定しますか？\n確定すると、「確定を取り消す」を押すまで変更できません。${note}${requestNote()}`)) return;
     const { id: storeId } = view.store;
     const month = view.month;
     try {
@@ -852,6 +854,22 @@
       .publish(storeId, month)
       .then((done) => K.app.toast(done ? 'シフトを確定しました（スタッフの画面にも表示されます）' : 'シフトを確定しました'))
       .catch((err) => K.app.toast(`確定しました。ただしスタッフへの公開に失敗しました（${err.message}）。もう一度「確定を取り消す」→「シフトを確定」を試してください`));
+  }
+
+  // 確定の前に、オーナーが確かめること（共有モードのとき）：申請中のまま・承認済みなのにシフト表が違う
+  function requestNote() {
+    if (!K.storage.isCloud()) return '';
+    const u = K.requests.unresolved(view.store.id, view.month);
+    const name = (id) => (K.storage.getStaffMember(id) || {}).name || '（不明なスタッフ）';
+    const md = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+    const lines = [];
+    if (u.pendingWishes.length) lines.push(`・申請中の希望休 ${u.pendingWishes.length}件（${u.pendingWishes.map((w) => `${name(w.staffId)} ${md(w.date)}`).join('、')}）`);
+    if (u.pendingPaid.length) lines.push(`・申請中の有給 ${u.pendingPaid.length}件（${u.pendingPaid.map((r) => `${name(r.staffId)} ${md(r.date)}`).join('、')}）`);
+    if (u.wishConflicts.length) lines.push(`・承認済みの希望休なのに勤務 ${u.wishConflicts.length}件（${u.wishConflicts.map((w) => `${name(w.staffId)} ${md(w.date)}`).join('、')}）`);
+    if (u.pendingChanges.length) lines.push(`・申請中の変更申請 ${u.pendingChanges.length}件（${u.pendingChanges.map((c) => `${name(c.staffId)} ${K.requests.changeText(c)}`).join('、')}）`);
+    if (u.unreflectedChanges.length) lines.push(`・承認済みで、シフト表にまだ反映していない変更申請 ${u.unreflectedChanges.length}件（${u.unreflectedChanges.map((c) => `${name(c.staffId)} ${K.requests.changeText(c)}`).join('、')}）`);
+    if (u.paidConflicts.length) lines.push(`・承認済みの有給なのにシフト表が「有給」でない ${u.paidConflicts.length}件（${u.paidConflicts.map((r) => `${name(r.staffId)} ${md(r.date)}`).join('、')}）`);
+    return lines.length ? `\n\n【申請の確認】\n${lines.join('\n')}` : '\n\n【申請の確認】申請中・食い違いはありません。';
   }
 
   function unconfirmShift() {

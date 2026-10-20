@@ -19,8 +19,8 @@
       ctx: null, // { stores, staff, settings }
       storeId: null,
       staffId: null,
-      data: null, // { wish, paid, quota }
-      draft: [], // 送信前の希望休
+      data: null, // { wishes（1日ごと）, count, paid, quota }
+      draft: [], // 選んでいる希望休（送信済みの申請中・承認済みと、まだ送っていない日。却下の日は入れない）
       mode: 'wish', // wish / paid
       paidDate: null, // 有給希望で選んだ日
       message: null, // { ok, text }
@@ -28,6 +28,9 @@
       tab: 'requests', // requests（休み希望）/ roster（確定シフト）
       pub: null, // 確定シフト：{ staffId, loading, rosters, myPaid, month, error }
       onlyMine: false,
+      changeFor: null, // 変更申請の入力中：{ kind: 'wish' / 'paid', targetId }
+      scrollToChange: false, // 変更申請の入力欄を開いた直後（画面を動かす）
+      thisData: null, // 今月の申請（変更申請のため。受付中の月と同じなら data と同じ）
     };
     load();
   }
@@ -64,7 +67,8 @@
     if (rerender) K.app.rerender();
     try {
       view.data = await backend().loadMyRequests(member.id, R().requestWindow().month);
-      view.draft = view.data.wish ? [...view.data.wish.dates] : [];
+      view.thisData = await loadThisMonth(member.id);
+      view.draft = activeDates();
     } catch (err) {
       view.message = { ok: false, text: `申請を読み込めませんでした（${err.message}）` };
     }
@@ -73,8 +77,44 @@
 
   async function reloadRequests(text) {
     view.data = await backend().loadMyRequests(view.staffId, R().requestWindow().month);
-    view.draft = view.data.wish ? [...view.data.wish.dates] : [];
+    view.thisData = await loadThisMonth(view.staffId);
+    view.draft = activeDates();
     show(true, text);
+  }
+
+  // 今月の申請（受付中の月と違うときだけ読む）
+  async function loadThisMonth(staffId) {
+    const thisMonth = R().todayJst().slice(0, 7);
+    return thisMonth === R().requestWindow().month ? null : backend().loadMyRequests(staffId, thisMonth);
+  }
+
+  // 変更申請の対象になりうる記録（今月と、受付中の月）
+  function allData() {
+    return [view.data, view.thisData].filter(Boolean);
+  }
+
+  // 送信済みの希望休（1日ごと）
+  function savedWishes() {
+    return view.data ? view.data.wishes || [] : [];
+  }
+
+  // 送信済みのうち、申請中・承認済みの日（却下の日は除く）
+  function activeDates() {
+    return savedWishes().filter((w) => w.status === 'pending' || w.status === 'approved').map((w) => w.date).sort();
+  }
+
+  function wishOn(date) {
+    return savedWishes().find((w) => w.date === date) || null;
+  }
+
+  // 選べる残りの日数：上限から、却下のまま残っている日を引く（却下の日は、消すと空く）
+  function wishLimit() {
+    return R().limitFor(view.ctx.settings, view.data && view.data.quota);
+  }
+
+  // 上限に数える、選べない日（却下・取り消し済み）
+  function rejectedCount() {
+    return savedWishes().filter((w) => w.status === 'rejected' || w.status === 'cancelled').length;
   }
 
   function current() {
@@ -136,15 +176,20 @@
       const closed = store && K.calc.isStoreClosed(store, date);
       const holiday = K.holidays.holidayName(date);
       const wish = view.draft.includes(date);
+      const saved = wishOn(date);
+      const wishState = wish ? (saved ? saved.status : 'draft') : saved && saved.status === 'rejected' ? 'rejected' : null;
       const paid = paidByDate.get(date);
       const classes = ['req-day'];
       if (w === 0 || holiday) classes.push('is-sun');
       else if (w === 6) classes.push('is-sat');
       if (closed) classes.push('is-closed');
       if (wish) classes.push('is-wish');
+      if (wishState === 'pending' || wishState === 'draft') classes.push('is-wish-pending');
+      if (wishState === 'rejected') classes.push('is-wish-rejected');
       if (paid) classes.push(`is-paid is-paid--${paid.status}`);
       if (view.paidDate === date) classes.push('is-picked');
-      const marks = [wish ? '希望休' : null, paid ? `有給${paid.status === 'pending' ? '（申請中）' : paid.status === 'approved' ? '（承認）' : '（却下）'}` : null, closed ? '定休日' : null].filter(Boolean);
+      const wishLabel = { draft: '希望休（まだ送信していない）', pending: '希望休（申請中）', approved: '希望休（承認）', rejected: '希望休（却下）' }[wishState];
+      const marks = [wishLabel || null, paid ? `有給${paid.status === 'pending' ? '（申請中）' : paid.status === 'approved' ? '（承認）' : '（却下）'}` : null, closed ? '定休日' : null].filter(Boolean);
       cells.push(
         el(
           'button',
@@ -158,7 +203,7 @@
             onclick: () => onDay(date),
           },
           el('span', { class: 'req-day__num' }, String(Number(date.slice(8, 10)))),
-          el('span', { class: 'req-day__mark' }, wish ? '希' : paid ? (paid.status === 'approved' ? '有' : paid.status === 'pending' ? '有?' : '×') : closed ? '休' : '')
+          el('span', { class: 'req-day__mark' }, wishState === 'approved' ? '希' : wishState === 'pending' || wishState === 'draft' ? '希?' : wishState === 'rejected' ? '×' : paid ? (paid.status === 'approved' ? '有' : paid.status === 'pending' ? '有?' : '×') : closed ? '休' : '')
         )
       );
     }
@@ -173,12 +218,25 @@
         show(false, 'この日は有給希望を出しています。');
         return;
       }
-      const limit = R().limitFor(view.ctx.settings, view.data && view.data.quota);
-      const result = R().toggleWish(view.draft, date, limit);
+      const saved = wishOn(date);
+      if (saved && saved.status === 'approved') {
+        show(false, `${shortDate(date)}の希望休は承認済みのため、ここでは外せません。変更が必要なときは、下の「希望休の状況」の「変更申請」から申請してください。`);
+        return;
+      }
+      if (saved && saved.status === 'cancelled') {
+        show(false, `${shortDate(date)}の希望休は、変更申請で取り消し済みです。`);
+        return;
+      }
+      if (saved && saved.status === 'rejected') {
+        show(false, `${shortDate(date)}の希望休は却下されています（理由：${saved.reason || '—'}）。下の「希望休の状況」で消すと、上限の範囲で別の日を申請できます。`);
+        return;
+      }
+      const limit = wishLimit();
+      const result = R().toggleWish(view.draft, date, Math.max(0, limit - rejectedCount()));
       view.draft = result.dates;
-      if (result.error) view.message = { ok: false, text: result.error };
+      if (result.error) view.message = { ok: false, text: rejectedCount() ? `${R().limitMessage(limit)}（却下の日も、消すまでは日数に数えます）` : result.error };
       else if (result.dates.includes(date) && R().needsApproval(date)) {
-        view.message = { ok: true, text: `${shortDate(date)}は土日祝です。土日祝の休みは店長の許可が必要です（冠婚葬祭など、やむを得ない事情のとき）。許可されるまで休みは確定しません。年次有給休暇など、法令上の休暇の申出は、この限りではありません（有給は「有給希望」から申請してください）。` };
+        view.message = { ok: true, text: `${shortDate(date)}は土日祝です。土日祝は原則出勤のため、休みは店長・幹部の承認が必要です（冠婚葬祭など、やむを得ない事情のとき）。承認されるまで休みは確定しません。年次有給休暇など、法令上の休暇の申出は、この限りではありません（有給は「有給希望」から申請してください）。` };
       }
     } else {
       const err = R().checkDate(store, R().requestWindow().month, date);
@@ -195,17 +253,18 @@
     view.busy = true;
     K.app.rerender();
     try {
-      await R().saveWishOffs({
+      await R().saveWishes({
         staffId: member.id,
         storeId: member.storeId,
         month,
-        dates: view.draft,
-        limit: R().limitFor(view.ctx.settings, view.data && view.data.quota),
+        draft: view.draft,
+        saved: savedWishes(),
+        limit: wishLimit(),
         store,
         email: view.email,
       });
       view.busy = false;
-      await reloadRequests(view.draft.length ? '希望休を送信しました。' : '希望休をなしにして送信しました。');
+      await reloadRequests(view.draft.length ? '希望休を送信しました。店長・幹部が承認すると休みになります。' : '希望休をなしにして送信しました。');
     } catch (err) {
       view.busy = false;
       show(false, err.message);
@@ -232,6 +291,170 @@
       await reloadRequests('有給希望を申請しました。管理者が承認すると確定します。');
     } catch (err) {
       view.busy = false;
+      show(false, err.message);
+    }
+  }
+
+  // 却下された希望休を消す（上限の範囲で、別の日を申請し直せるようにする）
+  async function removeRejected(wish) {
+    if (!window.confirm(`却下された${shortDate(wish.date)}の希望休を消しますか？（消すと、上限の範囲で別の日を申請できます）`)) return;
+    try {
+      await R().removeWish(wish, { email: view.email });
+      await reloadRequests(`${shortDate(wish.date)}の希望休を消しました。`);
+    } catch (err) {
+      show(false, err.message);
+    }
+  }
+
+  // ---- 変更申請（承認済みの希望休・有給） ----
+  function isChanging(target) {
+    return !!view.changeFor && view.changeFor.targetId === target.id;
+  }
+
+  function openChange(kind, target) {
+    view.changeFor = isChanging(target) ? null : { kind, targetId: target.id };
+    view.scrollToChange = !!view.changeFor; // 開いたら、入力欄が見えるところまで動かす
+    view.message = null;
+    K.app.rerender();
+  }
+
+  function changeButton(kind, target) {
+    if (target.status !== 'approved') return null;
+    const open = isChanging(target);
+    return el('button', { type: 'button', class: 'text-btn text-btn--small', 'aria-expanded': open ? 'true' : 'false', onclick: () => openChange(kind, target) }, open ? '閉じる' : '変更申請');
+  }
+
+  // 一覧の1行と、変更申請の入力中ならそのすぐ下の入力欄（一覧の flatMap で使う）
+  function withChangeForm(kind, target, row) {
+    return [row, changeForm(kind, target)];
+  }
+
+  // 変更申請の入力欄：押した行のすぐ下に出す
+  function changeForm(kind, target) {
+    if (!isChanging(target) || view.changeFor.kind !== kind) return null;
+    const cf = view.changeFor;
+    const { store } = current();
+    const typeSelect = el(
+      'select',
+      { id: 'change-type', class: 'field__input field__input--short', 'aria-label': '変更の種類' },
+      el('option', { value: 'cancel' }, '取り消し'),
+      el('option', { value: 'move' }, '日付の変更')
+    );
+    const dates = K.calc.monthDates(target.month);
+    const dateInput = el('input', { id: 'change-date', type: 'date', class: 'field__input req-date-input', min: dates[0], max: dates[dates.length - 1], 'aria-label': '変更後の日付' });
+    const noteInput = el('input', { id: 'change-note', type: 'text', class: 'field__input', maxlength: '50', placeholder: '理由など（任意・50文字以内）' });
+    // 日付の欄は「日付の変更」のときだけ出す
+    const showDate = () => (dateInput.hidden = typeSelect.value !== 'move');
+    typeSelect.addEventListener('change', showDate);
+    showDate();
+    const send = async () => {
+      try {
+        await R().requestChange({
+          kind: cf.kind,
+          target,
+          type: typeSelect.value,
+          newDate: dateInput.value,
+          note: noteInput.value,
+          store,
+          email: view.email,
+          existing: allData().flatMap((d) => d.changes || []),
+        });
+        view.changeFor = null;
+        await reloadRequests('変更申請を出しました。店長・幹部が承認すると、オーナーがシフト表に反映します。');
+      } catch (err) {
+        show(false, err.message);
+      }
+    };
+    const form = el(
+      'div',
+      { class: 'req-paid-form req-change-form' },
+      el('p', { class: 'req-paid-form__date' }, `${cf.kind === 'wish' ? '希望休' : '有給'} ${shortDate(target.date)} の変更申請`),
+      el('div', { class: 'time-range' }, typeSelect, dateInput),
+      noteInput,
+      el('p', { class: 'hint hint--left' }, '「日付の変更」は、同じ月の日付を選んでください。承認されるまでは、今のまま（承認済み）です。'),
+      el(
+        'div',
+        { class: 'actions' },
+        el('button', { type: 'button', class: 'btn btn--primary', onclick: send }, '変更申請を送る'),
+        el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => openChange(cf.kind, target) }, 'やめる')
+      )
+    );
+    if (view.scrollToChange) {
+      view.scrollToChange = false;
+      setTimeout(() => {
+        if (!form.isConnected) return;
+        form.scrollIntoView({ block: 'nearest' });
+        typeSelect.focus({ preventScroll: true });
+      }, 0);
+    }
+    return el('li', { class: 'detail-item req-change-row' }, form);
+  }
+
+  // 今月（確定済みのことが多い）の承認済みの希望休・有給：変更申請だけ出せる
+  function thisMonthList() {
+    if (!view.thisData) return null;
+    const month = R().todayJst().slice(0, 7);
+    const items = [...(view.thisData.wishes || []).map((x) => ({ kind: 'wish', x })), ...(view.thisData.paid || []).map((x) => ({ kind: 'paid', x }))]
+      .filter((i) => i.x.status === 'approved')
+      .sort((a, b) => a.x.date.localeCompare(b.x.date));
+    return [
+      el('h3', { class: 'card__title card__title--section' }, `${R().monthLabel(month)}の承認済みの休み`),
+      items.length
+        ? el(
+            'ul',
+            { class: 'detail-list req-this-month' },
+            items.flatMap((i) =>
+              withChangeForm(
+                i.kind,
+                i.x,
+                el(
+                  'li',
+                  { class: 'detail-item' },
+                  el('span', { class: 'detail-item__text' }, `${i.kind === 'wish' ? '希望休' : '有給'} ${shortDate(i.x.date)}`),
+                  el('span', { class: 'req-status req-status--approved' }, R().STATUS_LABELS.approved),
+                  changeButton(i.kind, i.x)
+                )
+              )
+            )
+          )
+        : el('p', { class: 'empty-row' }, '承認済みの希望休・有給はありません。'),
+    ];
+  }
+
+  function changeList() {
+    const list = allData().flatMap((d) => d.changes || []).sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || '').localeCompare(b.createdAt || ''));
+    if (!list.length) return null;
+    return [
+      el('h3', { class: 'card__title card__title--section' }, '変更申請の状況'),
+      el(
+        'ul',
+        { class: 'detail-list req-change-list' },
+        list.map((c) =>
+          el(
+            'li',
+            { class: 'detail-item' },
+            el(
+              'span',
+              { class: 'detail-item__text' },
+              R().changeText(c),
+              c.note ? el('span', { class: 'detail-item__note' }, `（${c.note}）`) : null,
+              c.status === 'rejected' && c.reason ? el('span', { class: 'req-reason' }, `却下の理由：${c.reason}`) : null,
+              c.status === 'approved' ? el('span', { class: 'req-reason' }, c.reflectedAt ? 'シフト表に反映されました。' : '承認されました。オーナーがシフト表に反映します。') : null
+            ),
+            el('span', { class: `req-status req-status--${c.status}` }, R().STATUS_LABELS[c.status] || c.status),
+            c.status === 'pending' ? el('button', { type: 'button', class: 'text-btn text-btn--small', onclick: () => withdrawChangeReq(c) }, '取り下げ') : null
+          )
+        )
+      ),
+    ];
+  }
+
+  async function withdrawChangeReq(c) {
+    if (!window.confirm('この変更申請を取り下げますか？')) return;
+    try {
+      await R().withdrawChange(c);
+      await reloadRequests('変更申請を取り下げました。');
+    } catch (err) {
       show(false, err.message);
     }
   }
@@ -422,9 +645,10 @@
 
   function requestCard(member, store) {
     const w = R().requestWindow();
-    const limit = R().limitFor(view.ctx.settings, view.data && view.data.quota);
-    const saved = view.data && view.data.wish ? view.data.wish.dates : [];
-    const changed = JSON.stringify(saved) !== JSON.stringify(view.draft);
+    const limit = wishLimit();
+    const saved = activeDates();
+    const changed = JSON.stringify(saved) !== JSON.stringify([...view.draft].sort());
+    const used = view.draft.length + rejectedCount();
     const editable = w.open && !view.busy && Boolean(view.data);
 
     const modeSwitch = el(
@@ -467,11 +691,11 @@
         'p',
         { class: 'hint hint--left' },
         view.mode === 'wish'
-          ? `休みたい日を押してください。通常の希望休は${limit}日まで選べます（今 ${view.draft.length}／${limit}日）。土日祝は原則出勤です。土日祝の休みは店長の許可が必要で、許可されるまで確定しません。年次有給休暇など、法令上の休暇の申出は、この限りではありません（有給は「有給希望」から申請してください）。`
+          ? `休みたい日を押して「希望休を送信」を押してください。通常の希望休は${limit}日まで選べます（今 ${used}／${limit}日${rejectedCount() ? '・却下の日を含む' : ''}）。希望休は、店長・幹部が承認すると休みになります。土日祝は原則出勤です。年次有給休暇など、法令上の休暇の申出は、この限りではありません（有給は「有給希望」から申請してください）。`
           : '有給を希望する日を押して、「有給希望を申請」を押してください。管理者が承認すると確定します。'
       ),
       calendar(store, w.month, editable),
-      el('div', { class: 'req-legend' }, el('span', { class: 'req-legend__wish' }, '希＝希望休'), el('span', null, '有?＝有給（申請中）'), el('span', null, '有＝有給（承認済み）'), el('span', null, '休＝定休日')),
+      el('div', { class: 'req-legend' }, el('span', null, '希?＝希望休（申請中）'), el('span', { class: 'req-legend__wish' }, '希＝希望休（承認）'), el('span', null, '×＝却下'), el('span', null, '有?＝有給（申請中）'), el('span', null, '有＝有給（承認済み）'), el('span', null, '休＝定休日')),
       view.message ? el('p', { class: view.message.ok ? 'sync__result' : 'form-error', role: 'alert' }, view.message.text) : null,
       view.mode === 'wish'
         ? el(
@@ -489,22 +713,53 @@
               el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn--primary', disabled: !editable, onclick: () => sendPaid(noteInput) }, '有給希望を申請'))
             )
           : null,
+      el('h3', { class: 'card__title card__title--section' }, '希望休の状況'),
+      savedWishes().length
+        ? el(
+            'ul',
+            { class: 'detail-list' },
+            savedWishes()
+              .slice()
+              .sort((a, b) => a.date.localeCompare(b.date))
+              .flatMap((wsh) =>
+                withChangeForm(
+                  'wish',
+                  wsh,
+                  el(
+                    'li',
+                    { class: 'detail-item' },
+                    el('span', { class: 'detail-item__text' }, shortDate(wsh.date), wsh.status === 'rejected' && wsh.reason ? el('span', { class: 'req-reason' }, `却下の理由：${wsh.reason}`) : null),
+                    el('span', { class: `req-status req-status--${wsh.status}` }, R().STATUS_LABELS[wsh.status] || wsh.status),
+                    wsh.status === 'rejected' && w.open ? el('button', { type: 'button', class: 'text-btn text-btn--small', onclick: () => removeRejected(wsh) }, '消す') : null,
+                    changeButton('wish', wsh)
+                  )
+                )
+              )
+          )
+        : el('p', { class: 'empty-row' }, view.data && view.data.count ? '希望なしで送信済みです。' : 'まだ送信していません。'),
       el('h3', { class: 'card__title card__title--section' }, '有給希望の状況'),
       paidList.length
         ? el(
             'ul',
             { class: 'detail-list' },
-            paidList.map((r) =>
-              el(
-                'li',
-                { class: 'detail-item' },
-                el('span', { class: 'detail-item__text' }, shortDate(r.date), r.originalDate ? el('span', { class: 'detail-item__note' }, `（${shortDate(r.originalDate)}から変更）`) : null),
-                el('span', { class: `req-status req-status--${r.status}` }, R().STATUS_LABELS[r.status] || r.status),
-                r.status === 'pending' && w.open ? el('button', { type: 'button', class: 'text-btn text-btn--small', onclick: () => withdraw(r) }, '取り下げ') : null
+            paidList.flatMap((r) =>
+              withChangeForm(
+                'paid',
+                r,
+                el(
+                  'li',
+                  { class: 'detail-item' },
+                  el('span', { class: 'detail-item__text' }, shortDate(r.date), r.originalDate ? el('span', { class: 'detail-item__note' }, `（${shortDate(r.originalDate)}から変更）`) : null, r.status === 'rejected' && r.reason ? el('span', { class: 'req-reason' }, `却下の理由：${r.reason}`) : null),
+                  el('span', { class: `req-status req-status--${r.status}` }, R().STATUS_LABELS[r.status] || r.status),
+                  r.status === 'pending' && w.open ? el('button', { type: 'button', class: 'text-btn text-btn--small', onclick: () => withdraw(r) }, '取り下げ') : null,
+                  changeButton('paid', r)
+                )
               )
             )
           )
-        : el('p', { class: 'empty-row' }, 'まだ申請していません。')
+        : el('p', { class: 'empty-row' }, 'まだ申請していません。'),
+      ...(thisMonthList() || []),
+      ...(changeList() || [])
     );
   }
 
@@ -516,7 +771,13 @@
       { class: 'card req-card' },
       el('h2', { class: 'card__title' }, '希望休・有給の申請'),
       el('p', { class: 'hint hint--left' }, `${view.email} でログインしています。`),
-      el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => K.app.cloudActions.signOut() }, 'ログアウト'))
+      el(
+        'div',
+        { class: 'actions' },
+        // 幹部がスタッフも兼ねるときは、幹部の画面へ戻れる
+        params.manager ? el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => K.app.navigate('manager', { email: params.email, manager: params.manager, account: params.account }) }, '幹部の画面へ戻る') : null,
+        el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => K.app.cloudActions.signOut() }, 'ログアウト')
+      )
     );
 
     if (view.loading) {

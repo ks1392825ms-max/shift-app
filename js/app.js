@@ -4,10 +4,10 @@
   const K = window.ShiftApp;
   const U = K.utils;
 
-  const SCREEN_TITLES = { roster: 'シフト表', day: '1日の詳細', staff: 'スタッフ別', summary: '集計', settings: '設定', requests: '申請', login: '共有モード', request: '希望休・有給の申請' };
+  const SCREEN_TITLES = { roster: 'シフト表', day: '1日の詳細', staff: 'スタッフ別', summary: '集計', settings: '設定', requests: '申請', login: '共有モード', request: '希望休・有給の申請', manager: '幹部の画面' };
 
   // 下のタブで、どのタブを選択中にするか（1日の詳細はシフト表の中の画面）
-  const TAB_OF = { roster: 'roster', day: 'roster', staff: 'staff', summary: 'summary', settings: 'settings', requests: 'requests', login: null, request: null };
+  const TAB_OF = { roster: 'roster', day: 'roster', staff: 'staff', summary: 'summary', settings: 'settings', requests: 'requests', login: null, request: null, manager: null };
 
   // 表示中の店舗を、次に開いたときも同じにするための保存場所（シフトのデータとは別。消えても困らない）
   const UI_KEY = 'shift-app-ui';
@@ -96,8 +96,8 @@
     }
 
     // 共有モードの入口（ログインなど）では、店舗の切り替えと下のタブを隠す
-    // スタッフの申請画面（request）も、店舗の切り替えと下のタブを出さない
-    const gate = state.screen === 'login' || state.screen === 'request';
+    // スタッフの申請画面（request）・幹部の画面（manager）も、店舗の切り替えと下のタブを出さない
+    const gate = state.screen === 'login' || state.screen === 'request' || state.screen === 'manager';
     document.body.classList.toggle('is-gate', gate);
     renderModeBadge();
     if (!gate) renderStoreSwitch();
@@ -203,15 +203,23 @@
       return;
     }
     if (!admin) {
-      // 管理者でなければ、スタッフとして登録されているかを見る（スタッフは自分の情報と申請だけ）
+      // オーナーでなければ、幹部として登録されているか（managers）と、スタッフとして登録されているかを見る
+      // 幹部：担当店舗の申請の判断と、全店舗の確定シフトだけ。スタッフ：自分の情報と申請だけ
       let account = null;
+      let manager = null;
       try {
+        manager = cloud.backend.checkManager ? await cloud.backend.checkManager(user.email) : null;
         account = cloud.backend.checkStaff ? await cloud.backend.checkStaff(user.email) : null;
       } catch (err) {
         showGate('error', { message: `権限を確認できませんでした（${err.message}）` });
         return;
       }
-      if (account) {
+      if (manager) {
+        // 幹部の画面（スタッフとしても登録されていれば、そこから自分の申請の画面へ移れる）
+        state.screen = 'manager';
+        state.params = { email: user.email, manager, account };
+        render();
+      } else if (account) {
         // スタッフ：申請画面（本人の情報と申請だけを読み書きする）
         state.screen = 'request';
         state.params = { email: user.email, account };

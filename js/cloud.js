@@ -10,7 +10,8 @@
 //   completeLogin(email)        メールのリンクでログインを完了する
 //   checkAdmin()                管理者として登録されているか（ルールで読めるかどうかで判断）
 //   checkStaff(email)           スタッフとして登録されているか（staffAccounts に本人のメールがあるか）
-//   loadStaffContext / loadMyRequests / saveWishOff / addPaidRequest / withdrawPaidRequest   スタッフ本人の申請
+//   loadStaffContext / loadMyRequests / addWishRequest / removeWishRequest / submitNoWish / addPaidRequest / withdrawPaidRequest   スタッフ本人の申請
+//   decideRequest / changePaidDateLogged                                                    判断（承認・却下・申請中に戻す）と有給の日付の変更（履歴と一緒に）
 //   subscribeRequests / adminSet / adminUpdate / adminDelete                                 管理者の申請の受け取り・変更
 //   publishRoster / unpublishRoster / loadPublishedRosters                                確定シフトの公開用の写し
 //   subscribe(onData, onError)  共有データを受け取り続ける（変わるたびに onData）。戻り値で止められる
@@ -220,28 +221,18 @@
     };
   }
 
-  // 本人のその月の申請（希望休・有給希望・上限の変更）
+  // 本人のその月の申請（希望休＝1日ごと・希望休の日数・有給希望・上限の変更）
   async function loadMyRequests(staffId, month) {
     const { fsMod, db } = await load();
     const mine = (col) => fsMod.getDocs(fsMod.query(fsMod.collection(db, col), fsMod.where('staffId', '==', staffId), fsMod.where('month', '==', month)));
-    const [wish, paid, quota] = await Promise.all([mine('wishOffs'), mine('paidRequests'), mine('requestQuotas')]);
+    const [wishes, counts, paid, quota, changes] = await Promise.all([mine('wishRequests'), mine('wishCounts'), mine('paidRequests'), mine('requestQuotas'), mine('changeRequests')]);
     return {
-      wish: wish.docs.length ? wish.docs[0].data() : null,
+      changes: changes.docs.map((d) => ({ id: d.id, ...d.data() })),
+      wishes: wishes.docs.map((d) => ({ id: d.id, ...d.data() })),
+      count: counts.docs.length ? counts.docs[0].data() : null,
       paid: paid.docs.map((d) => ({ id: d.id, ...d.data() })),
       quota: quota.docs.length ? quota.docs[0].data() : null,
     };
-  }
-
-  async function saveWishOff({ staffId, storeId, month, dates, email }) {
-    const { fsMod, db } = await load();
-    await fsMod.setDoc(fsMod.doc(db, 'wishOffs', `${staffId}_${month}`), {
-      staffId,
-      storeId,
-      month,
-      dates,
-      updatedAt: new Date().toISOString(),
-      updatedBy: email || '',
-    });
   }
 
   // 記録の名前は「スタッフID_日付_回数」（回数は requests.js が決める）。
@@ -275,10 +266,10 @@
     await fsMod.deleteDoc(fsMod.doc(db, 'paidRequests', id));
   }
 
-  // ---- 希望休・有給（管理者）：全店舗の申請を受け取り続ける ----
+  // ---- 希望休・有給（オーナー）：全店舗の申請と判断の履歴を受け取り続ける ----
   function subscribeRequests(onData, onError) {
     const { fsMod, db } = fb;
-    const parts = { wishOffs: null, paidRequests: null, quotas: null, settings: undefined };
+    const parts = { wishRequests: null, wishCounts: null, paidRequests: null, changeRequests: null, quotas: null, logs: null, settings: undefined };
     let timer = null;
     const emit = () => {
       if (Object.values(parts).some((v) => v === null || v === undefined)) return;
@@ -296,9 +287,12 @@
         fail
       );
     const stops = [
-      listen('wishOffs', 'wishOffs'),
+      listen('wishRequests', 'wishRequests'),
+      listen('wishCounts', 'wishCounts'),
       listen('paidRequests', 'paidRequests'),
       listen('requestQuotas', 'quotas'),
+      listen('changeRequests', 'changeRequests'),
+      listen('decisionLogs', 'logs'),
       fsMod.onSnapshot(
         fsMod.doc(db, 'settings', 'requests'),
         (snap) => {
@@ -350,6 +344,182 @@
     return snap.docs.map((d) => d.data());
   }
 
+  // ---- 権限の作り直し（段階①の土台。画面からは段階②〜④で使う） ----
+  // 記録の形は js/records.js（Firestore のルールの試験と同じもの）で作る。
+
+  // 幹部かどうか：managers/{ログインしたメール} を読む（本人の分だけ読めるルール）。幹部なら { storeIds }、そうでなければ null
+  async function checkManager(email) {
+    const { fsMod, db } = await load();
+    try {
+      const snap = await fsMod.getDoc(fsMod.doc(db, 'managers', String(email || '').toLowerCase()));
+      if (!snap.exists()) return null;
+      const m = snap.data();
+      return m.deleted || !Array.isArray(m.storeIds) || !m.storeIds.length ? null : { storeIds: m.storeIds };
+    } catch (err) {
+      if (err && err.code === 'permission-denied') return null;
+      throw err;
+    }
+  }
+
+  // スタッフ：希望休を1日出す（希望休の記録と、月の日数を1つ増やすのを、1回の書き込みで）
+  async function addWishRequest({ staffId, storeId, date, email }) {
+    const { fsMod, db } = await load();
+    const R = K.records;
+    const month = date.slice(0, 7);
+    const countRef = fsMod.doc(db, 'wishCounts', R.countId(staffId, month));
+    const snap = await fsMod.getDoc(countRef);
+    const count = snap.exists() ? snap.data().count || 0 : 0;
+    const now = new Date().toISOString();
+    const batch = fsMod.writeBatch(db);
+    batch.set(fsMod.doc(db, 'wishRequests', R.wishId(staffId, date)), R.newWish({ staffId, storeId, date, email, now }));
+    batch.set(countRef, R.countDoc({ staffId, storeId, month, count: count + 1, lastDate: date, email, now }));
+    await batch.commit();
+  }
+
+  // スタッフ：申請中・却下の希望休を1日消す（月の日数を1つ減らすのと、1回の書き込みで）。承認済みはルールが断る
+  async function removeWishRequest({ staffId, storeId, date, email }) {
+    const { fsMod, db } = await load();
+    const R = K.records;
+    const month = date.slice(0, 7);
+    const countRef = fsMod.doc(db, 'wishCounts', R.countId(staffId, month));
+    const snap = await fsMod.getDoc(countRef);
+    const count = snap.exists() ? snap.data().count || 0 : 0;
+    const now = new Date().toISOString();
+    const batch = fsMod.writeBatch(db);
+    batch.delete(fsMod.doc(db, 'wishRequests', R.wishId(staffId, date)));
+    batch.set(countRef, R.countDoc({ staffId, storeId, month, count: Math.max(0, count - 1), lastDate: date, email, now }));
+    await batch.commit();
+  }
+
+  // スタッフ：「希望なし」を送る（日数は変えずに、送信した印だけを残す）
+  async function submitNoWish({ staffId, storeId, month, email }) {
+    const { fsMod, db } = await load();
+    const R = K.records;
+    const countRef = fsMod.doc(db, 'wishCounts', R.countId(staffId, month));
+    const snap = await fsMod.getDoc(countRef);
+    const count = snap.exists() ? snap.data().count || 0 : 0;
+    await fsMod.setDoc(countRef, R.countDoc({ staffId, storeId, month, count, lastDate: '', email, now: new Date().toISOString() }));
+  }
+
+  // オーナー・幹部：判断する（承認・却下・申請中に戻す）。判断と履歴を1回の書き込みで（ルールで履歴が必須）
+  // kind は 'wish' か 'paid'、before は今の記録（id を含む）、role は 'owner' か 'manager'
+  async function decideRequest(kind, before, { status, reason, email, role }) {
+    const { fsMod, db } = await load();
+    const R = K.records;
+    const { patch, log } = R.decision(kind, before, { status, reason, email, role, now: new Date().toISOString() });
+    const batch = fsMod.writeBatch(db);
+    batch.update(fsMod.doc(db, R.collectionOf(kind), before.id), patch);
+    batch.set(fsMod.doc(db, 'decisionLogs', log.id), log.data);
+    await batch.commit();
+    return patch;
+  }
+
+  // オーナー：申請中の有給の日付を変える（履歴と一緒に）
+  async function changePaidDateLogged(before, newDate, email) {
+    const { fsMod, db } = await load();
+    const R = K.records;
+    const now = new Date().toISOString();
+    const batch = fsMod.writeBatch(db);
+    batch.update(fsMod.doc(db, 'paidRequests', before.id), {
+      date: newDate,
+      month: newDate.slice(0, 7),
+      originalDate: before.originalDate || before.date,
+      changedBy: email,
+      lastActionBy: email,
+      lastActionAt: now,
+      updatedAt: now,
+    });
+    const log = R.newLog('paid', before, { from: 'pending', to: 'pending', email, role: 'owner', now, note: `日付の変更 ${before.date}→${newDate}` });
+    batch.set(fsMod.doc(db, 'decisionLogs', log.id), log.data);
+    await batch.commit();
+  }
+
+  // ---- 変更申請（段階④） ----
+  // スタッフ：変更申請を出す（change は records.newChange で作ったもの）。同じ名前がすでにあれば、ルールが断る
+  async function addChangeRequest(change) {
+    const { fsMod, db } = await load();
+    try {
+      await fsMod.setDoc(fsMod.doc(db, 'changeRequests', change.id), change.data);
+    } catch (err) {
+      if (err && err.code === 'permission-denied') throw new Error('変更申請を出せませんでした（すでに出している・対象が承認済みでない など）。画面を読み込み直してください。');
+      throw err;
+    }
+  }
+
+  // スタッフ：申請中の変更申請を取り下げる（申請中のものだけ。ルールでも止める）
+  async function withdrawChangeRequest(id) {
+    const { fsMod, db } = await load();
+    await fsMod.deleteDoc(fsMod.doc(db, 'changeRequests', id));
+  }
+
+  // オーナー：承認された変更申請を反映する（1回の書き込みで）
+  //   ・対象の希望休・有給を「取り消し済み」にする（履歴と一緒に）
+  //   ・日付の変更なら、新しい日の承認済みの記録を作る（履歴と一緒に）
+  //   ・変更申請に「反映した人・日時」を入れる（履歴と一緒に）
+  // シフト表のマスは、呼ぶ前に requests.js が直している
+  async function reflectChangeRequest({ change, target, newTarget, email }) {
+    const { fsMod, db } = await load();
+    const R = K.records;
+    const now = new Date().toISOString();
+    const batch = fsMod.writeBatch(db);
+    const cancel = R.decision(change.kind, target, { status: 'cancelled', email, role: 'owner', now, note: `変更申請の反映（${change.type === 'move' ? `${change.newDate}へ変更` : '取り消し'}）` });
+    batch.update(fsMod.doc(db, R.collectionOf(change.kind), target.id), cancel.patch);
+    batch.set(fsMod.doc(db, 'decisionLogs', cancel.log.id), cancel.log.data);
+    if (newTarget) {
+      const data = { ...newTarget.data, decidedBy: email, decidedRole: 'owner', decidedAt: now, lastActionBy: email, lastActionAt: now, updatedAt: now };
+      batch.set(fsMod.doc(db, R.collectionOf(change.kind), newTarget.id), data);
+      const log = R.newLog(change.kind, { ...data, id: newTarget.id }, { from: '', to: 'approved', email, role: 'owner', now, note: `変更申請（日付の変更）で作成（${change.date}から）` });
+      batch.set(fsMod.doc(db, 'decisionLogs', log.id), log.data);
+    }
+    batch.update(fsMod.doc(db, 'changeRequests', change.id), { reflectedAt: now, reflectedBy: email, lastActionBy: email, lastActionAt: now, updatedAt: now });
+    const log = R.newLog('change', change, { from: 'approved', to: 'approved', email, role: 'owner', now, note: 'シフト表に反映' });
+    batch.set(fsMod.doc(db, 'decisionLogs', log.id), log.data);
+    await batch.commit();
+  }
+
+  // 幹部：担当店舗・担当店舗のスタッフ・希望休の設定（ルールで、担当外は読めない）
+  async function loadManagerContext(manager) {
+    const { fsMod, db } = await load();
+    const staffOf = (storeId) => fsMod.getDocs(fsMod.query(fsMod.collection(db, 'staff'), fsMod.where('storeId', '==', storeId)));
+    const [stores, staffSnaps, settings] = await Promise.all([
+      Promise.all(manager.storeIds.map((id) => getData('stores', id))),
+      Promise.all(manager.storeIds.map(staffOf)),
+      getData('settings', 'requests'),
+    ]);
+    return {
+      stores: stores.map((s, i) => (s ? { ...s, id: s.id || manager.storeIds[i] } : null)).filter((s) => s && !s.deleted),
+      staff: staffSnaps.flatMap((snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() }))).filter((m) => !m.deleted),
+      settings,
+    };
+  }
+
+  // 幹部：担当店舗のその月の申請・日数・上限の変更・判断の履歴（店舗ごとに絞って読む。ルールで、担当外は読めない）
+  async function loadManagerRequests(storeIds, month) {
+    const { fsMod, db } = await load();
+    const read = async (col) => {
+      const snaps = await Promise.all(
+        storeIds.map((storeId) => fsMod.getDocs(fsMod.query(fsMod.collection(db, col), fsMod.where('storeId', '==', storeId), fsMod.where('month', '==', month))))
+      );
+      return snaps.flatMap((snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    };
+    const [wishRequests, wishCounts, paidRequests, changeRequests, quotas, logs] = await Promise.all([
+      read('wishRequests'),
+      read('wishCounts'),
+      read('paidRequests'),
+      read('changeRequests'),
+      read('requestQuotas'),
+      read('decisionLogs'),
+    ]);
+    return { wishRequests, wishCounts, paidRequests, changeRequests, quotas, logs };
+  }
+
+  // 幹部：全店舗の確定シフトの写しを、指定した月の分だけ読む（作成中のシフトは読めない）
+  async function loadAllPublishedRosters(months) {
+    const { fsMod, db } = await load();
+    const snap = await fsMod.getDocs(fsMod.query(fsMod.collection(db, 'publishedRosters'), fsMod.where('month', 'in', months)));
+    return snap.docs.map((d) => d.data());
+  }
+
   async function isEmpty() {
     const { fsMod, db } = await load();
     const snap = await fsMod.getDocs(fsMod.query(fsMod.collection(db, 'stores'), fsMod.limit(1)));
@@ -376,7 +546,6 @@
     signOut,
     loadStaffContext,
     loadMyRequests,
-    saveWishOff,
     addPaidRequest,
     withdrawPaidRequest,
     subscribeRequests,
@@ -386,5 +555,17 @@
     publishRoster,
     unpublishRoster,
     loadPublishedRosters,
+    checkManager,
+    addWishRequest,
+    removeWishRequest,
+    submitNoWish,
+    decideRequest,
+    changePaidDateLogged,
+    loadAllPublishedRosters,
+    loadManagerContext,
+    loadManagerRequests,
+    addChangeRequest,
+    withdrawChangeRequest,
+    reflectChangeRequest,
   };
 })();

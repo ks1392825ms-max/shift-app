@@ -2,8 +2,8 @@
 // 1店舗・1か月分の「空いているマス」だけを埋める案を作る。入力済みのマスは変えない。
 //
 // 考え方：
-//   1. 必ず休み：承認済みの有給（シフト表に「有給」が入っている）、希望休（平日）、固定休（曜日・祝日）
-//      土日祝は原則出勤：土日祝の希望休は、店長が許可する（申請タブでシフト表に休みを入れる）まで休みにしない
+//   1. 必ず休み：承認済みの有給（空いているマスに「有給」を入れる）、承認済みの希望休（平日・土日祝とも）、固定休（曜日・祝日）
+//      申請中・却下の希望休と有給は、勤務の候補のまま（申請中の件数はお知らせに出す）
 //   2. 対象外の日：定休日、この店舗で働く曜日ではない日、同じ人がほかの店舗に入っている日（空欄のまま）
 //   3. 休みを足す：本人の月の休日数がある人はその日数まで。週休の人は月曜〜日曜で週休の日数まで。固定休がない人は「月の休日数の目安」まで。土日祝には足さない。
 //      連休（休みが2日以上続くところ）が公平になるように、連休の回数が少ない人から1日ずつ順番に選ぶ。
@@ -36,7 +36,7 @@
     return addDays(dateStr, -((K.calc.weekdayOf(dateStr) + 6) % 7));
   }
 
-  // 土日祝（土曜・日曜・祝日）。この日の休みは店長の許可が必要（requests.js の needsApproval と同じ）
+  // 土日祝（土曜・日曜・祝日）。自動で休みを足さない日
   function isWeekendOrHoliday(dateStr) {
     const w = K.calc.weekdayOf(dateStr);
     return w === 0 || w === 6 || Boolean(K.holidays.holidayName(dateStr));
@@ -71,8 +71,16 @@
     const checks = K.storage.getChecks(storeId);
     const dates = K.calc.monthDates(month);
     const map = K.calc.shiftMap(month, storeId);
+    // 承認済みの希望休・有給だけを使う（申請中・却下は勤務の候補のまま）
     const wishesOf = options.wishes || ((staffId) => (K.storage.isCloud() ? K.requests.adminWishDates(staffId, month) : []));
+    const paidOf = options.paid || ((staffId) => (K.storage.isCloud() ? K.requests.adminApprovedPaidDates(staffId, month) : []));
     const notes = [];
+    if (!options.wishes && K.storage.isCloud()) {
+      const pend = K.requests.pendingCounts(storeId, month);
+      if (pend.wishes || pend.paid) {
+        notes.push(`申請中（まだ承認・却下していない）の希望休が${pend.wishes}件、有給が${pend.paid}件あります。承認されるまで休みにしていません（申請タブで判断すると、次の作成から反映されます）。`);
+      }
+    }
 
     const info = new Map(dates.map((d) => [d, K.calc.dayInfo(store, d)]));
     const hasRules = dates.some((d) => !info.get(d).closed && info.get(d).bands.length);
@@ -117,7 +125,7 @@
       const fixed = p.m.fixedOff || { weekdays: [], holidays: false };
       const workDays = p.m.workWeekdays || [];
       const wishes = new Set(wishesOf(p.m.id));
-      const pending = []; // 店長の許可がまだの、土日祝の希望休
+      const paidDays = new Set(paidOf(p.m.id));
       for (const date of dates) {
         const shift = map.get(`${p.m.id}|${date}`);
         const w = K.calc.weekdayOf(date);
@@ -130,15 +138,10 @@
           st = 'off';
           p.contractOff.add(date); // 固定休（契約上の休み）。必要人数不足の理由を分けるのに使う
         }
-        else if (wishes.has(date) && isWeekendOrHoliday(date)) {
-          st = 'cand';
-          pending.push(date);
-        } else if (wishes.has(date)) st = 'off';
+        else if (paidDays.has(date)) st = 'paid'; // 承認済みの有給（シフト表に「有給」を入れる）
+        else if (wishes.has(date)) st = 'off'; // 承認済みの希望休（平日・土日祝とも）
         else st = 'cand';
         p.status.set(date, st);
-      }
-      if (pending.length) {
-        notes.push(`${p.m.name}さん：土日祝の希望休（${pending.map(md).join('・')}）は店長の許可がないため、休みにしていません（申請タブで許可すると休みになります）。`);
       }
     }
 
@@ -158,7 +161,7 @@
     }
     const margin = (p, date) => (p.counted ? avail.get(date)[p.role] - need(date)[p.role] : 0);
 
-    const isOff = (st) => st === 'off' || st === 'offFixed';
+    const isOff = (st) => st === 'off' || st === 'offFixed' || st === 'paid';
     const countsAsOff = (st) => isOff(st) || (st === 'closed' && checks.closedDayAsOff);
 
     // 連休の回数：休み（通常休・有給。設定で定休日も）が2日以上続いたところを1回と数える
@@ -715,9 +718,12 @@
     }
     if (shortDays.length) notes.push(`必要人数に足りない日があります（勤務できる人が足りないため、無理に入れていません）：${shortDays.join('、')}`);
 
-    // 新しく入れる休み
+    // 新しく入れる休み・承認済みの有給
     for (const p of people) {
-      for (const date of dates) if (p.status.get(date) === 'off') assignments.push({ staffId: p.m.id, date, kind: 'off', patternId: null });
+      for (const date of dates) {
+        const st = p.status.get(date);
+        if (st === 'off' || st === 'paid') assignments.push({ staffId: p.m.id, date, kind: st, patternId: null });
+      }
     }
     assignments.sort((a, b) => a.date.localeCompare(b.date));
 
