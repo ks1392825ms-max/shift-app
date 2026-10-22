@@ -348,8 +348,12 @@
     registerServiceWorker();
     // 共有モードを選んでいて、使える開き方（公開 URL）なら共有モードで始める。
     // メールのログイン用リンクを開いたとき（別のブラウザで開いた場合も）は、共有モードに切り替えてログインを進める
-    if (K.cloud && K.cloud.supported() && (K.storage.getMode() === 'cloud' || K.cloud.isLoginLink())) {
+    // ログイン用のURL（末尾に ?login）で開いたときも、共有モードのログイン画面にする（スタッフ向け）
+    const loginEntry = Boolean(K.cloud && K.cloud.isLoginEntry && K.cloud.isLoginEntry());
+    if (K.cloud && K.cloud.supported() && (K.storage.getMode() === 'cloud' || K.cloud.isLoginLink() || loginEntry)) {
       if (K.storage.getMode() !== 'cloud') K.storage.setMode('cloud');
+      // アドレスバーから ?login を消す（ホーム画面に追加したときに、ふつうのURLになるように）
+      if (loginEntry) history.replaceState(null, '', location.pathname + location.hash);
       startCloud(K.cloud);
       return;
     }

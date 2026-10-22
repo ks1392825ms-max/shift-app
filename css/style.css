@@ -4209,3 +4209,16 @@ body.is-gate .bottom-nav {
 .roster__special-tag {
   color: var(--focus);
 }
+
+/* 設定 > スタッフ：ログインの案内（ログイン用のURL・メールを送る） */
+.staff-login {
+  margin-top: 8px;
+}
+
+.staff-login__url {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  user-select: all;
+  font-family: ui-monospace, Menlo, monospace;
+}

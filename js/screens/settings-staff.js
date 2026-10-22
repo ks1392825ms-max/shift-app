@@ -417,7 +417,8 @@
         { class: 'field' },
         el('label', { class: 'field__label', for: 'staff-email' }, 'ログイン用のメールアドレス（任意）'),
         emailInput,
-        el('p', { class: 'field__note' }, '希望休・有給の申請で、本人がログインするためのメールアドレスです。共有モードでは Firebase にだけ保存し、公開するファイルには入りません。')
+        el('p', { class: 'field__note' }, '希望休・有給の申請で、本人がログインするためのメールアドレスです。共有モードでは Firebase にだけ保存し、公開するファイルには入りません。'),
+        isNew ? null : loginBox(member, emailInput)
       ),
       el(
         'div',
@@ -433,6 +434,65 @@
         el('button', { type: 'button', class: 'btn btn--ghost', onclick: closeForm }, 'キャンセル'),
         isNew ? null : el('button', { type: 'button', class: 'btn btn--danger', onclick: onDelete }, 'このスタッフを削除')
       )
+    );
+  }
+
+  // スタッフのログインの案内（共有モードで、ログイン用メールを保存済みのときだけ）
+  // ・ログイン用のURL：開くとすぐにログイン画面になる（LINE などでスタッフに送る）
+  // ・ログイン用メールを送る：保存済みのメールアドレスに、Firebase からログイン用のリンクを送る
+  function loginBox(member, emailInput) {
+    const backend = K.storage.isCloud() && K.app.cloudBackend ? K.app.cloudBackend() : null;
+    if (!backend || !member || !member.email || member.active === false) return null;
+    const url = backend.loginEntryUrl ? backend.loginEntryUrl() : '';
+    const status = el('p', { class: 'field__note staff-login__status', role: 'status' });
+
+    async function copyUrl() {
+      try {
+        await navigator.clipboard.writeText(url);
+        status.textContent = 'ログイン用のURLをコピーしました。LINE などでスタッフに送ってください。';
+      } catch (err) {
+        status.textContent = 'コピーできませんでした。URLを長押し（右クリック）してコピーしてください。';
+      }
+    }
+
+    async function sendMail(event) {
+      const btn = event.currentTarget;
+      // 入力欄を書き換えて、まだ保存していないときは送らない（保存済みのアドレスにだけ送る）
+      if (emailInput.value.trim().toLowerCase() !== member.email) {
+        status.textContent = 'メールアドレスが変わっています。先に「保存する」を押してから送ってください。';
+        return;
+      }
+      if (!window.confirm(`${member.name}さんの登録メールに、ログイン用のリンクを送りますか？\nスタッフがリンクを開くと、メールアドレスをもう一度入れてログインします。`)) return;
+      btn.disabled = true;
+      status.textContent = '送っています…';
+      try {
+        await backend.sendStaffLoginLink(member.email);
+        status.textContent = 'ログイン用のメールを送りました。届かないときは、迷惑メールのフォルダーも見てもらってください。';
+      } catch (err) {
+        status.textContent = `送れませんでした（${err.message}）。少し待ってから、もう一度試してください。`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    return el(
+      'div',
+      { class: 'staff-login' },
+      url
+        ? el(
+            'p',
+            { class: 'field__note' },
+            'ログイン用のURL（開くとすぐにログイン画面になります）：',
+            el('span', { class: 'staff-login__url' }, url)
+          )
+        : null,
+      el(
+        'div',
+        { class: 'actions' },
+        url ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: copyUrl }, 'URLをコピー') : null,
+        backend.sendStaffLoginLink ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: sendMail }, 'ログイン用メールを送る') : null
+      ),
+      status
     );
   }
 

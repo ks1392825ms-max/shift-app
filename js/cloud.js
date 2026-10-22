@@ -5,8 +5,10 @@
 //   supported()                 共有モードを使える開き方か（https か、Mac での確認用の localhost）
 //   start(onAuth)               Firebase を準備し、ログイン状態が変わるたびに onAuth(ユーザー or null) を呼ぶ
 //   isLoginLink()               今のURLが、メールで届いたログイン用のリンクか
+//   isLoginEntry() / loginEntryUrl()  ログイン画面をすぐに開くURL（公開URLの末尾に ?login）か／そのURL
 //   savedEmail()                ログイン用のメールを送ったメールアドレス（同じ端末なら覚えている）
 //   sendLoginLink(email)        ログイン用のメールを送る
+//   sendStaffLoginLink(email)   オーナーが、登録したスタッフのメールにログイン用のメールを送る（この端末には覚えない）
 //   completeLogin(email)        メールのリンクでログインを完了する
 //   checkAdmin()                管理者として登録されているか（ルールで読めるかどうかで判断）
 //   checkStaff(email)           スタッフとして登録されているか（staffAccounts に本人のメールがあるか）
@@ -74,6 +76,15 @@
     return location.origin + location.pathname;
   }
 
+  // ログイン画面をすぐに開くURL（スタッフに送る）。開くと、この端末だけの形でも共有モードのログイン画面になる
+  function isLoginEntry() {
+    return /[?&]login(=[^&]*)?(&|$)/.test(location.search);
+  }
+
+  function loginEntryUrl() {
+    return returnUrl() + '?login';
+  }
+
   async function sendLoginLink(email) {
     const { authMod, auth } = await load();
     await authMod.sendSignInLinkToEmail(auth, email, { url: returnUrl(), handleCodeInApp: true });
@@ -82,6 +93,13 @@
     } catch (err) {
       // 覚えられなくても、リンクを開いたときにもう一度入力すればよい
     }
+  }
+
+  // オーナーが、スタッフの登録メールにログイン用のリンクを送る。
+  // 送ったアドレスはこの端末に覚えない（スタッフが自分の端末でリンクを開くと、メールアドレスをもう一度入れる画面になる）
+  async function sendStaffLoginLink(email) {
+    const { authMod, auth } = await load();
+    await authMod.sendSignInLinkToEmail(auth, email, { url: returnUrl(), handleCodeInApp: true });
   }
 
   async function completeLogin(email) {
@@ -535,8 +553,11 @@
     supported,
     start,
     isLoginLink,
+    isLoginEntry,
+    loginEntryUrl,
     savedEmail,
     sendLoginLink,
+    sendStaffLoginLink,
     completeLogin,
     checkAdmin,
     checkStaff,
