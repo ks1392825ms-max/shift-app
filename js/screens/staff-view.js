@@ -78,7 +78,7 @@
         parts.push(`${U.formatTime(p.start)}〜${U.formatTime(p.end)}`);
         if (r.day.breaks.length) parts.push(`休憩 ${r.day.breaks.map(rangeText).join('、')}`);
         const biz = r.day.business.filter((b) => !b.skipped);
-        if (biz.length) parts.push(`社用 ${biz.map(rangeText).join('、')}`);
+        if (biz.length) parts.push(`社用 ${biz.map((b) => `${rangeText(b)} ${K.calc.businessWhat(b)}`).join('、')}`);
       }
       sub = parts.join('　');
     } else if (r.shift) {

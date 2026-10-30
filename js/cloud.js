@@ -211,6 +211,33 @@
     }
   }
 
+  // シフトを書く直前に、保存先の最新の状態を確かめてから書く（ほかの端末で入れた休みなどを上書きしない）
+  // guard の付いた変更だけトランザクションで確かめる（決まりは K.storage.guardAllows）。戻り値：{ skipped: [{ collection, id, server }] }
+  const TX_LIMIT = 200;
+  async function writeGuarded(changes) {
+    const { fsMod, db } = fb;
+    const guarded = changes.filter((c) => c.guard);
+    const plain = changes.filter((c) => !c.guard);
+    const skipped = [];
+    for (let i = 0; i < guarded.length; i += TX_LIMIT) {
+      const part = guarded.slice(i, i + TX_LIMIT);
+      const refs = part.map((c) => fsMod.doc(db, c.collection, c.id));
+      const skip = await fsMod.runTransaction(db, async (tx) => {
+        const snaps = await Promise.all(refs.map((r) => tx.get(r)));
+        const list = [];
+        part.forEach((c, j) => {
+          const server = snaps[j].exists() ? snaps[j].data() : null;
+          if (K.storage.guardAllows(c.guard, server, c.data)) tx.set(refs[j], JSON.parse(JSON.stringify(c.data)));
+          else list.push({ collection: c.collection, id: c.id, server });
+        });
+        return list;
+      });
+      skipped.push(...skip);
+    }
+    if (plain.length) await write(plain);
+    return { skipped };
+  }
+
   // ---- 希望休・有給（スタッフ）：自分の分だけを読み書きする（ルールでもそれ以外は止めている） ----
 
   // 読めないもの・ないものは null にする
@@ -563,6 +590,7 @@
     checkStaff,
     subscribe,
     write,
+    writeGuarded,
     isEmpty,
     signOut,
     loadStaffContext,

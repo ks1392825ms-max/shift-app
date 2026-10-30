@@ -112,7 +112,7 @@
           if (s.kind === 'work' || s.kind === 'business') elsewhere.add(s.date);
         }
       }
-      people.push({ m, pats, status: new Map(), elsewhere, counted: K.calc.countsAsStaff(m), role: m.role, part, contractOff: new Set() });
+      people.push({ m, pats, status: new Map(), elsewhere, counted: K.calc.countsAsStaff(m), role: m.role, part, contractOff: new Set(), paidFixed: new Set(), aiOff: new Set() });
     }
     if (skipped.length) notes.push(`勤務パターンが登録されていないため対象外：${skipped.map((m) => `${m.name}さん`).join('、')}`);
     if (noWorkdays.length) {
@@ -130,7 +130,10 @@
         const shift = map.get(`${p.m.id}|${date}`);
         const w = K.calc.weekdayOf(date);
         let st;
-        if (shift) st = shift.kind === 'work' || shift.kind === 'business' ? 'work' : 'offFixed';
+        if (shift) {
+          st = shift.kind === 'work' || shift.kind === 'business' ? 'work' : 'offFixed';
+          if (shift.kind === 'paid') p.paidFixed.add(date); // 手入力の有給（シフト休とは別に数える）
+        }
         else if (info.get(date).closed) st = 'closed';
         else if (workDays.length && !workDays.includes(w)) st = 'skip';
         else if (p.elsewhere.has(date)) st = 'skip';
@@ -215,12 +218,21 @@
       if (p.counted) avail.get(date)[p.role] -= 1;
     }
 
+    // 平日の週のシフト休・月の連休の決まり（設定 > チェック。0 なら今までどおり月の休日数の目安で作る）
+    const weekTarget = checks.weekdayShiftOff;
+    const renkyuTarget = checks.monthlyRenkyu;
+    function weeklyRule(p) {
+      // 働く曜日（契約）を登録した人は、曜日で休みが決まるので対象外（今までどおり）
+      return weekTarget > 0 && !p.part && !Number.isInteger(p.m.monthlyOffDays) && !p.m.weeklyOffDays && !(p.m.workWeekdays || []).length;
+    }
+
     // ---- 3：休みを足す ----
     // 本人の月の休日数がある人はその日数まで（定休日・固定休・希望休なども1日として数える。週休より優先）。
     // それ以外は、週休の人は週ごと、固定休がない人は月の休日数の目安まで。土日祝には足さない。
     // 連休が公平になるように、連休の回数が少ない人から1日ずつ順番に選ぶ（連休がいちばん少ない人は、連休になる日を選ぶ）
     const offTasks = [];
     for (const p of people) {
+      if (weeklyRule(p)) continue; // 正社員（個別の休日数・週休なし）は、下の「3'：平日の週のシフト休・月の連休」で決める
       const fixed = p.m.fixedOff || { weekdays: [], holidays: false };
       if (Number.isInteger(p.m.monthlyOffDays)) {
         offTasks.push({ p, scope: dates, required: p.m.monthlyOffDays, weekly: false, done: false });
@@ -259,6 +271,143 @@
       }
     }
 
+    // ---- 3'：平日の週のシフト休・月の連休（正社員。本人の「月の休日数」「週休」を入れていない人） ----
+    // ・月曜〜日曜の週ごとに、シフト休（通常休・承認済みの希望休・固定休・定休日／臨時休業）が「平日の週のシフト休」の日数になるように、平日に休みを足す
+    //   土日祝には足さない（原則出勤）。有給はシフト休に数えない。手入力の休みが多くても減らさない
+    //   前の月から続く週は、前の月に保存されているシフトも数える。翌月に続く週は、この月に入る平日の数に合わせて減らす
+    // ・休みを選ぶときに、月に「月の連休」の回数だけ、シフト休が2日以上続く所（連休）ができるようにする（有給は連休に数えない）
+    //   連休は、始まった日の月に数える（3日以上続いても1回）
+    const isWeekdayPlain = (d) => !isWeekendOrHoliday(d);
+    // シフト休か（この月の日）
+    const shiftOff = (p, d) => {
+      const st = p.status.get(d);
+      return st === 'off' || st === 'closed' || (st === 'offFixed' && !p.paidFixed.has(d));
+    };
+    // この月の外の日：保存されているシフトで判断（true＝シフト休、false＝勤務・有給、null＝未入力）
+    const outsideOff = (p, d) => {
+      const sh = K.storage.getShift(p.m.id, d, storeId);
+      if (sh) return sh.kind === 'off';
+      return K.calc.isStoreClosed(store, d) ? true : null;
+    };
+    const offAt = (p, d) => (d.startsWith(`${month}-`) ? shiftOff(p, d) : outsideOff(p, d) === true);
+    // 連休の回数（この月に始まる、シフト休が2日以上続く所）
+    function shiftRenkyu(p) {
+      let n = 0;
+      for (const d of dates) {
+        if (offAt(p, d) && !offAt(p, addDays(d, -1)) && offAt(p, addDays(d, 1))) n += 1;
+      }
+      return n;
+    }
+    // 連勤のいちばん長い所（勤務・勤務の候補を出勤として数える。前の月から続く分も）
+    function longestRun(p) {
+      let run = 0;
+      for (let d = addDays(dates[0], -1); run <= 62; d = addDays(d, -1)) {
+        const sh = K.storage.getShift(p.m.id, d, storeId);
+        if (!sh || (sh.kind !== 'work' && sh.kind !== 'business')) break;
+        run += 1;
+      }
+      let max = run;
+      for (const d of dates) {
+        const st = p.status.get(d);
+        run = st === 'work' || st === 'cand' ? run + 1 : 0;
+        max = Math.max(max, run);
+      }
+      return max;
+    }
+    const weekly = people.filter(weeklyRule);
+    const weeks = [];
+    for (const monday of [...new Set(dates.map(mondayOf))]) {
+      const all = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+      const inMonth = all.filter((d) => d.startsWith(`${month}-`));
+      const after = all.filter((d) => d > dates[dates.length - 1]);
+      // 翌月に続く週：この月に入る平日（月〜金）の数に合わせて減らす
+      const monFri = (list) => list.filter((d) => K.calc.weekdayOf(d) >= 1 && K.calc.weekdayOf(d) <= 5).length;
+      const target = after.length ? Math.min(weekTarget, Math.round((weekTarget * monFri(inMonth)) / 5)) : weekTarget;
+      weeks.push({ monday, all, inMonth, target });
+    }
+    const weekTasks = [];
+    for (const p of weekly) for (const w of weeks) weekTasks.push({ p, w, done: false });
+    const offsIn = (t) => t.w.all.filter((d) => offAt(t.p, d)).length;
+    const pickWeekOff = (p, candidates) => {
+      const wantRenkyu = shiftRenkyu(p) < renkyuTarget;
+      const base = shiftRenkyu(p);
+      let best = null;
+      let bestScore = null;
+      for (const date of candidates) {
+        const before = p.status.get(date);
+        p.status.set(date, 'off');
+        const makes = wantRenkyu && shiftRenkyu(p) > base ? 1 : 0;
+        const streakOk = longestRun(p) <= checks.maxConsecutiveDays ? 1 : 0;
+        p.status.set(date, before);
+        let gap = 99;
+        for (const d of dates) if (d !== date && shiftOff(p, d)) gap = Math.min(gap, Math.abs((new Date(d) - new Date(date)) / 86400000));
+        // ① 人数に余裕がある ② 連勤の上限を超えない ③ 連休が足りない人は連休になる日 ④ 余裕の大きい日 ⑤ ほかの休みから離れた日
+        const score = [Math.min(margin(p, date), 1), streakOk, makes, margin(p, date), wantRenkyu ? 0 : Math.min(gap, 7)];
+        if (!bestScore || better(score, bestScore)) {
+          best = date;
+          bestScore = score;
+        }
+      }
+      return best;
+    };
+    for (;;) {
+      const next = new Map();
+      for (const t of weekTasks) if (!t.done && offsIn(t) < t.w.target && !next.has(t.p)) next.set(t.p, t);
+      if (!next.size) break;
+      // 連休が少ない人から、1日ずつ順番に
+      const order = [...next.values()].sort((a, b) => shiftRenkyu(a.p) - shiftRenkyu(b.p));
+      for (const t of order) {
+        const date = pickWeekOff(t.p, t.w.inMonth.filter((d) => t.p.status.get(d) === 'cand' && isWeekdayPlain(d)));
+        if (date) {
+          setOff(t.p, date);
+          t.p.aiOff.add(date);
+        } else t.done = true;
+      }
+    }
+    // 連休が足りない人：同じ週の中で、AIが入れた休みを、ほかのシフト休の隣の平日へ動かす（週の日数は変えない・人数に余裕のある日だけ）
+    for (const p of weekly) {
+      for (let guard = 0; guard < 20 && shiftRenkyu(p) < renkyuTarget; guard++) {
+        const base = shiftRenkyu(p);
+        let best = null;
+        for (const w of weeks) {
+          for (const from of w.inMonth.filter((d) => p.aiOff.has(d) && p.status.get(d) === 'off')) {
+            for (const to of w.inMonth.filter((d) => p.status.get(d) === 'cand' && isWeekdayPlain(d))) {
+              p.status.set(from, 'cand');
+              p.status.set(to, 'off');
+              const gain = shiftRenkyu(p) - base;
+              const after = longestRun(p);
+              p.status.set(to, 'cand');
+              p.status.set(from, 'off');
+              const ok = after <= checks.maxConsecutiveDays || after <= longestRun(p);
+              const m = p.counted ? avail.get(to)[p.role] - need(to)[p.role] : 1;
+              if (gain > 0 && ok && m >= 1 && (!best || m > best.m)) best = { from, to, m };
+            }
+          }
+        }
+        if (!best) break;
+        p.status.set(best.from, 'cand');
+        p.aiOff.delete(best.from);
+        if (p.counted) avail.get(best.from)[p.role] += 1;
+        setOff(p, best.to);
+        p.aiOff.add(best.to);
+      }
+    }
+    for (const t of weekTasks) {
+      const n = offsIn(t);
+      const label = `${md(t.w.all[0])}〜${md(t.w.all[6])}の週`;
+      if (n < t.w.target) {
+        notes.push(`${t.p.m.name}さん：${label}の平日のシフト休が${n}日で、${t.w.target}日に${t.w.target - n}日足りません（休める平日がないため。土日祝は原則出勤・手入力の勤務／有給は変えていません）。`);
+      } else if (n > t.w.target && t.w.all.some((d) => d.startsWith(`${month}-`) && t.p.status.get(d) === 'offFixed' && !t.p.paidFixed.has(d))) {
+        notes.push(`${t.p.m.name}さん：${label}のシフト休が${n}日で、${t.w.target}日より多くなっています（手入力の休みのため。休みは変えていません）。`);
+      }
+    }
+    for (const p of weekly) {
+      const n = shiftRenkyu(p);
+      if (n < renkyuTarget) {
+        notes.push(`${p.m.name}さん：連休（シフト休が2日続く所）が${n}回で、月${renkyuTarget}回に足りません（人数に余裕のある平日で、続けて休める日がないため。有給は連休に数えていません）。`);
+      }
+    }
+
     // ---- 4：連勤の上限 ----
     for (const p of people) {
       let streak = 0;
@@ -274,14 +423,19 @@
           run.push(date);
           streak += 1;
           if (streak > checks.maxConsecutiveDays) {
-            const date2 = pickOff(p, run.filter((d) => p.status.get(d) === 'cand' && !isWeekendOrHoliday(d)));
+            // 週のシフト休の日数で決める人は、休みを増やさない（知らせるだけ）
+            const date2 = weeklyRule(p) ? null : pickOff(p, run.filter((d) => p.status.get(d) === 'cand' && !isWeekendOrHoliday(d)));
             if (date2) {
               setOff(p, date2);
               const i = run.indexOf(date2);
               run = run.slice(i + 1);
               streak = run.length;
             } else if (streak === checks.maxConsecutiveDays + 1) {
-              notes.push(`${p.m.name}さん：${md(date)}で連勤が${checks.maxConsecutiveDays}日を超えます（休みにできる平日がないため、切っていません）。`);
+              notes.push(
+                weeklyRule(p)
+                  ? `${p.m.name}さん：${md(date)}で連勤が${checks.maxConsecutiveDays}日を超えます（週のシフト休の日数を守るため、休みを増やしていません。休みの曜日を手で調整してください）。`
+                  : `${p.m.name}さん：${md(date)}で連勤が${checks.maxConsecutiveDays}日を超えます（休みにできる平日がないため、切っていません）。`
+              );
             }
           }
         } else {
@@ -732,7 +886,7 @@
       name: p.m.name,
       work: assignments.filter((a) => a.staffId === p.m.id && a.kind === 'work').length,
       off: assignments.filter((a) => a.staffId === p.m.id && a.kind === 'off').length,
-      renkyu: renkyuCount(p),
+      renkyu: weeklyRule(p) ? shiftRenkyu(p) : renkyuCount(p),
       part: p.part,
     }));
     const problems = { earlyZero: earlyZeroDays, repeats: avoidRuns, constrained, shortDays, imbalance };

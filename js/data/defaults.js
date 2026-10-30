@@ -28,6 +28,8 @@
       countPaidLeaveAsOff: false, // 有給を休日数に数えるか
       closedDayAsOff: true, // 定休日を通常休として扱うか
       shortageMinSlots: 1, // 30分の枠がいくつ不足したら「人員不足」とするか
+      weekdayShiftOff: 2, // 正社員の、月曜〜日曜の週のシフト休（平日に入れる。定休日も数える・有給は数えない。0 なら月の休日数の目安で作る）
+      monthlyRenkyu: 2, // 正社員の、月の連休（シフト休が2日続く所）の回数
       // 週の区切りは月曜〜日曜（週40時間のチェック用）
     },
 

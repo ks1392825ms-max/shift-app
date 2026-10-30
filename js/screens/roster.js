@@ -77,6 +77,22 @@
       c.cls += ' has-details';
       c.label += '（休憩・社用時間あり）';
     }
+    // 社用予定（店舗を離れる時間）：勤務の下に「社 13-15」と内容を出す。2件以上は「＋1」。全部の内容はマスを押すと見られる
+    const plans = detailed ? K.calc.staffDay(member, shift, date).business.filter((b) => !b.skipped) : [];
+    let planLine = null;
+    if (plans.length) {
+      const first = plans[0];
+      c.cls += ' has-plans';
+      c.label += `（${plans.map(K.businessUI.planText).join('、')}）`;
+      planLine = el(
+        'span',
+        { class: 'cell__plan', 'aria-hidden': 'true' },
+        el('span', { class: 'cell__plan-tag' }, '社'),
+        el('span', { class: 'cell__plan-time' }, K.businessUI.shortRange(first)),
+        el('span', { class: 'cell__plan-what' }, K.calc.businessWhat(first)),
+        plans.length > 1 ? el('span', { class: 'cell__plan-more' }, `＋${plans.length - 1}`) : null
+      );
+    }
     // スタッフが出した希望休の日（共有モードのとき）。シフトのデータは変えず、印を付けるだけ
     // 承認済み＝「希」、申請中＝「希?」（却下は印なし）
     const wishStatus = K.storage.isCloud() ? K.requests.adminWishStatus(member.id, date) : null;
@@ -110,9 +126,10 @@
           'data-staff': member.id,
           'data-date': date,
           onclick: () => openSheet(member, date),
-          title: issues ? issues.join('、') : null,
+          title: [plans.length ? plans.map(K.businessUI.planText).join('\n') : null, issues ? issues.join('、') : null].filter(Boolean).join('\n') || null,
         },
-        c.text,
+        planLine ? el('span', { class: 'cell__main' }, c.text) : c.text,
+        planLine,
         wish ? el('span', { class: 'cell__wish', 'aria-hidden': 'true' }, wishStatus === 'pending' ? '希?' : '希') : null,
         absence ? el('span', { class: 'cell__absence', 'aria-hidden': 'true' }, '急') : null
       )
@@ -367,6 +384,8 @@
           )
         : el('p', { class: 'sheet__note' }, '使える勤務パターンがありません。設定画面で登録してください。');
 
+    const planDay = current && current.kind === 'work' ? K.calc.staffDay(member, current, date) : null;
+
     const advanceInput = el('input', {
       type: 'checkbox',
       checked: autoAdvance,
@@ -407,6 +426,22 @@
           ? el('button', { type: 'button', class: 'text-btn text-btn--small', onclick: () => apply(member, date, null) }, '未入力に戻す')
           : null
       ),
+      // 通常勤務の日は、その場で社用予定を登録・編集・削除できる
+      planDay
+        ? K.businessUI.section({
+            member,
+            date,
+            day: planDay,
+            idPrefix: 'cell-plan',
+            onDone: (message) => {
+              K.app.toast(message);
+              refreshAll();
+              openSheet(member, date);
+              const box = document.querySelector('.sheet .plan-section');
+              if (box) box.scrollIntoView({ block: 'nearest' });
+            },
+          })
+        : null,
       // 通常勤務の日は、1日の詳細画面で休憩・社用時間を設定できる
       current && current.kind === 'work'
         ? el(
@@ -787,6 +822,15 @@
     );
   }
 
+  // 共有モード：保存先を確かめた結果を知らせる（ほかの端末で入力済みだったマスは変えない）
+  function guardedNotice(verb) {
+    return ({ skipped, failed }) => {
+      if (failed) K.app.toast(`保存先を確かめられなかったため、${verb === '入れ' ? 'AIの結果を入れませんでした' : '取り消しませんでした'}。電波を確認して、もう一度押してください`);
+      else if (skipped) K.app.toast(`ほかの端末で入力・手直し済みだった${skipped}マスは変えませんでした（${verb === '入れ' ? '入れていません' : '残しています'}）`);
+      if (failed || skipped) K.app.rerender();
+    };
+  }
+
   function openAutoSheet() {
     closeSheet(false);
     const monthLabel = `${Number(view.month.slice(0, 4))}年${Number(view.month.slice(5))}月`;
@@ -802,10 +846,10 @@
 
     function doApply() {
       try {
-        const { count } = K.storage.applyAutoShifts(view.store.id, view.month, result.assignments);
+        const { count, keptOff } = K.storage.applyAutoShifts(view.store.id, view.month, result.assignments, { onGuarded: guardedNotice('入れ') });
         closeSheet(false);
         K.app.rerender();
-        K.app.toast(`${count}マスを入れました。シフト表と「チェック」で確認してください`);
+        K.app.toast(`${count}マスを入れました（手入力の休み・有給${keptOff}マスはそのまま）。シフト表と「チェック」で確認してください`);
       } catch (err) {
         K.app.toast(err.message);
       }
@@ -820,6 +864,18 @@
         { class: 'sheet__note' },
         '空いているマスだけを埋めます（入力済みのマスは変えません）。承認済みの有給・希望休・固定休は必ず休みにし、週休・月の休日数の目安・連勤の上限・必要人数を見て作ります。'
       ),
+      (() => {
+        const c = K.storage.getChecks(view.store.id);
+        const kept = K.storage.getShifts({ month: view.month }).filter((x) => !x.autoRunId && (x.kind === 'off' || x.kind === 'paid') && (x.storeId || (K.storage.getStaffMember(x.staffId) || {}).storeId) === view.store.id).length;
+        return el(
+          'p',
+          { class: 'sheet__note auto-rule' },
+          c.weekdayShiftOff > 0
+            ? `正社員：土日祝は原則出勤。月曜〜日曜の週ごとに、平日のシフト休を${c.weekdayShiftOff}日（定休日を含む・有給は数えない）、月に連休を${c.monthlyRenkyu}回作ります。`
+            : '正社員：月の休日数の目安まで休みを入れます（設定 > チェックの「平日の週のシフト休」が0のため）。',
+          ` 手入力の休み・有給${kept}マスはそのまま残します。`
+        );
+      })(),
       result.assignments.length
         ? el('p', { class: 'auto-summary' }, `勤務 ${works}マス・休み ${offs}マスを入れます。`)
         : el('p', { class: 'auto-summary' }, '入れられる空きマスはありませんでした。'),
@@ -858,7 +914,7 @@
     const count = K.storage.autoShiftCount(view.store.id, view.month);
     if (!window.confirm(`自動で入れて、まだ手で直していない ${count}マスを消して、未入力に戻します。よろしいですか？`)) return;
     try {
-      const n = K.storage.undoAutoShifts(view.store.id, view.month);
+      const n = K.storage.undoAutoShifts(view.store.id, view.month, { onGuarded: guardedNotice('取り消し') });
       K.app.rerender();
       K.app.toast(`${n}マスを未入力に戻しました`);
     } catch (err) {

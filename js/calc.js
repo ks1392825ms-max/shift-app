@@ -164,11 +164,20 @@
         source: bt.type,
         id: bt.id,
         note: bt.note,
+        category: bt.category || '',
+        detail: bt.detail || '',
         skipped: bt.type === 'weekly' && K.storage.isBusinessTimeSkipped(bt.id, dateStr),
       });
     }
     day.business.sort((a, b) => a.start - b.start);
     return day;
+  }
+
+  // 社用の内容の表示（例：「外部講習（カット講習）」）。内容が空の記録はメモ（備考）、それもなければ「社用」
+  function businessWhat(b) {
+    const label = K.storage.BUSINESS_CATEGORIES[b.category] || '';
+    if (label) return b.detail ? `${label}（${b.detail}）` : label;
+    return b.detail || b.note || '社用';
   }
 
   // 休憩・社用時間が設定されている日か（シフト表の印に使う）
@@ -420,6 +429,7 @@
     workMinutes,
     staffDay,
     hasTimeDetails,
+    businessWhat,
     slotCounts,
     staffMonthTotals,
     staffMonthDetail,

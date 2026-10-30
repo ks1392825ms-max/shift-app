@@ -1,4 +1,4 @@
-// 自動チェック（人員不足・過多・連勤・月の休日数・労働時間・パターン外・未入力）
+// 自動チェック（人員不足・過多・連勤・月の休日数・労働時間・パターン外・社用予定・未入力）
 // アプリは知らせるだけで、シフトを自動で直すことはしない。
 (function () {
   'use strict';
@@ -18,8 +18,11 @@
     ['otherStore', '他店舗と重複'],
     ['outsideHours', '営業時間外'],
     ['weeklyOff', '週休'],
+    ['weekShiftOff', '週のシフト休'],
+    ['renkyu', '月の連休'],
     ['earlyZero', '早番0人'],
     ['slotRepeat', '早早・遅遅'],
+    ['businessPlan', '社用予定'],
     ['blank', '未入力'],
   ];
   const TYPE_LABELS = Object.fromEntries(TYPES);
@@ -276,6 +279,48 @@
         }
       }
 
+      // 社用予定（日付指定）：勤務がない日・勤務時間の外・ほかの社用と重なるものを知らせる（社用予定も勤務も変えない）
+      const range = (b) => `${U.formatTime(b.start)}〜${U.formatTime(b.end)}`;
+      const plansByDate = new Map();
+      for (const b of K.storage.getBusinessTimes({ staffId: member.id, type: 'date' })) {
+        if (!b.date.startsWith(`${month}-`)) continue;
+        if (!plansByDate.has(b.date)) plansByDate.set(b.date, []);
+        plansByDate.get(b.date).push(b);
+      }
+      for (const [date, plans] of plansByDate) {
+        const shift = map.get(`${member.id}|${date}`);
+        const what = (b) => `${range(b)} ${K.calc.businessWhat(b)}`;
+        const add = (message, cellText) => {
+          result.issues.push({ type: 'businessPlan', date, staffId: member.id, message: `${member.name}さん　${message}` });
+          if (cellText) addCell(member.id, date, cellText);
+        };
+        if (!shift || shift.kind !== 'work') {
+          const state = !shift ? '未入力' : shift.kind === 'business' ? '終日社用' : shift.kind === 'paid' ? '有給' : '休み';
+          add(`${mdLabel(date)}は${state}ですが、社用予定（${plans.map(what).join('、')}）が残っています`, isAtWork(shift) ? '社用予定' : null);
+          continue;
+        }
+        const pat = K.storage.getPattern(shift.patternId);
+        if (pat) {
+          for (const b of plans) {
+            if (b.start < pat.start || b.end > pat.end) add(`${mdLabel(date)}の社用予定（${what(b)}）が勤務時間（${range(pat)}）の外にあります`, '社用予定が勤務時間外');
+          }
+        }
+        const sorted = [...plans].sort((a, b) => a.start.localeCompare(b.start));
+        for (let i = 1; i < sorted.length; i++) {
+          if (sorted[i].start < sorted[i - 1].end) add(`${mdLabel(date)}の社用予定が重なっています（${what(sorted[i - 1])}／${what(sorted[i])}）`, '社用予定の重なり');
+        }
+        const day = K.calc.staffDay(member, shift, date);
+        const weekly = day ? day.business.filter((b) => b.source === 'weekly' && !b.skipped) : [];
+        for (const w of weekly) {
+          for (const b of plans) {
+            const bs = U.toMinutes(b.start), be = U.toMinutes(b.end);
+            if (bs < w.end && w.start < be) {
+              add(`${mdLabel(date)}の社用予定（${what(b)}）が毎週の社用（${U.formatTime(U.fromMinutes(w.start))}〜${U.formatTime(U.fromMinutes(w.end))}）と重なっています`, '社用予定の重なり');
+            }
+          }
+        }
+      }
+
       // 週休（月曜〜日曜の7日がこの月に入っていて、未入力のない週だけ数える。有給は休みに数える）
       if (member.weeklyOffDays) {
         const mondays = new Set(dates.map((d) => addDays(d, -((K.calc.weekdayOf(d) + 6) % 7))));
@@ -292,6 +337,41 @@
               staffId: member.id,
               message: `${member.name}さん　${mdLabel(week[0])}〜${mdLabel(week[6])}の週 休み${off}日（週休${member.weeklyOffDays}日）`,
             });
+          }
+        }
+      }
+
+      // 平日の週のシフト休・月の連休（正社員で、本人の月の休日数・週休を入れていない人。AIシフト作成と同じ決まり）
+      // シフト休＝通常休、または何も入れていない定休日・臨時休業。有給は数えない。未入力の日がある週・月は数えない
+      if (checks.weekdayShiftOff > 0 && member.employment !== 'part' && !Number.isInteger(member.monthlyOffDays) && !member.weeklyOffDays && !(member.workWeekdays || []).length) {
+        const offAt = (d) => {
+          const sh = shiftAt(member.id, d);
+          if (sh) return sh.kind === 'off';
+          return K.calc.isStoreClosed(store, d) ? true : null; // null＝未入力
+        };
+        const last = dates[dates.length - 1];
+        const monFri = (list) => list.filter((d) => K.calc.weekdayOf(d) >= 1 && K.calc.weekdayOf(d) <= 5).length;
+        for (const monday of new Set(dates.map((d) => addDays(d, -((K.calc.weekdayOf(d) + 6) % 7))))) {
+          const week = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+          const counted = week.filter((d) => d <= last);
+          if (counted.some((d) => offAt(d) === null)) continue;
+          const target = week.some((d) => d > last) ? Math.min(checks.weekdayShiftOff, Math.round((checks.weekdayShiftOff * monFri(counted.filter((d) => d.startsWith(`${month}-`)))) / 5)) : checks.weekdayShiftOff;
+          const off = counted.filter((d) => offAt(d)).length;
+          if (off < target) {
+            result.issues.push({
+              type: 'weekShiftOff',
+              date: counted.find((d) => d.startsWith(`${month}-`)),
+              staffId: member.id,
+              message: `${member.name}さん　${mdLabel(week[0])}〜${mdLabel(week[6])}の週 シフト休${off}日（${target}日。有給は数えない）`,
+            });
+          }
+        }
+        if (checks.monthlyRenkyu > 0 && dates.every((d) => offAt(d) !== null)) {
+          let n = 0;
+          // 月をまたぐ連休は、始まった日の月に数える（翌月の1日が保存済みの休みなら、この月の連休）
+          for (const d of dates) if (offAt(d) && !offAt(addDays(d, -1)) && offAt(addDays(d, 1))) n += 1;
+          if (n < checks.monthlyRenkyu) {
+            result.issues.push({ type: 'renkyu', staffId: member.id, message: `${member.name}さん　連休${n}回（月${checks.monthlyRenkyu}回。有給は数えない）` });
           }
         }
       }

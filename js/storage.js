@@ -85,10 +85,11 @@
 
   // 変更して保存する。保存に失敗したら、変更前の状態に戻す
   // 通常の変更では「バックアップしていない変更あり」の目印を付ける（markChanged: false で付けない）
-  function commit(mutate, { markChanged = true } = {}) {
+  // guard（共有モードだけ）：シフトを書く直前に、保存先の最新の状態を確かめる（guardAllows を参照）。onGuarded({ skipped, failed })：確かめた結果
+  function commit(mutate, { markChanged = true, guard = null, onGuarded = null } = {}) {
     // 共有モードのときは、共有の保存場所に保存する（端末のデータには書き込まない）
     if (backend) {
-      commitCloud(mutate, markChanged);
+      commitCloud(mutate, markChanged, guard, onGuarded);
       return;
     }
     // 別のタブで先に保存されていたら、古い内容で上書きしないよう、最新を読み込んでやり直してもらう
@@ -184,7 +185,32 @@
     return changes;
   }
 
-  function commitCloud(mutate, markChanged) {
+  // ほかの端末の入力を上書きしないための決まり（cloud.js の writeGuarded とテスト用の偽物で使う）
+  //   ifEmpty：保存先でまだ空いている（記録がない・削除の印）ときだけ書く（AIシフト作成）
+  //   ifAuto ：保存先で、同じ自動作成の印（autoRunId）のまま手直しされていないときだけ書く（自動作成を取り消す）
+  function guardAllows(guard, server, record) {
+    if (guard === 'ifEmpty') return !server || server.deleted === true;
+    if (guard === 'ifAuto') return Boolean(server && !server.deleted && server.autoRunId && server.autoRunId === record.autoRunId);
+    return true;
+  }
+
+  // 書かなかったマスは、手元の記録を保存先の内容に合わせる（server が null なら手元から消す）
+  function adoptServerRecords(list) {
+    for (const x of list) {
+      const arr = data[x.collection];
+      if (!arr) continue;
+      const i = arr.findIndex((r) => r.id === x.id);
+      if (x.server) {
+        const rec = JSON.parse(JSON.stringify(x.server));
+        if (i >= 0) arr[i] = rec;
+        else arr.push(rec);
+      } else if (i >= 0) {
+        arr.splice(i, 1);
+      }
+    }
+  }
+
+  function commitCloud(mutate, markChanged, guard, onGuarded) {
     const before = JSON.parse(JSON.stringify(data));
     mutate(data);
     if (markChanged) {
@@ -196,6 +222,23 @@
     }
     const changes = diffForCloud(before, data);
     if (!changes.length) return;
+    if (guard && backend.writeGuarded) {
+      for (const c of changes) if (c.collection === 'shifts') c.guard = guard;
+      Promise.resolve()
+        .then(() => backend.writeGuarded(changes))
+        .then(({ skipped }) => {
+          if (skipped.length) adoptServerRecords(skipped);
+          if (onGuarded) onGuarded({ skipped: skipped.length, failed: false });
+        })
+        .catch((err) => {
+          // 確かめられなかった（電波がないなど）：何も書かずに、手元も元に戻す
+          console.error(err);
+          const back = changes.filter((c) => c.collection === 'shifts').map((c) => ({ collection: 'shifts', id: c.id, server: (before.shifts || []).find((r) => r.id === c.id) || null }));
+          adoptServerRecords(back);
+          if (onGuarded) onGuarded({ skipped: 0, failed: true });
+        });
+      return;
+    }
     // 電波がないときは、この端末に一時的に保存され、つながったときに送られる。失敗したときだけ知らせる
     Promise.resolve()
       .then(() => backend.write(changes))
@@ -1265,7 +1308,8 @@
   // ---- AIシフト作成の結果を入れる ----
   // assignments：[{ staffId, date, kind, patternId }]。入力済みのマスは変えない。
   // 自動で入れた記録には autoRunId を付ける（手で直すと外れる）。「自動作成を取り消す」は autoRunId が付いたものだけを消す。
-  function applyAutoShifts(storeId, month, assignments) {
+  // onGuarded（共有モード）：保存先を確かめた結果 { skipped（ほかの端末で入力済みだったので書かなかったマス）, failed }
+  function applyAutoShifts(storeId, month, assignments, { onGuarded = null } = {}) {
     findActive(data.stores, storeId, '店舗が見つかりませんでした。');
     assertEditable(storeId, `${month}-01`);
     const runId = `auto_${U.uuid()}`;
@@ -1281,7 +1325,13 @@
       }
       plans.push(a);
     }
-    if (!plans.length) return { runId: null, count: 0 };
+    // 手入力の休み・有給（この店舗・この月の入力済みの休み）。入れる前と後で変わっていないことを確かめる
+    const keptOff = () =>
+      JSON.stringify(active(data.shifts).filter((x) => !x.autoRunId && (x.kind === 'off' || x.kind === 'paid') && x.date.startsWith(`${month}-`) && shiftStoreId(x) === storeId).map((x) => [x.id, x.kind]).sort());
+    const keptBefore = keptOff();
+    const keptCount = JSON.parse(keptBefore).length;
+    if (!plans.length) return { runId: null, count: 0, keptOff: keptCount };
+    if (plans.some((a) => data.shifts.some((x) => x.id === shiftId(a.staffId, a.date) && !x.deleted))) throw new Error('入力済みのマスを変えようとしたため、入れませんでした。');
     commit((d) => {
       const now = U.nowIso();
       for (const a of plans) {
@@ -1291,8 +1341,9 @@
         if (existing) Object.assign(existing, fields, { deleted: false, updatedAt: now });
         else d.shifts.push({ id, staffId: a.staffId, date: a.date, ...fields, createdAt: now, updatedAt: now, deleted: false });
       }
-    });
-    return { runId, count: plans.length };
+    }, { guard: 'ifEmpty', onGuarded });
+    if (keptOff() !== keptBefore) throw new Error('手入力の休みが変わってしまいました。画面を読み込み直してください。');
+    return { runId, count: plans.length, keptOff: keptCount };
   }
 
   // 自動で入れて、まだ手で直していないシフトの数
@@ -1300,7 +1351,7 @@
     return active(data.shifts).filter((s) => s.autoRunId && s.date.startsWith(`${month}-`) && shiftStoreId(s) === storeId).length;
   }
 
-  function undoAutoShifts(storeId, month) {
+  function undoAutoShifts(storeId, month, { onGuarded = null } = {}) {
     assertEditable(storeId, `${month}-01`);
     const ids = active(data.shifts)
       .filter((s) => s.autoRunId && s.date.startsWith(`${month}-`) && shiftStoreId(s) === storeId)
@@ -1311,7 +1362,7 @@
       for (const s of d.shifts) {
         if (ids.includes(s.id)) Object.assign(s, { deleted: true, updatedAt: now });
       }
-    });
+    }, { guard: 'ifAuto', onGuarded });
     return ids.length;
   }
 
@@ -1510,6 +1561,17 @@
   // 毎週分は「この日だけ取り消し」（businessTimeSkips）ができる
 
   const MAX_BUSINESS_NOTE = 20;
+  // 日付を指定した社用予定：社用内容（選択式）・詳細・備考。内容が空の記録（以前の分・毎週の社用）は、メモだけを表示する
+  const BUSINESS_CATEGORIES = {
+    training: '外部講習',
+    move: '店舗間の移動',
+    meeting: '会議・ミーティング',
+    media: '撮影・SNS業務',
+    shopping: '買い出し',
+    other: 'その他',
+  };
+  const MAX_BUSINESS_DETAIL = 30;
+  const MAX_BUSINESS_PLAN_NOTE = 50;
 
   function getBusinessTimes({ staffId, type } = {}) {
     return active(data.businessTimes)
@@ -1534,10 +1596,16 @@
 
   function normalizeBusinessTime(fields, exceptId) {
     const member = findActive(data.staff, fields.staffId, 'スタッフを選んでください。');
-    const note = cleanText(fields.note, { label: 'メモ', max: MAX_BUSINESS_NOTE, required: false });
+    const isDate = fields.type === 'date';
+    const note = cleanText(fields.note, isDate ? { label: '備考', max: MAX_BUSINESS_PLAN_NOTE, required: false } : { label: 'メモ', max: MAX_BUSINESS_NOTE, required: false });
     const clean = { staffId: member.id, type: fields.type, note };
+    const category = fields.category || '';
+    if (category && !BUSINESS_CATEGORIES[category]) throw new Error('社用内容を選んでください。');
+    if (category) clean.category = category;
+    const detail = cleanText(fields.detail, { label: '詳細', max: MAX_BUSINESS_DETAIL, required: false });
+    if (detail) clean.detail = detail;
 
-    if (fields.type === 'date') {
+    if (isDate) {
       if (!U.isValidDate(fields.date)) throw new Error('日付が正しくありません。');
       const { range } = workShiftOf(member.id, fields.date, '日付を指定した社用時間');
       assertEditable(member.storeId, fields.date);
@@ -1572,7 +1640,10 @@
     const current = findActive(data.businessTimes, id, '社用時間が見つかりませんでした。');
     const clean = normalizeBusinessTime({ ...current, ...fields, type: current.type }, id);
     commit((d) => {
-      Object.assign(d.businessTimes.find((b) => b.id === id), clean, { updatedAt: U.nowIso() });
+      const b = d.businessTimes.find((x) => x.id === id);
+      // 詳細・内容を空にしたときは、項目ごと消す
+      for (const key of ['category', 'detail']) if (!(key in clean)) delete b[key];
+      Object.assign(b, clean, { updatedAt: U.nowIso() });
     });
   }
 
@@ -1797,7 +1868,7 @@
   // 店舗ごとに持てる（store.checks）。店舗専用の基準がない店舗（以前からの 店舗A・店舗Bなど）は、共通の基準（settings.checks）を使う
   function getChecks(storeId) {
     const store = storeId ? data.stores.find((s) => s.id === storeId) : null;
-    return { ...data.settings.checks, ...((store && store.checks) || {}) };
+    return { ...K.defaults.checks, ...data.settings.checks, ...((store && store.checks) || {}) };
   }
 
   // チェックの基準を保存する（storeId を渡すと、その店舗専用の基準として保存する）
@@ -1826,6 +1897,9 @@
       weeklyHoursLimit: numIn(fields.weeklyHoursLimit, '1週の実働時間の目安', 1, 168),
       countPaidLeaveAsOff: Boolean(fields.countPaidLeaveAsOff),
       closedDayAsOff: Boolean(fields.closedDayAsOff),
+      // 平日の週のシフト休・月の連休（渡されなければ今の値のまま）
+      weekdayShiftOff: intIn(fields.weekdayShiftOff ?? getChecks(storeId).weekdayShiftOff, '平日の週のシフト休', 0, 5),
+      monthlyRenkyu: intIn(fields.monthlyRenkyu ?? getChecks(storeId).monthlyRenkyu, '月の連休の回数', 0, 10),
     };
     commit((d) => {
       if (storeId) {
@@ -1986,6 +2060,9 @@
     getAbsences,
     setShiftBreaks,
     getBusinessTimes,
+    BUSINESS_CATEGORIES,
+    MAX_BUSINESS_DETAIL,
+    MAX_BUSINESS_PLAN_NOTE,
     moveBusinessTime,
     addBusinessTime,
     updateBusinessTime,
@@ -2031,6 +2108,7 @@
     confirmMonth,
     unconfirmMonth,
     applyAutoShifts,
+    guardAllows,
     autoShiftCount,
     undoAutoShifts,
     getSamePersonStaff,

@@ -188,6 +188,9 @@
       if (wishState === 'rejected') classes.push('is-wish-rejected');
       if (paid) classes.push(`is-paid is-paid--${paid.status}`);
       if (view.paidDate === date) classes.push('is-picked');
+      // 押せない日（受付期間外・定休日・臨時休業・送信中）は薄くし、押したら理由を出す（disabled にすると押しても何も起きないため）
+      const locked = !editable || closed;
+      if (locked) classes.push('is-locked');
       const wishLabel = { draft: '希望休（まだ送信していない）', pending: '希望休（申請中）', approved: '希望休（承認）', rejected: '希望休（却下）' }[wishState];
       const marks = [wishLabel || null, paid ? `有給${paid.status === 'pending' ? '（申請中）' : paid.status === 'approved' ? '（承認）' : '（却下）'}` : null, closed ? '定休日' : null].filter(Boolean);
       cells.push(
@@ -196,11 +199,11 @@
           {
             type: 'button',
             class: classes.join(' '),
-            disabled: !editable || closed,
+            'aria-disabled': locked ? 'true' : null,
             'aria-label': `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日（${U.WEEKDAYS[w]}）${marks.length ? `：${marks.join('・')}` : ''}`,
             'aria-pressed': String(view.mode === 'wish' ? wish : view.paidDate === date),
             'data-date': date,
-            onclick: () => onDay(date),
+            onclick: () => (locked ? onLockedDay(date, closed) : onDay(date)),
           },
           el('span', { class: 'req-day__num' }, String(Number(date.slice(8, 10)))),
           el('span', { class: 'req-day__mark' }, wishState === 'approved' ? '希' : wishState === 'pending' || wishState === 'draft' ? '希?' : wishState === 'rejected' ? '×' : paid ? (paid.status === 'approved' ? '有' : paid.status === 'pending' ? '有?' : '×') : closed ? '休' : '')
@@ -208,6 +211,18 @@
       );
     }
     return el('div', { class: 'req-cal', role: 'group', 'aria-label': `${R().monthLabel(month)}のカレンダー` }, weekdayHead(), cells);
+  }
+
+  // 押せない日を押したとき：理由をカレンダーのすぐ下に出す（申請の内容は変えない）
+  function onLockedDay(date, closed) {
+    const { store } = current();
+    const w = R().requestWindow();
+    let text;
+    if (!w.open) text = `今は受付期間外です。${R().monthLabel(w.month)}分は${Number(w.opensOn.slice(5, 7))}月25日から受け付けます。`;
+    else if (closed) text = `${shortDate(date)}：${R().checkDate(store, w.month, date) || '定休日は選べません。'}`;
+    else text = view.busy ? '送信中です。終わるまでお待ちください。' : '読み込み中です。少し待ってから、もう一度押してください。';
+    view.message = { ok: false, text };
+    K.app.rerender();
   }
 
   function onDay(date) {

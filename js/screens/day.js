@@ -80,7 +80,7 @@
               b,
               from,
               span,
-              `社用 ${rangeLabel(b)}${b.source === 'weekly' ? '（毎週）' : ''}${b.skipped ? '（この日は取り消し）' : ''}`
+              `社用 ${rangeLabel(b)} ${K.calc.businessWhat(b)}${b.source === 'weekly' ? '（毎週）' : ''}${b.skipped ? '（この日は取り消し）' : ''}`
             )
           );
         }
@@ -431,54 +431,8 @@
         : el('li', { class: 'detail-item detail-item--empty' }, '設定なし（時間帯別の人数からは除きません）')
     );
 
-    // 社用時間
-    const bizSel = rangeSelects('biz', day, defaultRange(day, 14 * 60, 120));
-    const noteInput = el('input', { id: 'biz-note', class: 'field__input', type: 'text', maxlength: '20', placeholder: 'メモ（任意）例：打ち合わせ' });
-    const bizList = el(
-      'ul',
-      { class: 'detail-list' },
-      day.business.length
-        ? day.business.map((b) =>
-            el(
-              'li',
-              { class: `detail-item${b.skipped ? ' is-skipped' : ''}` },
-              el('span', { class: 'detail-item__key tl-seg--business' }),
-              el(
-                'span',
-                { class: 'detail-item__text' },
-                rangeLabel(b),
-                b.source === 'weekly' ? el('span', { class: 'detail-item__badge' }, '毎週') : null,
-                b.note ? el('span', { class: 'detail-item__note' }, b.note) : null,
-                b.skipped ? el('span', { class: 'detail-item__note' }, 'この日は取り消し中') : null
-              ),
-              b.source === 'weekly'
-                ? el(
-                    'button',
-                    {
-                      type: 'button',
-                      class: 'text-btn text-btn--small',
-                      onclick: () =>
-                        run(
-                          () => K.storage.setBusinessTimeSkip(b.id, date, !b.skipped),
-                          b.skipped ? '取り消しを戻しました' : 'この日だけ取り消しました'
-                        ),
-                    },
-                    b.skipped ? '取り消しを戻す' : 'この日だけ取り消す'
-                  )
-                : el(
-                    'button',
-                    {
-                      type: 'button',
-                      class: 'detail-item__remove',
-                      'aria-label': `社用時間 ${rangeLabel(b)} を削除`,
-                      onclick: () => run(() => K.storage.deleteBusinessTime(b.id), '社用時間を削除しました'),
-                    },
-                    '×'
-                  )
-            )
-          )
-        : el('li', { class: 'detail-item detail-item--empty' }, '設定なし')
-    );
+    // 社用予定（日付指定の一覧・追加・編集・削除。毎週の社用は「この日だけ取り消す」）
+    const plans = K.businessUI.section({ member, date, day, idPrefix: 'biz', onDone: (message) => { K.app.toast(message); K.app.rerender(); } });
 
     const panel = el(
       'div',
@@ -516,36 +470,7 @@
         )
       ),
 
-      el('p', { class: 'sheet__label' }, '社用時間（予約可能人数から除く）'),
-      bizList,
-      el(
-        'div',
-        { class: 'detail-add' },
-        bizSel.node,
-        noteInput,
-        el(
-          'button',
-          {
-            type: 'button',
-            class: 'btn btn--ghost btn--small',
-            onclick: () =>
-              run(
-                () =>
-                  K.storage.addBusinessTime({
-                    type: 'date',
-                    staffId: member.id,
-                    date,
-                    start: bizSel.start.value,
-                    end: bizSel.end.value,
-                    note: noteInput.value,
-                  }),
-                '社用時間を追加しました'
-              ),
-          },
-          'この日の社用時間を追加'
-        )
-      ),
-      el('p', { class: 'sheet__note' }, '毎週決まった社用時間は「設定 > 毎週の社用」で登録します。'),
+      plans,
       errorBox
     );
     return panel;

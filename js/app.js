@@ -89,7 +89,41 @@
     );
   }
 
+  // 同じ画面を作り直すとき（共有データが届いた・入力のあとなど）は、スクロールの位置と、選んでいたマスを戻す。
+  // 画面・店舗・月・表示の条件が変わったとき（タブの移動・月や店舗の切り替え）は戻さない
+  let lastViewKey = null;
+
+  function viewKey() {
+    return JSON.stringify([state.screen, state.storeId, state.month, state.params]);
+  }
+
+  function rememberView() {
+    if (viewKey() !== lastViewKey) return null;
+    const wrap = document.querySelector('#screen .roster-wrap');
+    const active = document.activeElement;
+    const cell = active && active.closest && active.closest('#screen [data-staff][data-date]');
+    return {
+      x: window.scrollX,
+      y: window.scrollY,
+      wrap: wrap ? [wrap.scrollLeft, wrap.scrollTop] : null,
+      cell: cell ? [cell.dataset.staff, cell.dataset.date] : null,
+    };
+  }
+
+  function restoreView(kept) {
+    if (!kept) return;
+    const wrap = document.querySelector('#screen .roster-wrap');
+    if (wrap && kept.wrap) [wrap.scrollLeft, wrap.scrollTop] = kept.wrap;
+    window.scrollTo(kept.x, kept.y);
+    // 選んでいたマスに戻る（入力シートを開いているときは、シートのほうを優先する）
+    if (kept.cell && !document.querySelector('.sheet-layer')) {
+      const target = document.querySelector(`#screen button[data-staff="${kept.cell[0]}"][data-date="${kept.cell[1]}"]`);
+      if (target) target.focus({ preventScroll: true });
+    }
+  }
+
   function render() {
+    const kept = rememberView();
     // 下から出るシートが開いたままにならないようにする
     for (const screen of Object.values(K.screens)) {
       if (typeof screen.cleanup === 'function') screen.cleanup();
@@ -118,6 +152,8 @@
     }
 
     K.screens[state.screen].render(container, state.params);
+    lastViewKey = viewKey();
+    restoreView(kept);
   }
 
   // ヘッダーの「共有中」の印
@@ -137,6 +173,7 @@
       state.storeId = params.storeId;
       saveUiState();
     }
+    lastViewKey = null; // 画面を移ったときは、一番上から表示する
     render();
     window.scrollTo(0, 0);
   }

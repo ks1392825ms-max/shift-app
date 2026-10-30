@@ -48,6 +48,8 @@
           weeklyHoursLimit: val('chk-weekly').value,
           countPaidLeaveAsOff: val('chk-paid').checked,
           closedDayAsOff: val('chk-closed').checked,
+          weekdayShiftOff: val('chk-week-off').value,
+          monthlyRenkyu: val('chk-renkyu').value,
         });
         K.app.toast(`${store.name}の基準を保存しました`);
         K.app.rerender();
@@ -78,6 +80,14 @@
         numberField('chk-off', '月の休日数の目安', c.monthlyOffDays, '日', { note: 'これより少ないときに知らせます。' }),
         switchField('chk-paid', '有給を休日数に数える', c.countPaidLeaveAsOff),
         switchField('chk-closed', '定休日を通常休として扱う', c.closedDayAsOff, '何も入力していない定休日を、通常休として数えます。'),
+
+        el('h2', { class: 'card__title card__title--section' }, 'シフト休と連休（正社員・AIシフト作成）'),
+        numberField('chk-week-off', '平日の週のシフト休', c.weekdayShiftOff, '日', {
+          note: '月曜〜日曜の週ごとに、この日数のシフト休を平日に入れます（土日祝は原則出勤）。定休日・臨時休業も1日に数え、有給は数えません。0 にすると、月の休日数の目安で作ります。本人の「月の休日数」「週休」「この店舗で働く曜日」を入れた人とパートは、今までどおりです。',
+        }),
+        numberField('chk-renkyu', '月の連休', c.monthlyRenkyu, '回', {
+          note: 'シフト休が2日以上続く所（定休日を含む・有給は含めない）を、月にこの回数作ります。月をまたぐ連休は、始まった日の月に数えます。',
+        }),
 
         el('h2', { class: 'card__title card__title--section' }, '労働時間'),
         switchField('chk-hours', '労働時間をチェックする', c.hoursCheckEnabled),

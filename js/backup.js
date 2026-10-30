@@ -76,7 +76,7 @@
       (r.storeId === undefined || isId(r.storeId)) &&
       (r.breaks === undefined || (Array.isArray(r.breaks) && r.breaks.every(isRange))),
     businessTimes: (r) =>
-      isId(r.staffId) && isRange(r) && isStr(r.note || '', 20) &&
+      isId(r.staffId) && isRange(r) && isStr(r.note || '', 50) &&
       ((r.type === 'date' && U.isValidDate(r.date)) || (r.type === 'weekly' && isInt(r.weekday, 0, 6) && isOptDate(r.validFrom) && isOptDate(r.validTo))),
     businessTimeSkips: (r) => isId(r.businessTimeId) && U.isValidDate(r.date),
     staffingRules: (r) => isId(r.storeId) && ['weekday', 'holiday'].includes(r.dayType) && isBand(r),
@@ -102,6 +102,11 @@
       if (s.autoRunId !== undefined && !isId(s.autoRunId)) delete s.autoRunId;
       // 当日の欠勤・休暇：形が正しくなければ情報だけ捨てる（マスの休み・有給は残す）
       if (s.absence !== undefined && !isAbsence(s.absence, s.kind)) delete s.absence;
+    }
+    // 社用予定の内容・詳細（ある場合だけ）：正しくなければ項目だけ捨てる（社用時間は残す）
+    for (const b of data.businessTimes) {
+      if (b.category !== undefined && !Object.prototype.hasOwnProperty.call(K.storage.BUSINESS_CATEGORIES, b.category)) delete b.category;
+      if (b.detail !== undefined && !(typeof b.detail === 'string' && b.detail.length <= 30)) delete b.detail;
     }
     for (const s of data.stores) {
       const ok =
@@ -160,6 +165,8 @@
       weeklyHoursLimit: num('weeklyHoursLimit', 1, 168),
       countPaidLeaveAsOff: bool('countPaidLeaveAsOff'),
       closedDayAsOff: bool('closedDayAsOff'),
+      weekdayShiftOff: Number.isInteger(c.weekdayShiftOff) ? num('weekdayShiftOff', 0, 5) : d.weekdayShiftOff,
+      monthlyRenkyu: Number.isInteger(c.monthlyRenkyu) ? num('monthlyRenkyu', 0, 10) : d.monthlyRenkyu,
     };
   }
 
