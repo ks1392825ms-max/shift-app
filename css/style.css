@@ -2714,9 +2714,171 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
   border-right: 1px solid var(--border);
 }
 
-/* ---- 印刷用（A4横・1店舗1ページ） ---- */
+/* ---- 印刷用（A4横。スタッフが多い店舗は2ページ以上） ---- */
+/* 表の見た目は #print-root の中だけに効く（画面では #print-root を出さない。印刷のときだけ出す） */
 #print-root {
   display: none;
+  color: #111214;
+  background: #fff;
+}
+
+.print-page {
+  break-after: page;
+  page-break-after: always;
+}
+
+.print-page:last-child {
+  break-after: auto;
+  page-break-after: auto;
+}
+
+.print-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: var(--cell-pt, 8pt);
+  font-variant-numeric: tabular-nums;
+}
+
+.print-col-date {
+  width: 12mm;
+}
+
+.print-col-count {
+  width: 8mm;
+}
+
+/* 見出しは、表が次のページに続くときも毎回出す */
+.print-table thead {
+  display: table-header-group;
+}
+
+.print-table tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.print-table th,
+.print-table td {
+  height: 5.1mm;
+  padding: 0.3mm 0.8mm 0.3mm 1.6mm;
+  border: 0.2mm solid #d9d9d4;
+  text-align: center;
+  vertical-align: middle;
+  line-height: 1.15;
+}
+
+.print-table th.print-title {
+  height: auto;
+  padding: 0 0 2mm;
+  border: 0;
+  text-align: left;
+  font-size: 13pt;
+  font-weight: 800;
+}
+
+.print-head-row th {
+  height: 9mm;
+  border-bottom: 0.6mm solid var(--store-color);
+}
+
+/* 名前は切らずに折り返す（2行に収まる大きさを自動で選ぶ） */
+.print-name {
+  display: block;
+  font-size: var(--name-pt, 8pt);
+  font-weight: 800;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.print-role {
+  display: block;
+  margin-top: 0.3mm;
+  color: #6e6f73;
+  font-size: 7pt;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.print-cell {
+  display: block;
+  white-space: nowrap;
+}
+
+/* 勤務の下の社用予定（時間と内容。長いときは折り返す） */
+.print-plan {
+  display: block;
+  margin-top: 0.3mm;
+  padding-top: 0.3mm;
+  border-top: 0.2mm dashed color-mix(in srgb, var(--pattern-color, #6e6f73) 60%, #fff);
+  font-size: 7pt;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.print-date {
+  text-align: left !important;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.print-date.is-sat {
+  color: #2563eb;
+}
+
+.print-date.is-sun {
+  color: #dc2626;
+}
+
+.print-count {
+  padding: 0 !important;
+  background: #f4f4f1;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.print-count--total {
+  font-weight: 800;
+}
+
+.print-table tr.is-closed td:not(.print-count) {
+  background: #f7f7f5;
+}
+
+.p-work {
+  background: color-mix(in srgb, var(--pattern-color) 18%, #fff);
+  box-shadow: inset 0.8mm 0 0 var(--pattern-color);
+  font-weight: 700;
+}
+
+.p-business {
+  outline: 0.3mm dashed var(--pattern-color);
+  outline-offset: -0.6mm;
+  font-weight: 700;
+}
+
+.p-off {
+  background: #ecece8;
+  color: #6e6f73;
+  font-weight: 700;
+}
+
+.p-paid {
+  outline: 0.4mm solid #111214;
+  outline-offset: -0.8mm;
+  font-weight: 700;
+}
+
+.p-closed {
+  color: #6e6f73;
+  font-size: 7pt;
+}
+
+.print-legend {
+  margin: 2mm 0 0;
+  color: #6e6f73;
+  font-size: 7pt;
 }
 
 @media print {
@@ -2735,133 +2897,15 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
     padding: 0 !important;
   }
 
+  /* 画面下のメニュー・操作ボタンなど、表のほかは印刷しない */
   body > *:not(#print-root) {
     display: none !important;
   }
 
   #print-root {
     display: block;
-    color: #111214;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
-  }
-
-  .print-page {
-    break-after: page;
-    page-break-after: always;
-  }
-
-  .print-page:last-child {
-    break-after: auto;
-    page-break-after: auto;
-  }
-
-  .print-title {
-    margin: 0 0 2mm;
-    font-size: 13pt;
-    font-weight: 800;
-  }
-
-  .print-table {
-    width: 100%;
-    table-layout: fixed;
-    border-collapse: collapse;
-    font-size: 8pt;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .print-page.is-compact .print-table {
-    font-size: 7pt;
-  }
-
-  .print-table th,
-  .print-table td {
-    height: 5.1mm;
-    padding: 0 1mm;
-    border: 0.2mm solid #d9d9d4;
-    text-align: center;
-    white-space: nowrap;
-    overflow: hidden;
-  }
-
-  .print-table thead th {
-    height: 9mm;
-    border-bottom: 0.6mm solid var(--store-color);
-  }
-
-  .print-name {
-    display: block;
-    font-weight: 800;
-  }
-
-  .print-role {
-    display: block;
-    color: #6e6f73;
-    font-size: 0.85em;
-    font-weight: 600;
-  }
-
-  .print-date {
-    width: 12mm;
-    text-align: left !important;
-    font-weight: 700;
-  }
-
-  .print-date.is-sat {
-    color: #2563eb;
-  }
-
-  .print-date.is-sun {
-    color: #dc2626;
-  }
-
-  .print-count {
-    width: 8mm;
-    background: #f4f4f1;
-    font-weight: 700;
-  }
-
-  .print-count--total {
-    font-weight: 800;
-  }
-
-  .print-table tr.is-closed td:not(.print-count) {
-    background: #f7f7f5;
-  }
-
-  .p-work {
-    background: color-mix(in srgb, var(--pattern-color) 18%, #fff);
-    box-shadow: inset 0.8mm 0 0 var(--pattern-color);
-    font-weight: 700;
-  }
-
-  .p-business {
-    outline: 0.3mm dashed var(--pattern-color);
-    outline-offset: -0.6mm;
-    font-weight: 700;
-  }
-
-  .p-off {
-    background: #ecece8;
-    color: #6e6f73;
-    font-weight: 700;
-  }
-
-  .p-paid {
-    outline: 0.4mm solid #111214;
-    outline-offset: -0.8mm;
-    font-weight: 700;
-  }
-
-  .p-closed {
-    color: #6e6f73;
-    font-size: 0.85em;
-  }
-
-  .print-legend {
-    margin: 2mm 0 0;
-    color: #6e6f73;
-    font-size: 7pt;
   }
 }
 

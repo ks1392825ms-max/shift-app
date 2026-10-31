@@ -33,7 +33,10 @@
         if (s.kind === 'off') return { kind: 'off', text: '休' };
         if (s.kind === 'paid') return { kind: 'paid', text: '有' };
         const p = K.storage.getPattern(s.patternId);
-        return { kind: s.kind, text: p ? p.label : '?', color: p ? p.color : '#64748b' };
+        // 勤務の日の社用予定（取り消し中のものは出さない）
+        const day = s.kind === 'work' ? K.calc.staffDay(m, s, date) : null;
+        const plans = day ? day.business.filter((b) => !b.skipped).map((b) => `社 ${shortRange(b)} ${K.calc.businessWhat(b)}`) : [];
+        return { kind: s.kind, text: p ? p.label : '?', color: p ? p.color : '#64748b', plans };
       });
       return { date, closed, holiday: K.holidays.holidayName(date), weekday: K.calc.weekdayOf(date), cells, counts: K.calc.dailyCounts(staff, map, date) };
     });
@@ -43,7 +46,23 @@
     return { store, staff, rows, title: `${store.name}　${y}年${m}月　シフト表${confirmed}` };
   }
 
-  const LEGEND = '休＝通常休　有＝有給　社＝社用（人数に含めない）　定休＝定休日　休業＝臨時休業　St／As／計＝その日の通常勤務の人数';
+  const LEGEND = '休＝通常休　有＝有給　勤務の下の「社 時間 内容」＝社用予定　「社 勤務」＝終日の社用（人数に含めない）　定休＝定休日　休業＝臨時休業　St／As／計＝その日の通常勤務の人数';
+
+  // 社用予定の短い時刻（例：13:00〜15:00 → 13-15、13:30〜15:00 → 13:30-15）
+  function shortTime(minutes) {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m ? `${h}:${String(m).padStart(2, '0')}` : String(h);
+  }
+
+  function shortRange(b) {
+    return `${shortTime(b.start)}-${shortTime(b.end)}`;
+  }
+
+  // マスの1行目の文字（勤務の名前・休・有・定休）
+  function cellLabel(c) {
+    return c.kind === 'business' ? `社 ${c.text}` : c.text;
+  }
 
   // ---- 画像（PNG） ----
 
@@ -68,20 +87,64 @@
     ctx.fillText(text, x, y);
   }
 
+  // 文字を幅に合わせて行に分ける（日本語は1文字ずつ折り返せる）
+  function wrapLines(ctx, text, maxWidth) {
+    const lines = [];
+    let line = '';
+    for (const ch of Array.from(text)) {
+      if (line && ctx.measureText(line + ch).width > maxWidth) {
+        lines.push(line);
+        line = ch.trim() ? ch : '';
+      } else {
+        line += ch;
+      }
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  // 名前を2行までに収まる大きさで行に分ける（9px でも収まらないときは3行以上にする。途中で切らない）
+  function nameLines(ctx, text, maxWidth) {
+    for (let s = 14; s >= 9; s -= 0.5) {
+      ctx.font = `800 ${s}px ${FONT}`;
+      const lines = wrapLines(ctx, text, maxWidth);
+      if (lines.length <= 2 || s === 9) return { size: s, lines };
+    }
+    return { size: 9, lines: [text] };
+  }
+
   function drawRoster(storeId, month) {
     const data = rosterData(storeId, month);
     const PAD = 20;
     const TITLE_H = 44;
-    const HEAD_H = 50;
     const ROW_H = 32;
+    const PLAN_LINE_H = 12;
+    const PLAN_SIZE = 10;
     const DATE_W = 72;
-    const STAFF_W = 70;
     const COUNT_W = 42;
     const LEGEND_H = 40;
     const scale = 2; // 文字をくっきりさせるため2倍で描く
 
+    // 列の幅：いちばん長い勤務の名前が 13px で入る幅（最低 70px）
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.font = `700 13px ${FONT}`;
+    let widest = 0;
+    data.rows.forEach((row) => row.cells.forEach((c) => (widest = Math.max(widest, probe.measureText(cellLabel(c)).width))));
+    const STAFF_W = Math.max(70, Math.ceil(widest + 18));
+
+    // 見出し：名前は2行まで（長いときは小さく）
+    const heads = data.staff.map((m) => nameLines(probe, m.name, STAFF_W - 8));
+    const nameRows = Math.max(1, ...heads.map((h) => h.lines.length));
+    const HEAD_H = 34 + nameRows * 16;
+
+    // 社用予定の行（マスの幅で折り返す）。行の高さは、その日にいちばん行が多いマスに合わせる
+    probe.font = `600 ${PLAN_SIZE}px ${FONT}`;
+    const rowPlans = data.rows.map((row) => row.cells.map((c) => (c.plans || []).flatMap((t) => wrapLines(probe, t, STAFF_W - 14))));
+    const rowHeights = rowPlans.map((cells) => ROW_H + Math.max(0, ...cells.map((l) => l.length)) * PLAN_LINE_H);
+    const bodyH = rowHeights.reduce((a, b) => a + b, 0);
+
     const width = PAD * 2 + DATE_W + data.staff.length * STAFF_W + COUNT_W * 3;
-    const height = PAD * 2 + TITLE_H + HEAD_H + data.rows.length * ROW_H + LEGEND_H;
+    const height = PAD * 2 + TITLE_H + HEAD_H + bodyH + LEGEND_H;
     const canvas = document.createElement('canvas');
     canvas.width = width * scale;
     canvas.height = height * scale;
@@ -103,7 +166,7 @@
 
     // 右側の人数の背景
     ctx.fillStyle = COLORS.countFill;
-    ctx.fillRect(countX, top, COUNT_W * 3, HEAD_H + data.rows.length * ROW_H);
+    ctx.fillRect(countX, top, COUNT_W * 3, HEAD_H + bodyH);
 
     // 見出し
     ctx.textAlign = 'center';
@@ -112,10 +175,12 @@
     ctx.fillText('日付', PAD + DATE_W / 2, top + HEAD_H - 14);
     data.staff.forEach((m, i) => {
       const cx = PAD + DATE_W + i * STAFF_W + STAFF_W / 2;
+      const h = heads[i];
       ctx.fillStyle = COLORS.text;
-      fitText(ctx, m.name, cx, top + 16, STAFF_W - 8, 14, '800');
+      ctx.font = `800 ${h.size}px ${FONT}`;
+      h.lines.forEach((line, k) => ctx.fillText(line, cx, top + 14 + k * 16));
       ctx.fillStyle = COLORS.muted;
-      fitText(ctx, `${U.ROLE_SHORT[m.role]}${m.title ? `・${m.title}` : ''}`, cx, top + 35, STAFF_W - 8, 11, '600');
+      fitText(ctx, `${U.ROLE_SHORT[m.role]}${m.title ? `・${m.title}` : ''}`, cx, top + HEAD_H - 14, STAFF_W - 8, 11, '600');
     });
     ['St', 'As', '計'].forEach((h, i) => {
       ctx.fillStyle = COLORS.muted;
@@ -126,14 +191,15 @@
     ctx.fillRect(PAD, top + HEAD_H - 2, width - PAD * 2, 2);
 
     // 各日の行
+    let y = top + HEAD_H;
     data.rows.forEach((row, r) => {
-      const y = top + HEAD_H + r * ROW_H;
+      const rowH = rowHeights[r];
       const cy = y + ROW_H / 2;
       const [, , d] = row.date.split('-').map(Number);
 
       if (row.closed) {
         ctx.fillStyle = COLORS.closedFill;
-        ctx.fillRect(PAD, y, countX - PAD, ROW_H);
+        ctx.fillRect(PAD, y, countX - PAD, rowH);
       }
 
       // 日付
@@ -153,7 +219,8 @@
         const bx = x + 3;
         const by = y + 3;
         const bw = STAFF_W - 6;
-        const bh = ROW_H - 6;
+        const bh = rowH - 6;
+        const plans = rowPlans[r][i];
         ctx.textAlign = 'center';
         if (c.kind === 'work' || c.kind === 'business') {
           roundRect(ctx, bx, by, bw, bh, 5);
@@ -170,7 +237,10 @@
             ctx.fillRect(bx, by + 2, 3, bh - 4);
           }
           ctx.fillStyle = COLORS.text;
-          fitText(ctx, c.kind === 'business' ? `社 ${c.text}` : c.text, x + STAFF_W / 2 + 1, cy, bw - 8, 13, '700');
+          fitText(ctx, cellLabel(c), x + STAFF_W / 2 + 2, cy, bw - 10, 13, '700');
+          // 社用予定（勤務の下に小さく）
+          ctx.font = `600 ${PLAN_SIZE}px ${FONT}`;
+          plans.forEach((line, k) => ctx.fillText(line, x + STAFF_W / 2 + 2, y + ROW_H - 4 + k * PLAN_LINE_H));
         } else if (c.kind === 'off') {
           roundRect(ctx, bx, by, bw, bh, 5);
           ctx.fillStyle = COLORS.offFill;
@@ -203,13 +273,14 @@
 
       // 行の区切り線
       ctx.fillStyle = COLORS.border;
-      ctx.fillRect(PAD, y + ROW_H - 1, width - PAD * 2, 1);
+      ctx.fillRect(PAD, y + rowH - 1, width - PAD * 2, 1);
+      y += rowH;
     });
 
     // 日付と人数の列の区切り
     ctx.fillStyle = COLORS.border;
-    ctx.fillRect(PAD + DATE_W, top, 1, HEAD_H + data.rows.length * ROW_H);
-    ctx.fillRect(countX, top, 1, HEAD_H + data.rows.length * ROW_H);
+    ctx.fillRect(PAD + DATE_W, top, 1, HEAD_H + bodyH);
+    ctx.fillRect(countX, top, 1, HEAD_H + bodyH);
 
     // 凡例
     ctx.textAlign = 'left';
@@ -268,66 +339,141 @@
     return saveFiles(files);
   }
 
-  // ---- 印刷（A4横・1店舗1ページ） ----
+  // ---- 印刷（A4横。スタッフが多い店舗は、何人かずつに分けて2ページ以上にする） ----
 
-  function printPage(storeId, month) {
+  const PRINT = {
+    pageWidth: 281, // A4横 297mm − 左右の余白 8mm × 2
+    dateWidth: 12,
+    countWidth: 8, // St／As／計 の1列
+    cellPad: 3.4, // マスの左右の余白と色の線（mm）
+    minColumn: 12, // スタッフの1列の最低幅（mm）
+    maxPt: 8, // マスの文字の大きさ（pt）
+    minPt: 7, // これより小さくはしない（入らないときはページを分ける）
+    maxNamePt: 8.5,
+  };
+  const PT_MM = 25.4 / 72;
+  let probeCtx = null;
+
+  // 文字の幅（mm）。少し広めに見積もる（ブラウザによる字の幅の違いの分）
+  function textMm(text, pt, weight = 700) {
+    if (!probeCtx) probeCtx = document.createElement('canvas').getContext('2d');
+    probeCtx.font = `${weight} 100px ${FONT}`;
+    return (probeCtx.measureText(text).width / 100) * pt * PT_MM * 1.08;
+  }
+
+  // 1店舗分の印刷の割り付け：スタッフを何人ずつのページに分けるか、各ページの列の幅と文字の大きさ
+  function printLayout(data) {
+    const area = PRINT.pageWidth - PRINT.dateWidth - PRINT.countWidth * 3;
+    const labels = (staffIdx) => {
+      const set = new Set();
+      data.rows.forEach((row) => staffIdx.forEach((i) => set.add(cellLabel(row.cells[i]))));
+      return [...set].filter(Boolean);
+    };
+    const widestAt = (texts, pt) => Math.max(0, ...texts.map((t) => textMm(t, pt)));
+
+    const all = data.staff.map((_, i) => i);
+    // 最小の文字（7pt）で、いちばん長いマスの文字が入る幅を、1列の最低幅にする
+    const minCol = Math.max(PRINT.minColumn, widestAt(labels(all), PRINT.minPt) + PRINT.cellPad);
+    const perPageMax = Math.max(1, Math.floor(area / minCol));
+    const pageCount = Math.max(1, Math.ceil(data.staff.length / perPageMax));
+    const perPage = Math.ceil(data.staff.length / pageCount);
+
+    const pages = [];
+    for (let p = 0; p < pageCount; p++) {
+      const idx = all.slice(p * perPage, (p + 1) * perPage);
+      const col = idx.length ? area / idx.length : area;
+      const texts = labels(idx);
+      // マスの文字：入るいちばん大きい大きさ（8pt〜7pt）
+      let pt = PRINT.maxPt;
+      while (pt > PRINT.minPt && widestAt(texts, pt) + PRINT.cellPad > col) pt -= 0.5;
+      // 名前：2行に収まるいちばん大きい大きさ（収まらないときは7ptで3行以上に折り返す。途中で切らない）
+      const names = idx.map((i) => data.staff[i].name);
+      let namePt = PRINT.maxNamePt;
+      while (namePt > PRINT.minPt && names.some((n) => textMm(n, namePt, 800) > (col - 2) * 2 * 0.92)) namePt -= 0.5;
+      pages.push({ idx, pt, namePt });
+    }
+    return pages;
+  }
+
+  function printTable(data, page, title) {
     const el = U.el;
-    const data = rosterData(storeId, month);
-    const compact = data.staff.length > 10 ? ' is-compact' : '';
+    const staff = page.idx.map((i) => data.staff[i]);
+    const colCount = 1 + staff.length + 3;
     return el(
-      'section',
-      { class: `print-page${compact}`, style: { '--store-color': data.store.color } },
-      el('h1', { class: 'print-title' }, data.title),
+      'table',
+      { class: 'print-table', style: { '--cell-pt': `${page.pt}pt`, '--name-pt': `${page.namePt}pt` } },
       el(
-        'table',
-        { class: 'print-table' },
+        'colgroup',
+        null,
+        el('col', { class: 'print-col-date' }),
+        staff.map(() => el('col')),
+        [0, 1, 2].map(() => el('col', { class: 'print-col-count' }))
+      ),
+      // 見出し（2ページ目以降や、表が次のページに続くときも、毎回出る）
+      el(
+        'thead',
+        null,
+        el('tr', { class: 'print-title-row' }, el('th', { colspan: String(colCount), class: 'print-title' }, title)),
         el(
-          'thead',
-          null,
-          el(
-            'tr',
-            null,
-            el('th', { class: 'print-date' }, '日付'),
-            data.staff.map((m) =>
-              el('th', null, el('span', { class: 'print-name' }, m.name), el('span', { class: 'print-role' }, `${U.ROLE_SHORT[m.role]}${m.title ? `・${m.title}` : ''}`))
-            ),
-            el('th', { class: 'print-count' }, 'St'),
-            el('th', { class: 'print-count' }, 'As'),
-            el('th', { class: 'print-count' }, '計')
-          )
-        ),
-        el(
-          'tbody',
-          null,
-          data.rows.map((row) => {
-            const [, , d] = row.date.split('-').map(Number);
-            const dayCls = row.weekday === 0 || row.holiday ? ' is-sun' : row.weekday === 6 ? ' is-sat' : '';
-            return el(
-              'tr',
-              { class: row.closed ? 'is-closed' : null },
-              el('th', { class: `print-date${dayCls}` }, `${d} ${row.holiday ? '祝' : U.WEEKDAYS[row.weekday]}`),
-              row.cells.map((c) =>
-                el(
-                  'td',
-                  { class: `p-${c.kind}`, style: c.color ? { '--pattern-color': c.color } : null },
-                  c.kind === 'business' ? `社 ${c.text}` : c.text
-                )
-              ),
-              el('td', { class: 'print-count' }, String(row.counts.stylist)),
-              el('td', { class: 'print-count' }, String(row.counts.assistant)),
-              el('td', { class: 'print-count print-count--total' }, String(row.counts.total))
-            );
-          })
+          'tr',
+          { class: 'print-head-row' },
+          el('th', { class: 'print-date' }, '日付'),
+          staff.map((m) =>
+            el('th', { class: 'print-staff' }, el('span', { class: 'print-name' }, m.name), el('span', { class: 'print-role' }, `${U.ROLE_SHORT[m.role]}${m.title ? `・${m.title}` : ''}`))
+          ),
+          el('th', { class: 'print-count' }, 'St'),
+          el('th', { class: 'print-count' }, 'As'),
+          el('th', { class: 'print-count' }, '計')
         )
       ),
-      el('p', { class: 'print-legend' }, LEGEND)
+      el(
+        'tbody',
+        null,
+        data.rows.map((row) => {
+          const [, , d] = row.date.split('-').map(Number);
+          const dayCls = row.weekday === 0 || row.holiday ? ' is-sun' : row.weekday === 6 ? ' is-sat' : '';
+          return el(
+            'tr',
+            { class: row.closed ? 'is-closed' : null },
+            el('th', { class: `print-date${dayCls}` }, `${d} ${row.holiday ? '祝' : U.WEEKDAYS[row.weekday]}`),
+            page.idx.map((i) => {
+              const c = row.cells[i];
+              return el(
+                'td',
+                { class: `p-${c.kind}`, style: c.color ? { '--pattern-color': c.color } : null },
+                el('span', { class: 'print-cell' }, cellLabel(c)),
+                (c.plans || []).map((t) => el('span', { class: 'print-plan' }, t))
+              );
+            }),
+            el('td', { class: 'print-count' }, String(row.counts.stylist)),
+            el('td', { class: 'print-count' }, String(row.counts.assistant)),
+            el('td', { class: 'print-count print-count--total' }, String(row.counts.total))
+          );
+        })
+      )
     );
+  }
+
+  // 1店舗分のページ（スタッフが多いときは2ページ以上）
+  function printPages(storeId, month) {
+    const el = U.el;
+    const data = rosterData(storeId, month);
+    const pages = printLayout(data);
+    return pages.map((page, p) => {
+      const part = pages.length > 1 ? `　（スタッフ ${p + 1}/${pages.length}）` : '';
+      return el(
+        'section',
+        { class: 'print-page', style: { '--store-color': data.store.color } },
+        printTable(data, page, `${data.title}${part}`),
+        el('p', { class: 'print-legend' }, pages.length > 1 ? `${LEGEND}　※スタッフが多いため${pages.length}つの表に分けています（St／As／計は全員の人数）` : LEGEND)
+      );
+    });
   }
 
   function printRosters(storeIds, month) {
     const old = document.getElementById('print-root');
     if (old) old.remove();
-    const root = U.el('div', { id: 'print-root' }, storeIds.map((id) => printPage(id, month)));
+    const root = U.el('div', { id: 'print-root' }, storeIds.flatMap((id) => printPages(id, month)));
     document.body.append(root);
     const cleanup = () => {
       root.remove();
@@ -337,5 +483,5 @@
     window.print();
   }
 
-  K.exporter = { drawRoster, saveImages, printRosters, saveFiles };
+  K.exporter = { drawRoster, saveImages, printRosters, printLayout, rosterData, saveFiles };
 })();
