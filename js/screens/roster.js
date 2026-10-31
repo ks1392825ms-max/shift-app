@@ -744,7 +744,14 @@
 
     function print() {
       closeSheet(false);
-      K.exporter.printRosters(targetIds(), view.month);
+      try {
+        K.exporter.printRosters(targetIds(), view.month, {
+          onNotOpened: () => K.app.toast('印刷の画面が開きませんでした。ページを読み込み直して（Mac は ⌘R）から、もう一度押してください', 8000),
+        });
+      } catch (err) {
+        console.error(err);
+        K.app.toast(`印刷用の表を作れませんでした（${err.message}）`, 8000);
+      }
     }
 
     const panel = el(
@@ -766,7 +773,7 @@
           'button',
           { type: 'button', class: 'btn btn--ghost', onclick: print },
           '印刷・PDF（A4横）',
-          el('span', { class: 'export-actions__sub' }, '1店舗1ページ。印刷の画面で「PDFとして保存」も選べます')
+          el('span', { class: 'export-actions__sub' }, 'スタッフが多い店舗は表を分けます。印刷の画面で「PDFとして保存」も選べます')
         )
       ),
       el(

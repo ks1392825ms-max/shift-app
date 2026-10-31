@@ -193,12 +193,13 @@
   }
 
   let toastTimer = null;
-  function toast(message) {
+  // ms：出しておく時間（長い案内や、理由を読んでもらうメッセージは長めにする）
+  function toast(message, ms = 2000) {
     const box = document.getElementById('toast');
     box.textContent = message;
     box.classList.add('is-visible');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => box.classList.remove('is-visible'), 2000);
+    toastTimer = setTimeout(() => box.classList.remove('is-visible'), ms);
   }
 
   // ---- 共有モード ----

@@ -470,7 +470,9 @@
     });
   }
 
-  function printRosters(storeIds, month) {
+  // onNotOpened：印刷の画面が開かなかったとき（Chrome は、続けて何度も印刷すると、読み込み直すまで黙って無視することがある）
+  // 表を作る途中で失敗したときは、例外をそのまま投げる（呼んだ側で理由を出す）
+  function printRosters(storeIds, month, { onNotOpened } = {}) {
     const old = document.getElementById('print-root');
     if (old) old.remove();
     const root = U.el('div', { id: 'print-root' }, storeIds.flatMap((id) => printPages(id, month)));
@@ -480,7 +482,17 @@
       window.removeEventListener('afterprint', cleanup);
     };
     window.addEventListener('afterprint', cleanup);
+    // 印刷の画面が開くと beforeprint が来る。少し待っても来なければ、開かなかったと判断する
+    let opened = false;
+    const onBefore = () => {
+      opened = true;
+    };
+    window.addEventListener('beforeprint', onBefore);
     window.print();
+    setTimeout(() => {
+      window.removeEventListener('beforeprint', onBefore);
+      if (!opened && onNotOpened) onNotOpened();
+    }, 1500);
   }
 
   K.exporter = { drawRoster, saveImages, printRosters, printLayout, rosterData, saveFiles };
