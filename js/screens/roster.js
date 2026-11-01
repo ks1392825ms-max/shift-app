@@ -1211,6 +1211,7 @@
         checkButton(),
         absenceButton(),
         el('button', { type: 'button', class: 'check-btn export-btn', onclick: openExportSheet }, '出力'),
+        el('button', { type: 'button', class: 'check-btn mtl-btn', onclick: () => K.app.navigate('monthTimeline') }, '月のタイムライン'),
         pub ? null : el('button', { type: 'button', class: 'check-btn weekly-btn', onclick: applyWeekly }, '曜日の設定を反映'),
         pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn ai-btn', onclick: openAutoSheet }, 'AIで作成'),
         !pub && autoCount ? el('button', { type: 'button', class: 'check-btn tool-btn undo-auto-btn', onclick: undoAuto }, `自動作成を取り消す（${autoCount}）`) : null,

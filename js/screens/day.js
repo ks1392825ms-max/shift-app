@@ -31,12 +31,13 @@
 
   // ---- 画面の上の操作 ----
 
-  function toolbar(date, store) {
-    const go = (delta) => K.app.navigate('day', { date: addDays(date, delta), storeId: store.id });
+  function toolbar(date, store, from) {
+    const go = (delta) => K.app.navigate('day', { date: addDays(date, delta), storeId: store.id, from });
+    const back = from === 'monthTimeline' ? ['monthTimeline', '‹ 月のタイムライン'] : ['roster', '‹ シフト表'];
     return el(
       'div',
       { class: 'roster-toolbar' },
-      el('button', { type: 'button', class: 'text-btn day-back', onclick: () => K.app.navigate('roster') }, '‹ シフト表'),
+      el('button', { type: 'button', class: 'text-btn day-back', onclick: () => K.app.navigate(back[0]) }, back[1]),
       el(
         'div',
         { class: 'month-nav' },
@@ -528,7 +529,7 @@
     const closed = K.calc.isStoreClosed(store, date);
 
     container.append(
-      toolbar(date, store),
+      toolbar(date, store, params.from),
       el(
         'p',
         { class: 'day-summary' },

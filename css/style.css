@@ -2714,6 +2714,229 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
   border-right: 1px solid var(--border);
 }
 
+/* ---- 月のタイムライン（30分ごとの人数 St・As を、日ごとに並べる） ---- */
+.mtl-card {
+  --mtl-blue: #3b82f6;
+  --mtl-short-bg: #fee2e2;
+  --mtl-short-text: #b91c1c;
+  --mtl-short-line: #dc2626;
+  min-width: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mtl-card {
+    --mtl-short-bg: #7f1d1d;
+    --mtl-short-text: #fecaca;
+    --mtl-short-line: #f87171;
+  }
+}
+
+.mtl-summary {
+  margin: 0 0 6px;
+  font-weight: 700;
+}
+
+.mtl-summary.has-short {
+  color: var(--danger);
+}
+
+.mtl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.mtl-key {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: -6px;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.mtl-legend__note {
+  flex-basis: 100%;
+}
+
+/* 表は枠の中で横にスクロール（ページは横にはみ出さない）。日付と St/As の列は左に止める */
+.mtl-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.mtl {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.mtl th,
+.mtl td {
+  padding: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.mtl thead th {
+  height: 22px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 700;
+  background: var(--surface);
+}
+
+.mtl-date {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 46px;
+  width: 46px;
+  background: var(--surface);
+}
+
+.mtl-role {
+  position: sticky;
+  left: 46px;
+  z-index: 2;
+  min-width: 26px;
+  width: 26px;
+  border-right: 1px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 700;
+  background: var(--surface);
+}
+
+.mtl-time {
+  min-width: 24px;
+  text-align: left !important;
+}
+
+.mtl-time.is-hour {
+  padding-left: 2px !important;
+  border-left: 1px solid var(--border);
+}
+
+.mtl-date__btn {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.mtl-date__day {
+  font-weight: 800;
+  font-size: 0.85rem;
+}
+
+.mtl-date__wd {
+  font-size: 0.7rem;
+}
+
+.mtl-row.is-sat .mtl-date__btn {
+  color: #2563eb;
+}
+
+.mtl-row.is-sun .mtl-date__btn {
+  color: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mtl-row.is-sat .mtl-date__btn {
+    color: #60a5fa;
+  }
+
+  .mtl-row.is-sun .mtl-date__btn {
+    color: #f87171;
+  }
+}
+
+/* 1日の区切り（As の行の下・人数を出さない日の行の下） */
+.mtl-row--as > *,
+.mtl-row--closed > *,
+.mtl-row--blank > *,
+.mtl-row--st > .mtl-date,
+.mtl-row--st > .mtl-short {
+  border-bottom: 1px solid var(--border);
+}
+
+.mtl-cell {
+  min-width: 24px;
+  height: 20px;
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mtl-cell.lv-0 {
+  color: var(--text-muted);
+}
+
+.mtl-cell.lv-1,
+.mtl-key.lv-1 {
+  background: color-mix(in srgb, var(--mtl-blue) 12%, var(--surface));
+}
+
+.mtl-cell.lv-2,
+.mtl-key.lv-2 {
+  background: color-mix(in srgb, var(--mtl-blue) 24%, var(--surface));
+}
+
+.mtl-cell.lv-3 {
+  background: color-mix(in srgb, var(--mtl-blue) 38%, var(--surface));
+}
+
+.mtl-cell.lv-4 {
+  background: color-mix(in srgb, var(--mtl-blue) 52%, var(--surface));
+}
+
+/* 必要人数に足りない（St・As の、足りない方だけ） */
+.mtl-cell.is-short,
+.mtl-key.is-short {
+  background: var(--mtl-short-bg);
+  color: var(--mtl-short-text);
+  font-weight: 800;
+  box-shadow: inset 0 0 0 1.5px var(--mtl-short-line);
+}
+
+/* その日の勤務・営業の時間の外 */
+.mtl-cell.is-out {
+  background: var(--surface-2);
+  cursor: default;
+}
+
+.mtl-short {
+  min-width: 46px;
+  padding: 0 6px !important;
+  border-left: 1px solid var(--border);
+  color: var(--danger);
+  font-weight: 800;
+}
+
+.mtl-note {
+  padding-left: 10px !important;
+  text-align: left !important;
+  color: var(--text-muted);
+  background: var(--surface-2);
+}
+
 /* ---- 印刷用（A4横。スタッフが多い店舗は2ページ以上） ---- */
 /* 表の見た目は #print-root の中だけに効く（画面では #print-root を出さない。印刷のときだけ出す） */
 #print-root {
