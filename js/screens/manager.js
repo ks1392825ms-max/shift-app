@@ -467,6 +467,8 @@
     parts.push(tabs());
     if (view.message && view.message.text) parts.push(el('p', { class: view.message.ok ? 'sync__result' : 'form-error', role: 'status' }, view.message.text));
     parts.push(view.tab === 'wish' ? wishView() : view.tab === 'paid' ? paidView() : view.tab === 'change' ? changeView() : view.tab === 'log' ? logView() : rosterView());
+    // 簡単ログイン（この端末のロック）の設定
+    parts.push(K.quickLock && K.app.cloudUser() ? K.quickLock.card(K.app.cloudUser(), K.app.rerender) : null);
     container.append(...parts.filter(Boolean));
   }
 

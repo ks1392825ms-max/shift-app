@@ -1301,20 +1301,23 @@ body.is-column-dragging * {
 }
 
 /* ---- 入力シート（画面の下から出る） ---- */
-.sheet-layer {
+.sheet-layer,
+.qlock-offer {
   position: fixed;
   inset: 0;
   z-index: 30;
 }
 
-.sheet-backdrop {
+.sheet-backdrop,
+.qlock-offer__backdrop {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.35);
   animation: fade-in 0.15s ease-out;
 }
 
-.sheet {
+.sheet,
+.qlock-offer__sheet {
   position: absolute;
   left: 50%;
   bottom: 0;
@@ -1344,7 +1347,9 @@ body.is-column-dragging * {
 
 @media (prefers-reduced-motion: reduce) {
   .sheet,
-  .sheet-backdrop {
+  .sheet-backdrop,
+  .qlock-offer__sheet,
+  .qlock-offer__backdrop {
     animation: none;
   }
 }
@@ -1355,7 +1360,8 @@ body.is-column-dragging * {
   align-items: center;
 }
 
-.sheet__title {
+.sheet__title,
+.qlock-offer__title {
   display: flex;
   align-items: baseline;
   gap: 10px;
@@ -2935,6 +2941,191 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
   text-align: left !important;
   color: var(--text-muted);
   background: var(--surface-2);
+}
+
+/* ---- 簡単ログイン：ロックの画面（PIN・顔認証/指紋認証） ---- */
+/* ロック中は、うしろのアプリの画面を見せない（押せないようにするのは JS の inert） */
+body.is-locked > :not(.qlock) {
+  visibility: hidden;
+}
+
+.qlock {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.qlock__inner {
+  width: min(320px, 100%);
+  text-align: center;
+}
+
+.qlock__app {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.qlock__title {
+  margin: 4px 0 8px;
+  font-size: 1.3rem;
+}
+
+.qlock__msg {
+  min-height: 3em;
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.qlock__msg.is-error {
+  color: var(--danger);
+}
+
+.qlock__dots {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin: 0 0 24px;
+}
+
+.qlock__dots.is-shake {
+  animation: qlock-shake 0.3s;
+}
+
+@keyframes qlock-shake {
+  25% { transform: translateX(-8px); }
+  75% { transform: translateX(8px); }
+}
+
+.qlock__dot {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--text);
+  border-radius: 50%;
+}
+
+.qlock__dot.is-on {
+  background: var(--text);
+}
+
+.qlock__pad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.qlock__pad.is-waiting {
+  opacity: 0.4;
+}
+
+.qlock__key {
+  min-height: 60px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 1.5rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.qlock__key:active {
+  background: var(--surface-2);
+}
+
+.qlock__key--sub {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.qlock__fallback {
+  margin-top: 20px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-decoration: underline;
+}
+
+/* 設定の欄・ログインのあとの案内 */
+.qlock-panel .actions--tight {
+  margin-top: 12px;
+}
+
+.qlock-bio-actions:empty {
+  display: none;
+}
+
+.qlock-form .field + .field {
+  margin-top: 12px;
+}
+
+.qlock-input {
+  max-width: 10em;
+  letter-spacing: 0.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- ログイン：メールのリンクを貼り付ける欄 ---- */
+.paste-link {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.paste-link__summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.paste-link__steps {
+  margin-bottom: 12px;
+}
+
+.paste-link form .field + .field {
+  margin-top: 12px;
+}
+
+.paste-link__input {
+  resize: vertical;
+  word-break: break-all;
+}
+
+/* ---- 2本指で拡大したときの「元の大きさに戻す」（位置と大きさは zoom.js が決める） ---- */
+.zoom-reset {
+  position: fixed;
+  z-index: 90;
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--bg);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  transform-origin: 100% 100%;
+  cursor: pointer;
+}
+
+.zoom-reset[hidden] {
+  display: none;
 }
 
 /* ---- 印刷用（A4横。スタッフが多い店舗は2ページ以上） ---- */

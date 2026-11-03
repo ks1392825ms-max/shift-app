@@ -72,6 +72,55 @@
     return form;
   }
 
+  // メールのリンクを貼り付けてログインする欄
+  // ホーム画面（Dock）に追加したアプリでは、メールのリンクを押すと Safari が開き、アプリのほうはログインできないため
+  function pasteLinkForm(email, open) {
+    const mail = el('input', { id: 'paste-email', class: 'field__input', type: 'email', inputmode: 'email', autocomplete: 'email', placeholder: '例：name@example.com', value: email || '' });
+    const link = el('textarea', { id: 'paste-link', class: 'field__input paste-link__input', rows: '3', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'ここに、メールのリンクを貼り付けます' });
+    const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+    const submit = el('button', { type: 'submit', class: 'btn btn--primary' }, '貼り付けたリンクでログイン');
+    const fail = (text) => {
+      errorBox.textContent = text;
+      errorBox.hidden = false;
+      submit.disabled = false;
+    };
+    return el(
+      'details',
+      { class: 'paste-link', open: open ? true : null },
+      el('summary', { class: 'paste-link__summary' }, 'ホーム画面に追加したアプリでログインするとき'),
+      el(
+        'ol',
+        { class: 'gate-notes paste-link__steps' },
+        el('li', null, 'メールの「ログイン」のリンクを長押しして、「リンクをコピー」を選びます（押すと Safari が開き、このアプリはログインできません）。'),
+        el('li', null, 'このアプリに戻って、下の欄に貼り付けます。')
+      ),
+      el(
+        'form',
+        {
+          novalidate: true,
+          onsubmit: async (event) => {
+            event.preventDefault();
+            errorBox.hidden = true;
+            const address = mail.value.trim();
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) return fail('メールアドレスを正しく入力してください。');
+            if (!K.cloud.looksLikeLoginLink(link.value)) return fail('ログイン用のリンクではないようです。メールの「ログイン」のリンクをコピーして、そのまま貼り付けてください。');
+            submit.disabled = true;
+            try {
+              await K.app.cloudActions.loginWithLink(address, link.value);
+              // ログインが完了すると、画面が切り替わる
+            } catch (err) {
+              fail(err.message);
+            }
+          },
+        },
+        el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'paste-email' }, 'ログイン用のメールを送ったメールアドレス'), mail),
+        el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'paste-link' }, 'メールのリンク'), link),
+        errorBox,
+        el('div', { class: 'actions' }, submit)
+      )
+    );
+  }
+
   // ---- 初回：店舗名を入力して始める ----
 
   function storeNameForm() {
@@ -214,6 +263,7 @@
           value: K.cloud.savedEmail(),
           onSubmit: (email) => K.app.cloudActions.sendLink(email),
         }),
+        pasteLinkForm(K.cloud.savedEmail()),
         el('div', { class: 'actions' }, backToLocalButton())
       );
     } else if (s === 'sent') {
@@ -226,6 +276,7 @@
           el('li', null, 'メールが届かないときは、迷惑メールのフォルダも確認してください。'),
           el('li', null, 'リンクは、このメールを送ったのと同じ端末・同じブラウザで開くと、すぐにログインできます。')
         ),
+        pasteLinkForm(info.email, true),
         el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => K.app.cloudActions.showLogin() }, 'メールアドレスを入力し直す'))
       );
     } else if (s === 'confirm-email') {

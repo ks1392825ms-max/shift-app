@@ -227,6 +227,8 @@
     // 表示しない部分（null）を除いてから並べる
     const parts = [
       modeCard(),
+      // 共有モード：簡単ログイン（この端末のロック）の設定
+      K.storage.isCloud() && K.quickLock && K.app.cloudUser() ? K.quickLock.card(K.app.cloudUser(), K.app.rerender) : null,
       el(
         'p',
         { class: 'hint' },

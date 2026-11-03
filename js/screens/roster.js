@@ -1019,6 +1019,11 @@
     beginDrag(e.currentTarget, e.clientX, e.clientY, false);
   }
 
+  // 長押しを待っているあいだに2本目の指がふれたら（拡大・縮小）、並べ替えは始めない
+  function onDragTouchStart(e) {
+    if (drag && e.touches.length > 1) drag.fingers = e.touches.length;
+  }
+
   // タッチ：動かさずに長押ししたら始める（すぐ動かしたときは、今までどおり表のスクロール）
   function onHeadTouchStart(e) {
     if (e.touches.length !== 1) return;
@@ -1030,6 +1035,7 @@
     drag = { th, id: th.dataset.staff, wrap: th.closest('.roster-wrap'), startX: x, startY: y, x, touch, active: false, target: -1, edge: 0, timer: null };
     if (touch) {
       drag.timer = setTimeout(activateDrag, LONG_PRESS_MS);
+      window.addEventListener('touchstart', onDragTouchStart);
       window.addEventListener('touchmove', onDragTouchMove, { passive: false });
       window.addEventListener('touchend', finishDrag);
       window.addEventListener('touchcancel', cancelDrag);
@@ -1043,6 +1049,10 @@
 
   function activateDrag() {
     if (!drag) return;
+    if (drag.touch && drag.fingers > 1) {
+      cancelDrag();
+      return;
+    }
     drag.active = true;
     // 見出しは点滅して浮き上がり、列のマスは半透明にする。差し込む位置には表の高さいっぱいの縦線
     drag.th.classList.add('is-dragging', 'is-lifted');
@@ -1064,6 +1074,11 @@
 
   function onDragTouchMove(e) {
     if (!drag) return;
+    // 2本指（拡大・縮小）のときは並べ替えをやめて、ブラウザの拡大に任せる
+    if (e.touches.length > 1) {
+      cancelDrag();
+      return;
+    }
     const t = e.touches[0];
     if (!drag.active) {
       // 長押しの前に指が動いたら、並べ替えはやめて、スクロールに任せる
@@ -1130,6 +1145,7 @@
   function cancelDrag() {
     if (!drag) return;
     clearTimeout(drag.timer);
+    window.removeEventListener('touchstart', onDragTouchStart);
     window.removeEventListener('touchmove', onDragTouchMove, { passive: false });
     window.removeEventListener('touchend', finishDrag);
     window.removeEventListener('touchcancel', cancelDrag);

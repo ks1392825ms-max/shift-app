@@ -9,7 +9,8 @@
 //   savedEmail()                ログイン用のメールを送ったメールアドレス（同じ端末なら覚えている）
 //   sendLoginLink(email)        ログイン用のメールを送る
 //   sendStaffLoginLink(email)   オーナーが、登録したスタッフのメールにログイン用のメールを送る（この端末には覚えない）
-//   completeLogin(email)        メールのリンクでログインを完了する
+//   completeLogin(email, link)  メールのリンクでログインを完了する（link を省くと今のURL。貼り付けたリンクも使える）
+//   looksLikeLoginLink(text)    貼り付けた文字が、ログイン用のリンクの形か
 //   checkAdmin()                管理者として登録されているか（ルールで読めるかどうかで判断）
 //   checkStaff(email)           スタッフとして登録されているか（staffAccounts に本人のメールがあるか）
 //   loadStaffContext / loadMyRequests / addWishRequest / removeWishRequest / submitNoWish / addPaidRequest / withdrawPaidRequest   スタッフ本人の申請
@@ -102,10 +103,40 @@
     await authMod.sendSignInLinkToEmail(auth, email, { url: returnUrl(), handleCodeInApp: true });
   }
 
-  async function completeLogin(email) {
+  // 貼り付けた文字が、ログイン用のリンクの形か（Firebase を読み込む前に、入力の間違いを知らせるため）
+  // メールのアプリによっては、リンクが別のURLに包まれて（?q=… など）コピーされるので、中のリンクも探す。見つからなければ ''
+  function loginLinkFrom(text) {
+    const ok = (t) => /^https:\/\/\S+$/.test(t) && /[?&]mode=signIn(&|$)/.test(t) && /[?&]oobCode=/.test(t);
+    let t = String(text || '').trim();
+    for (let i = 0; i < 3 && t; i += 1) {
+      if (ok(t)) return t;
+      const inner = t.match(/[?&](?:q|url|u|link|target)=(https?%3A[^&\s]+)/i);
+      if (!inner) break;
+      try {
+        t = decodeURIComponent(inner[1]);
+      } catch (err) {
+        break;
+      }
+    }
+    return '';
+  }
+
+  function looksLikeLoginLink(text) {
+    return Boolean(loginLinkFrom(text));
+  }
+
+  async function completeLogin(email, link) {
     const { authMod, auth } = await load();
-    if (!authMod.isSignInWithEmailLink(auth, location.href)) throw new Error('ログイン用のリンクではありません。');
-    await authMod.signInWithEmailLink(auth, email, location.href);
+    const url = link ? loginLinkFrom(link) || String(link).trim() : location.href;
+    if (!authMod.isSignInWithEmailLink(auth, url)) throw new Error('ログイン用のリンクではありません。');
+    try {
+      await authMod.signInWithEmailLink(auth, email, url);
+    } catch (err) {
+      const code = err && err.code;
+      if (code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') throw new Error('このリンクは使えません（期限切れか、使用済みです）。ログイン用のメールを送り直してください。');
+      if (code === 'auth/invalid-email') throw new Error('メールアドレスが、ログイン用のメールを送ったアドレスと違います。');
+      throw err;
+    }
     try {
       localStorage.removeItem(EMAIL_KEY);
     } catch (err) {
@@ -586,6 +617,8 @@
     sendLoginLink,
     sendStaffLoginLink,
     completeLogin,
+    looksLikeLoginLink,
+    loginLinkFrom,
     checkAdmin,
     checkStaff,
     subscribe,

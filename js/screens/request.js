@@ -814,6 +814,8 @@
     } else {
       parts.push(el('p', { class: 'hint' }, '店舗を選ぶと、申請の画面が開きます。'));
     }
+    // 簡単ログイン（この端末のロック）の設定
+    parts.push(K.quickLock && K.app.cloudUser() ? K.quickLock.card(K.app.cloudUser(), K.app.rerender) : null);
     container.append(...parts.filter(Boolean));
   }
 

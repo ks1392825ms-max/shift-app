@@ -205,7 +205,24 @@
   // ---- 共有モード ----
   // 共有モードの流れ：ログイン → 管理者か確認 → 共有データを受け取り続ける（空なら初回の移行）
 
-  const cloud = { user: null, unsubscribe: null, unsubscribeRequests: null, ready: false, backend: null, awaitingConfirm: false, renderTimer: null };
+  const cloud = { user: null, unsubscribe: null, unsubscribeRequests: null, ready: false, backend: null, awaitingConfirm: false, renderTimer: null, unlockedUid: null };
+
+  // 簡単ログイン（この端末のロック）：設定してあれば、データを読み込む前に PIN か顔認証・指紋認証で解除してもらう。
+  // 解除できたら true。「メールでログインし直す」を選んだ・続けて間違えたら false（そのあとログアウトする）
+  async function unlockIfNeeded(user) {
+    const Q = K.quickLock;
+    if (!Q || cloud.unlockedUid === user.uid || !Q.isEnabled(user.uid)) return true;
+    showGate('loading');
+    const ok = await Q.lock(user.uid);
+    if (cloud.user !== user) return false; // 待っている間にログアウトした
+    if (ok) cloud.unlockedUid = user.uid;
+    return ok;
+  }
+
+  // ログインのあとに一度だけ、簡単ログインを設定するかをたずねる
+  function offerQuickLock() {
+    if (K.quickLock && cloud.user) setTimeout(() => K.quickLock.offer(cloud.user), 300);
+  }
 
   function showGate(gateState, info = {}) {
     state.screen = 'login';
@@ -227,9 +244,16 @@
     cloud.ready = false;
     cloud.user = user;
     if (!user) {
+      cloud.unlockedUid = null;
+      // ログアウトしたら、この端末の簡単ログインも解除する（「この端末では使わない」の設定は残す）
+      if (K.quickLock) K.quickLock.clear();
       if (K.storage.isCloud()) K.storage.detachCloud();
       // ほかの端末でメールのリンクを開いた場合は、メールアドレスの入力を待つ
       showGate(cloud.awaitingConfirm ? 'confirm-email' : 'login');
+      return;
+    }
+    if (!(await unlockIfNeeded(user))) {
+      if (cloud.user === user) await cloud.backend.signOut();
       return;
     }
     showGate('loading');
@@ -257,11 +281,13 @@
         state.screen = 'manager';
         state.params = { email: user.email, manager, account };
         render();
+        offerQuickLock();
       } else if (account) {
         // スタッフ：申請画面（本人の情報と申請だけを読み書きする）
         state.screen = 'request';
         state.params = { email: user.email, account };
         render();
+        offerQuickLock();
       } else {
         showGate('not-admin', { email: user.email });
       }
@@ -294,6 +320,7 @@
         );
       }
       navigate('roster');
+      offerQuickLock();
       return;
     }
     K.storage.receiveCloudData(cloudData);
@@ -321,10 +348,16 @@
       await cloud.backend.completeLogin(email);
       // ログインが完了すると onAuth が呼ばれる
     },
+    // メールのリンクを貼り付けてログインする（ホーム画面に追加したアプリでは、メールのリンクを押すと Safari が開くため）
+    async loginWithLink(email, link) {
+      cloud.awaitingConfirm = false;
+      await cloud.backend.completeLogin(email, link);
+    },
     showLogin() {
       showGate('login');
     },
     async signOut() {
+      if (K.quickLock) K.quickLock.clear();
       await cloud.backend.signOut();
     },
     upload(incoming) {
@@ -347,6 +380,7 @@
 
   async function startCloud(backend) {
     cloud.backend = backend;
+    if (K.quickLock) K.quickLock.watchVisibility(() => cloud.user && cloud.user.uid);
     K.requests.attach(backend);
     K.storage.onCloudError((err) => toast(`共有の保存場所に保存できませんでした（${err.code || err.message}）`));
     showGate('loading');
