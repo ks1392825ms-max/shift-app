@@ -469,6 +469,7 @@
     parts.push(view.tab === 'wish' ? wishView() : view.tab === 'paid' ? paidView() : view.tab === 'change' ? changeView() : view.tab === 'log' ? logView() : rosterView());
     // 簡単ログイン（この端末のロック）の設定
     parts.push(K.quickLock && K.app.cloudUser() ? K.quickLock.card(K.app.cloudUser(), K.app.rerender) : null);
+    parts.push(K.loginUI && K.app.cloudUser() ? K.loginUI.passwordCard(K.app.cloudUser()) : null);
     container.append(...parts.filter(Boolean));
   }
 

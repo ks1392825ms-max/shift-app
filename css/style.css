@@ -3077,32 +3077,66 @@ body.is-locked > :not(.qlock) {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- ログイン：メールのリンクを貼り付ける欄 ---- */
-.paste-link {
-  margin-top: 20px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+/* ---- ログイン：メールアドレスとパスワード ---- */
+.login-form .field + .field {
+  margin-top: 14px;
 }
 
-.paste-link__summary {
+.pw-wrap {
+  position: relative;
+}
+
+.pw-wrap .pw-input {
+  padding-right: 64px;
+}
+
+.pw-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 56px;
+  height: 100%;
   min-height: 44px;
-  display: flex;
-  align-items: center;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85rem;
   font-weight: 700;
   cursor: pointer;
 }
 
-.paste-link__steps {
-  margin-bottom: 12px;
+.btn--block {
+  width: 100%;
 }
 
-.paste-link form .field + .field {
-  margin-top: 12px;
+.login-sub {
+  margin-top: 16px;
+  text-align: center;
 }
 
-.paste-link__input {
-  resize: vertical;
-  word-break: break-all;
+.login-link {
+  min-height: 44px;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+/* 「この端末だけで使う形に戻す」は、スタッフが間違えて押さないよう、下に小さく */
+.login-local {
+  margin-top: 28px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.login-local .btn {
+  min-height: 40px;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 400;
+  text-decoration: underline;
 }
 
 /* ---- 2本指で拡大したときの「元の大きさに戻す」（位置と大きさは zoom.js が決める） ---- */

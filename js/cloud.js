@@ -9,8 +9,9 @@
 //   savedEmail()                ログイン用のメールを送ったメールアドレス（同じ端末なら覚えている）
 //   sendLoginLink(email)        ログイン用のメールを送る
 //   sendStaffLoginLink(email)   オーナーが、登録したスタッフのメールにログイン用のメールを送る（この端末には覚えない）
-//   completeLogin(email, link)  メールのリンクでログインを完了する（link を省くと今のURL。貼り付けたリンクも使える）
-//   looksLikeLoginLink(text)    貼り付けた文字が、ログイン用のリンクの形か
+//   completeLogin(email)        メールのリンクでログインを完了する（戻り値：ログインした人の uid）
+//   signInWithPassword(email, password)  メールアドレスとパスワードでログインする
+//   setPassword(password)       ログイン中の人のパスワードを決める（メールのリンクでログインした直後に使う）
 //   checkAdmin()                管理者として登録されているか（ルールで読めるかどうかで判断）
 //   checkStaff(email)           スタッフとして登録されているか（staffAccounts に本人のメールがあるか）
 //   loadStaffContext / loadMyRequests / addWishRequest / removeWishRequest / submitNoWish / addPaidRequest / withdrawPaidRequest   スタッフ本人の申請
@@ -56,7 +57,7 @@
 
   async function start(onAuth) {
     const { authMod, auth } = await load();
-    authMod.onAuthStateChanged(auth, (user) => onAuth(user ? { email: user.email, uid: user.uid } : null));
+    authMod.onAuthStateChanged(auth, (user) => onAuth(user ? { email: user.email, uid: user.uid, emailVerified: user.emailVerified } : null));
   }
 
   function isLoginLink() {
@@ -104,33 +105,13 @@
   }
 
   // 貼り付けた文字が、ログイン用のリンクの形か（Firebase を読み込む前に、入力の間違いを知らせるため）
-  // メールのアプリによっては、リンクが別のURLに包まれて（?q=… など）コピーされるので、中のリンクも探す。見つからなければ ''
-  function loginLinkFrom(text) {
-    const ok = (t) => /^https:\/\/\S+$/.test(t) && /[?&]mode=signIn(&|$)/.test(t) && /[?&]oobCode=/.test(t);
-    let t = String(text || '').trim();
-    for (let i = 0; i < 3 && t; i += 1) {
-      if (ok(t)) return t;
-      const inner = t.match(/[?&](?:q|url|u|link|target)=(https?%3A[^&\s]+)/i);
-      if (!inner) break;
-      try {
-        t = decodeURIComponent(inner[1]);
-      } catch (err) {
-        break;
-      }
-    }
-    return '';
-  }
-
-  function looksLikeLoginLink(text) {
-    return Boolean(loginLinkFrom(text));
-  }
-
-  async function completeLogin(email, link) {
+  async function completeLogin(email) {
     const { authMod, auth } = await load();
-    const url = link ? loginLinkFrom(link) || String(link).trim() : location.href;
+    const url = location.href;
     if (!authMod.isSignInWithEmailLink(auth, url)) throw new Error('ログイン用のリンクではありません。');
+    let result;
     try {
-      await authMod.signInWithEmailLink(auth, email, url);
+      result = await authMod.signInWithEmailLink(auth, email, url);
     } catch (err) {
       const code = err && err.code;
       if (code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') throw new Error('このリンクは使えません（期限切れか、使用済みです）。ログイン用のメールを送り直してください。');
@@ -144,6 +125,38 @@
     }
     // アドレスバーからログイン用の文字を消す（再読み込みでもう一度ログインしようとしないように）
     history.replaceState(null, '', returnUrl());
+    return result && result.user ? result.user.uid : null;
+  }
+
+  // Firebase のエラーを、利用者に分かる文にする（どちらが違うかは教えない）
+  function passwordError(err) {
+    const code = (err && err.code) || '';
+    if (/invalid-credential|invalid-login-credentials|wrong-password|user-not-found|invalid-email/.test(code)) return new Error('メールアドレスかパスワードが違います。');
+    if (/too-many-requests/.test(code)) return new Error('続けて間違えたため、しばらくログインできません。時間をおいてから試すか、「初めての方・パスワードを忘れた方」からパスワードを決め直してください。');
+    if (/user-disabled/.test(code)) return new Error('このアカウントは使えなくなっています。オーナーに連絡してください。');
+    if (/network-request-failed/.test(code)) return new Error('つながりませんでした。電波の状態を確認してください。');
+    if (/weak-password/.test(code)) return new Error('パスワードが短すぎます。8文字以上にしてください。');
+    if (/requires-recent-login/.test(code)) return new Error('安全のため、もう一度メールのリンクからやり直してください（「初めての方・パスワードを忘れた方」）。');
+    return err;
+  }
+
+  async function signInWithPassword(email, password) {
+    const { authMod, auth } = await load();
+    try {
+      await authMod.signInWithEmailAndPassword(auth, email, password);
+    } catch (err) {
+      throw passwordError(err);
+    }
+  }
+
+  async function setPassword(password) {
+    const { authMod, auth } = await load();
+    if (!auth.currentUser) throw new Error('ログインしていません。もう一度メールのリンクからやり直してください。');
+    try {
+      await authMod.updatePassword(auth.currentUser, password);
+    } catch (err) {
+      throw passwordError(err);
+    }
   }
 
   // 管理者かどうか：管理者だけが読める access/admins を読んでみる
@@ -617,8 +630,9 @@
     sendLoginLink,
     sendStaffLoginLink,
     completeLogin,
-    looksLikeLoginLink,
-    loginLinkFrom,
+    signInWithPassword,
+    setPassword,
+    passwordError, // テスト用（エラーの文）
     checkAdmin,
     checkStaff,
     subscribe,

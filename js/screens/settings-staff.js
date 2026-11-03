@@ -439,7 +439,7 @@
 
   // スタッフのログインの案内（共有モードで、ログイン用メールを保存済みのときだけ）
   // ・ログイン用のURL：開くとすぐにログイン画面になる（LINE などでスタッフに送る）
-  // ・ログイン用メールを送る：保存済みのメールアドレスに、Firebase からログイン用のリンクを送る
+  // ・パスワード設定用のメールを送る：保存済みのメールアドレスに、Firebase からリンクを送る（開くと、新しいパスワードを決める画面）
   function loginBox(member, emailInput) {
     const backend = K.storage.isCloud() && K.app.cloudBackend ? K.app.cloudBackend() : null;
     if (!backend || !member || !member.email || member.active === false) return null;
@@ -462,12 +462,12 @@
         status.textContent = 'メールアドレスが変わっています。先に「保存する」を押してから送ってください。';
         return;
       }
-      if (!window.confirm(`${member.name}さんの登録メールに、ログイン用のリンクを送りますか？\nスタッフがリンクを開くと、メールアドレスをもう一度入れてログインします。`)) return;
+      if (!window.confirm(`${member.name}さんの登録メールに、パスワード設定用のリンクを送りますか？\nスタッフがリンクを開くと、メールアドレスをもう一度入れてから、パスワードを決めます。`)) return;
       btn.disabled = true;
       status.textContent = '送っています…';
       try {
         await backend.sendStaffLoginLink(member.email);
-        status.textContent = 'ログイン用のメールを送りました。届かないときは、迷惑メールのフォルダーも見てもらってください。';
+        status.textContent = 'パスワード設定用のメールを送りました。届かないときは、迷惑メールのフォルダーも見てもらってください。';
       } catch (err) {
         status.textContent = `送れませんでした（${err.message}）。少し待ってから、もう一度試してください。`;
       } finally {
@@ -490,7 +490,7 @@
         'div',
         { class: 'actions' },
         url ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: copyUrl }, 'URLをコピー') : null,
-        backend.sendStaffLoginLink ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: sendMail }, 'ログイン用メールを送る') : null
+        backend.sendStaffLoginLink ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: sendMail }, 'パスワード設定用のメールを送る') : null
       ),
       status
     );

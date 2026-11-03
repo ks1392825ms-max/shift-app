@@ -1,9 +1,11 @@
 // 共有モードの入口（ログイン・メール送信・権限の確認・初回のデータ移行）
 // app.js が状態（state）を決めて、この画面を表示する。
 //   loading       準備中
-//   login         メールアドレスを入力して、ログイン用のメールを送る
+//   login         メールアドレスとパスワードでログインする
+//   reset         初めての方・パスワードを忘れた方：パスワードを決めるためのメールを送る
 //   sent          メールを送った
 //   confirm-email ほかの端末でメールのリンクを開いたとき：メールアドレスをもう一度入力
+//   set-password  メールのリンクでログインした直後：新しいパスワードを決める（決めるまでアプリには入らない）
 //   not-admin     管理者として登録されていない
 //   empty         共有の保存場所が空：初回のデータ移行（バックアップファイルから写しをアップロード）
 //   error         エラー
@@ -72,52 +74,126 @@
     return form;
   }
 
-  // メールのリンクを貼り付けてログインする欄
-  // ホーム画面（Dock）に追加したアプリでは、メールのリンクを押すと Safari が開き、アプリのほうはログインできないため
-  function pasteLinkForm(email, open) {
-    const mail = el('input', { id: 'paste-email', class: 'field__input', type: 'email', inputmode: 'email', autocomplete: 'email', placeholder: '例：name@example.com', value: email || '' });
-    const link = el('textarea', { id: 'paste-link', class: 'field__input paste-link__input', rows: '3', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'ここに、メールのリンクを貼り付けます' });
-    const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
-    const submit = el('button', { type: 'submit', class: 'btn btn--primary' }, '貼り付けたリンクでログイン');
-    const fail = (text) => {
-      errorBox.textContent = text;
-      errorBox.hidden = false;
-      submit.disabled = false;
-    };
-    return el(
-      'details',
-      { class: 'paste-link', open: open ? true : null },
-      el('summary', { class: 'paste-link__summary' }, 'ホーム画面に追加したアプリでログインするとき'),
-      el(
-        'ol',
-        { class: 'gate-notes paste-link__steps' },
-        el('li', null, 'メールの「ログイン」のリンクを長押しして、「リンクをコピー」を選びます（押すと Safari が開き、このアプリはログインできません）。'),
-        el('li', null, 'このアプリに戻って、下の欄に貼り付けます。')
-      ),
-      el(
-        'form',
-        {
-          novalidate: true,
-          onsubmit: async (event) => {
-            event.preventDefault();
-            errorBox.hidden = true;
-            const address = mail.value.trim();
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) return fail('メールアドレスを正しく入力してください。');
-            if (!K.cloud.looksLikeLoginLink(link.value)) return fail('ログイン用のリンクではないようです。メールの「ログイン」のリンクをコピーして、そのまま貼り付けてください。');
-            submit.disabled = true;
-            try {
-              await K.app.cloudActions.loginWithLink(address, link.value);
-              // ログインが完了すると、画面が切り替わる
-            } catch (err) {
-              fail(err.message);
-            }
-          },
+  const PASSWORD_MIN = 8;
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  // パスワードの入力欄（「表示」で、入力した文字を確かめられる）
+  function passwordField({ id, label, autocomplete, note }) {
+    const input = el('input', { id, class: 'field__input pw-input', type: 'password', autocomplete, autocapitalize: 'off', spellcheck: 'false' });
+    const toggle = el(
+      'button',
+      {
+        type: 'button',
+        class: 'pw-toggle',
+        'aria-controls': id,
+        'aria-pressed': 'false',
+        onclick: () => {
+          const show = input.type === 'password';
+          input.type = show ? 'text' : 'password';
+          toggle.textContent = show ? '隠す' : '表示';
+          toggle.setAttribute('aria-pressed', String(show));
         },
-        el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'paste-email' }, 'ログイン用のメールを送ったメールアドレス'), mail),
-        el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'paste-link' }, 'メールのリンク'), link),
-        errorBox,
-        el('div', { class: 'actions' }, submit)
-      )
+      },
+      '表示'
+    );
+    return {
+      input,
+      node: el(
+        'div',
+        { class: 'field' },
+        el('label', { class: 'field__label', for: id }, label),
+        el('div', { class: 'pw-wrap' }, input, toggle),
+        note ? el('p', { class: 'field__note' }, note) : null
+      ),
+    };
+  }
+
+  // 通常のログイン：メールアドレスとパスワード
+  function passwordLoginForm(email, notice) {
+    const mail = el('input', { id: 'login-email', class: 'field__input', type: 'email', inputmode: 'email', autocomplete: 'username', autocapitalize: 'off', placeholder: '例：name@example.com', value: email || '' });
+    const pw = passwordField({ id: 'login-password', label: 'パスワード', autocomplete: 'current-password' });
+    const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: !notice }, notice || '');
+    const submit = el('button', { type: 'submit', class: 'btn btn--primary btn--block' }, 'ログイン');
+    setTimeout(() => (mail.value ? pw.input : mail).focus(), 0);
+    return el(
+      'form',
+      {
+        class: 'login-form',
+        novalidate: true,
+        onsubmit: async (event) => {
+          event.preventDefault();
+          errorBox.hidden = true;
+          const address = mail.value.trim();
+          if (!EMAIL_RE.test(address)) {
+            errorBox.textContent = 'メールアドレスを正しく入力してください。';
+            errorBox.hidden = false;
+            return;
+          }
+          if (!pw.input.value) {
+            errorBox.textContent = 'パスワードを入力してください。';
+            errorBox.hidden = false;
+            return;
+          }
+          submit.disabled = true;
+          submit.textContent = 'ログインしています…';
+          try {
+            await K.app.cloudActions.signInWithPassword(address, pw.input.value);
+            // ログインが完了すると、画面が切り替わる
+          } catch (err) {
+            errorBox.textContent = err.message;
+            errorBox.hidden = false;
+            submit.disabled = false;
+            submit.textContent = 'ログイン';
+          }
+        },
+      },
+      el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'login-email' }, 'メールアドレス'), mail),
+      pw.node,
+      errorBox,
+      el('div', { class: 'actions' }, submit),
+      el('div', { class: 'login-sub' }, el('button', { type: 'button', class: 'text-btn login-link', onclick: () => K.app.cloudActions.showReset(mail.value.trim()) }, '初めての方・パスワードを忘れた方'))
+    );
+  }
+
+  // メールのリンクでログインした直後：新しいパスワードを決める
+  function setPasswordForm() {
+    const pw1 = passwordField({ id: 'new-password', label: '新しいパスワード', autocomplete: 'new-password', note: `${PASSWORD_MIN}文字以上。ほかのサービスと同じパスワードは避けてください。` });
+    const pw2 = passwordField({ id: 'new-password2', label: '確認のため、もう一度', autocomplete: 'new-password' });
+    const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+    const submit = el('button', { type: 'submit', class: 'btn btn--primary btn--block' }, 'このパスワードにする');
+    setTimeout(() => pw1.input.focus(), 0);
+    return el(
+      'form',
+      {
+        class: 'login-form',
+        novalidate: true,
+        onsubmit: async (event) => {
+          event.preventDefault();
+          const a = pw1.input.value;
+          let error = '';
+          if (a.length < PASSWORD_MIN) error = `パスワードは${PASSWORD_MIN}文字以上にしてください。`;
+          else if (/^\s|\s$/.test(a)) error = 'パスワードの最初と最後に空白は使えません。';
+          else if (a !== pw2.input.value) error = '確認のパスワードが一致しません。もう一度入力してください。';
+          if (error) {
+            errorBox.textContent = error;
+            errorBox.hidden = false;
+            return;
+          }
+          submit.disabled = true;
+          try {
+            await K.app.cloudActions.setPassword(a);
+            K.app.toast('パスワードを決めました。次からは、メールアドレスとパスワードでログインできます', 5000);
+          } catch (err) {
+            errorBox.textContent = err.message;
+            errorBox.hidden = false;
+            submit.disabled = false;
+          }
+        },
+      },
+      pw1.node,
+      pw2.node,
+      errorBox,
+      el('div', { class: 'actions' }, submit)
     );
   }
 
@@ -254,30 +330,42 @@
       body = card('共有モード', el('p', { class: 'hint hint--left' }, '準備しています…'));
     } else if (s === 'login') {
       body = card(
-        'ログイン（共有モード）',
-        el('p', { class: 'hint hint--left' }, 'メールアドレスを入力すると、ログイン用のリンクがメールで届きます。パスワードは不要です。'),
+        'ログイン',
+        passwordLoginForm(K.cloud && K.cloud.savedEmail ? K.cloud.savedEmail() : '', info.notice),
+        el('div', { class: 'login-local' }, backToLocalButton())
+      );
+    } else if (s === 'reset') {
+      body = card(
+        '初めての方・パスワードを忘れた方',
+        el('p', { class: 'hint hint--left' }, '登録しているメールアドレスを入れてください。届いたメールのリンクを押すと、新しいパスワードを決める画面が開きます。'),
         emailForm({
-          id: 'login-email',
+          id: 'reset-email',
           label: 'メールアドレス',
-          button: 'ログイン用のメールを送る',
-          value: K.cloud.savedEmail(),
+          button: 'メールを送る',
+          value: info.email || (K.cloud && K.cloud.savedEmail ? K.cloud.savedEmail() : ''),
           onSubmit: (email) => K.app.cloudActions.sendLink(email),
         }),
-        pasteLinkForm(K.cloud.savedEmail()),
-        el('div', { class: 'actions' }, backToLocalButton())
+        el('div', { class: 'login-sub' }, el('button', { type: 'button', class: 'text-btn login-link', onclick: () => K.app.cloudActions.showLogin() }, '‹ ログインに戻る'))
       );
     } else if (s === 'sent') {
       body = card(
         'メールを送りました',
-        el('p', { class: 'hint hint--left' }, `${info.email} にログイン用のメールを送りました。メールの中のリンクを押すと、ログインが完了します。`),
+        el('p', { class: 'hint hint--left' }, `${info.email} にメールを送りました。メールの中のリンクを押して、新しいパスワードを決めてください。`),
         el(
           'ul',
           { class: 'gate-notes' },
-          el('li', null, 'メールが届かないときは、迷惑メールのフォルダも確認してください。'),
-          el('li', null, 'リンクは、このメールを送ったのと同じ端末・同じブラウザで開くと、すぐにログインできます。')
+          el('li', null, 'リンクは、スマホ・パソコンのどちらで開いても大丈夫です（Safari などのブラウザが開きます）。'),
+          el('li', null, 'パスワードを決めたら、ホーム画面（Dock）のアプリに戻って、メールアドレスとパスワードでログインしてください。'),
+          el('li', null, 'メールが届かないときは、迷惑メールのフォルダーも確認してください。')
         ),
-        pasteLinkForm(info.email, true),
-        el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => K.app.cloudActions.showLogin() }, 'メールアドレスを入力し直す'))
+        el('div', { class: 'login-sub' }, el('button', { type: 'button', class: 'text-btn login-link', onclick: () => K.app.cloudActions.showLogin() }, '‹ ログインに戻る'))
+      );
+    } else if (s === 'set-password') {
+      body = card(
+        '新しいパスワードを決める',
+        el('p', { class: 'hint hint--left' }, `${info.email || ''} の、ログイン用のパスワードを決めてください。`),
+        setPasswordForm(),
+        el('div', { class: 'login-sub' }, el('button', { type: 'button', class: 'text-btn login-link', onclick: () => K.app.cloudActions.signOut() }, 'やめる（ログアウト）'))
       );
     } else if (s === 'confirm-email') {
       body = card(
@@ -358,6 +446,42 @@
     container.append(body);
   }
 
+  // ログイン中の人の「パスワード」の欄（設定 > データ、幹部・スタッフの画面）：自分のメールにリンクを送り、開くとパスワードを決め直せる
+  function passwordCard(user) {
+    const status = el('p', { class: 'sync__result', role: 'status', hidden: true });
+    const btn = el(
+      'button',
+      {
+        type: 'button',
+        class: 'btn btn--ghost',
+        onclick: async () => {
+          if (!window.confirm(`${user.email} に、パスワードを決め直すためのメールを送りますか？`)) return;
+          btn.disabled = true;
+          status.hidden = false;
+          status.textContent = '送っています…';
+          try {
+            await K.app.cloudActions.requestPasswordChange();
+            status.textContent = 'メールを送りました。メールのリンクを押すと、新しいパスワードを決める画面が開きます。';
+          } catch (err) {
+            status.textContent = `送れませんでした（${err.message}）。少し待ってから、もう一度試してください。`;
+          } finally {
+            btn.disabled = false;
+          }
+        },
+      },
+      'パスワードを決め直す（メールで確認）'
+    );
+    return el(
+      'section',
+      { class: 'card pw-card' },
+      el('h2', { class: 'card__title' }, 'パスワード'),
+      el('p', { class: 'hint hint--left' }, 'メールアドレスとパスワードでログインします。パスワードをまだ決めていないとき・変えたいときは、下のボタンを押してください（安全のため、メールで本人か確かめます）。'),
+      el('div', { class: 'actions actions--tight' }, btn),
+      status
+    );
+  }
+
   K.screens = K.screens || {};
   K.screens.login = { render };
+  K.loginUI = { passwordCard };
 })();

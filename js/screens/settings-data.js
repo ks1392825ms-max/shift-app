@@ -229,6 +229,7 @@
       modeCard(),
       // 共有モード：簡単ログイン（この端末のロック）の設定
       K.storage.isCloud() && K.quickLock && K.app.cloudUser() ? K.quickLock.card(K.app.cloudUser(), K.app.rerender) : null,
+      K.storage.isCloud() && K.loginUI && K.app.cloudUser() ? K.loginUI.passwordCard(K.app.cloudUser()) : null,
       el(
         'p',
         { class: 'hint' },

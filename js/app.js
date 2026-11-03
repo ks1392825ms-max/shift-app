@@ -219,6 +219,29 @@
     return ok;
   }
 
+  // メールのリンクでログインしたら、アプリに入る前に、必ずその場でパスワードを決めてもらう。
+  // （まだログインしたことのない人のアドレスで、ほかの人が先にパスワードを決めていた場合に、それを上書きするため）
+  // 決め終わるまでは、開き直しても同じ画面に戻るよう、この端末に印を残す（値はログインした人の uid。分からないときは *）
+  const NEED_PASSWORD_KEY = 'shift-app-need-password';
+
+  function needPassword(user) {
+    try {
+      const v = localStorage.getItem(NEED_PASSWORD_KEY);
+      return Boolean(v && user && (v === '*' || v === user.uid));
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function setNeedPassword(uid) {
+    try {
+      if (uid === null) localStorage.removeItem(NEED_PASSWORD_KEY);
+      else localStorage.setItem(NEED_PASSWORD_KEY, uid || '*');
+    } catch (err) {
+      // 覚えられなくても、この画面の間はパスワードを決めてもらう
+    }
+  }
+
   // ログインのあとに一度だけ、簡単ログインを設定するかをたずねる
   function offerQuickLock() {
     if (K.quickLock && cloud.user) setTimeout(() => K.quickLock.offer(cloud.user), 300);
@@ -245,11 +268,24 @@
     cloud.user = user;
     if (!user) {
       cloud.unlockedUid = null;
+      setNeedPassword(null);
       // ログアウトしたら、この端末の簡単ログインも解除する（「この端末では使わない」の設定は残す）
       if (K.quickLock) K.quickLock.clear();
       if (K.storage.isCloud()) K.storage.detachCloud();
       // ほかの端末でメールのリンクを開いた場合は、メールアドレスの入力を待つ
-      showGate(cloud.awaitingConfirm ? 'confirm-email' : 'login');
+      showGate(cloud.awaitingConfirm ? 'confirm-email' : 'login', cloud.loginNotice ? { notice: cloud.loginNotice } : {});
+      cloud.loginNotice = '';
+      return;
+    }
+    // メールの確認が済んでいないアカウント（パスワードだけで作られたもの）では使わない
+    if (user.emailVerified === false) {
+      cloud.loginNotice = 'このメールアドレスは、まだ確認が済んでいません。「初めての方・パスワードを忘れた方」から、パスワードを決めてください。';
+      await cloud.backend.signOut();
+      return;
+    }
+    // メールのリンクでログインした直後：パスワードを決めるまで、アプリには入らない
+    if (needPassword(user)) {
+      showGate('set-password', { email: user.email });
       return;
     }
     if (!(await unlockIfNeeded(user))) {
@@ -339,25 +375,43 @@
 
   // ログイン画面などのボタンから呼ぶ操作
   const cloudActions = {
+    // パスワードを決める（決め直す）ためのメールを送る（中身は、今までのログイン用のリンクと同じ）
     async sendLink(email) {
       await cloud.backend.sendLoginLink(email);
       showGate('sent', { email });
     },
     async confirmEmail(email) {
       cloud.awaitingConfirm = false;
-      await cloud.backend.completeLogin(email);
+      setNeedPassword('*');
+      const uid = await cloud.backend.completeLogin(email);
+      if (uid) setNeedPassword(uid);
       // ログインが完了すると onAuth が呼ばれる
     },
-    // メールのリンクを貼り付けてログインする（ホーム画面に追加したアプリでは、メールのリンクを押すと Safari が開くため）
-    async loginWithLink(email, link) {
-      cloud.awaitingConfirm = false;
-      await cloud.backend.completeLogin(email, link);
+    // メールアドレスとパスワードでログインする（ログインが完了すると onAuth が呼ばれる）
+    async signInWithPassword(email, password) {
+      await cloud.backend.signInWithPassword(email, password);
+    },
+    // メールのリンクでログインしたあと、パスワードを決める → そのままアプリに入る
+    async setPassword(password) {
+      await cloud.backend.setPassword(password);
+      setNeedPassword(null);
+      if (cloud.user) onAuth(cloud.user);
     },
     showLogin() {
       showGate('login');
     },
+    // ログイン中の人が、パスワードを決め直す：自分のメールにリンクを送る（開くと、新しいパスワードを決める画面）
+    async requestPasswordChange() {
+      if (!cloud.user) throw new Error('ログインしていません。');
+      await cloud.backend.sendLoginLink(cloud.user.email);
+    },
+    // 「初めての方・パスワードを忘れた方」
+    showReset(email) {
+      showGate('reset', { email: email || '' });
+    },
     async signOut() {
       if (K.quickLock) K.quickLock.clear();
+      setNeedPassword(null);
       await cloud.backend.signOut();
     },
     upload(incoming) {
@@ -393,7 +447,10 @@
           await backend.start(onAuth);
           return;
         }
-        await backend.completeLogin(email);
+        // リンクでログインしたら、このあとパスワードを決めてもらう
+        setNeedPassword('*');
+        const uid = await backend.completeLogin(email);
+        if (uid) setNeedPassword(uid);
       }
       await backend.start(onAuth);
     } catch (err) {
