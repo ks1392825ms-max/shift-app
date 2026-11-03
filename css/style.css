@@ -3121,6 +3121,17 @@ body.is-locked > :not(.qlock) {
   text-decoration: underline;
 }
 
+/* メールを送ったあと：「初めてログインする方」 */
+.first-login {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.first-login .btn {
+  white-space: normal;
+}
+
 /* 「この端末だけで使う形に戻す」は、スタッフが間違えて押さないよう、下に小さく */
 .login-local {
   margin-top: 28px;

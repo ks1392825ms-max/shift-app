@@ -9,6 +9,7 @@
 //   savedEmail()                ログイン用のメールを送ったメールアドレス（同じ端末なら覚えている）
 //   sendLoginLink(email)        ログイン用のメールを送る
 //   sendStaffLoginLink(email)   オーナーが、登録したスタッフのメールにログイン用のメールを送る（この端末には覚えない）
+//   sendPasswordReset(email)    パスワード再設定メールを送る（パスワードを決める・決め直す。1日に送れる数が多い）
 //   completeLogin(email)        メールのリンクでログインを完了する（戻り値：ログインした人の uid）。使えないリンクは code='link-invalid'
 //   clearLoginLink()            アドレスバーから、ログイン用のリンクの文字を消す
 //   signInWithPassword(email, password)  メールアドレスとパスワードでログインする
@@ -88,9 +89,23 @@
     return returnUrl() + '?login';
   }
 
+  // メールを送るときのエラーを、利用者に分かる文にする
+  function mailError(err) {
+    const code = (err && err.code) || '';
+    if (/quota-exceeded/.test(code)) return new Error('きょう送れるメールの数の上限に達しました。明日もう一度試してください。');
+    if (/too-many-requests/.test(code)) return new Error('続けて送ったため、しばらく送れません。時間をおいてから試してください。');
+    if (/invalid-email/.test(code)) return new Error('メールアドレスを正しく入力してください。');
+    if (/network-request-failed/.test(code)) return new Error('つながりませんでした。電波の状態を確認してください。');
+    return err;
+  }
+
   async function sendLoginLink(email) {
     const { authMod, auth } = await load();
-    await authMod.sendSignInLinkToEmail(auth, email, { url: returnUrl(), handleCodeInApp: true });
+    try {
+      await authMod.sendSignInLinkToEmail(auth, email, { url: returnUrl(), handleCodeInApp: true });
+    } catch (err) {
+      throw mailError(err);
+    }
     try {
       localStorage.setItem(EMAIL_KEY, email);
     } catch (err) {
@@ -102,10 +117,26 @@
   // 送ったアドレスはこの端末に覚えない（スタッフが自分の端末でリンクを開くと、メールアドレスをもう一度入れる画面になる）
   async function sendStaffLoginLink(email) {
     const { authMod, auth } = await load();
-    await authMod.sendSignInLinkToEmail(auth, email, { url: returnUrl(), handleCodeInApp: true });
+    try {
+      await authMod.sendSignInLinkToEmail(auth, email, { url: returnUrl(), handleCodeInApp: true });
+    } catch (err) {
+      throw mailError(err);
+    }
   }
 
-  // 貼り付けた文字が、ログイン用のリンクの形か（Firebase を読み込む前に、入力の間違いを知らせるため）
+  // パスワード再設定メール（ログイン用リンクのメールより、1日に送れる数がずっと多い）。
+  // リンクを開くと Firebase の画面で新しいパスワードを決める（どの端末で開いてもよい。アプリのログインは起きない）。
+  // まだアカウントがない人には届かない（本番は、アドレスを探られないよう、そのときもエラーを返さない）
+  async function sendPasswordReset(email) {
+    const { authMod, auth } = await load();
+    try {
+      await authMod.sendPasswordResetEmail(auth, email, { url: loginEntryUrl() });
+    } catch (err) {
+      if (err && err.code === 'auth/user-not-found') return; // 登録の有無は知らせない
+      throw mailError(err);
+    }
+  }
+
   // アドレスバーから、ログイン用のリンクの文字を消す
   function clearLoginLink() {
     history.replaceState(null, '', returnUrl());
@@ -641,6 +672,8 @@
     savedEmail,
     sendLoginLink,
     sendStaffLoginLink,
+    sendPasswordReset,
+    mailError, // テスト用（エラーの文）
     completeLogin,
     clearLoginLink,
     signInWithPassword,

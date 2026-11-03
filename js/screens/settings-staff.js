@@ -439,7 +439,8 @@
 
   // スタッフのログインの案内（共有モードで、ログイン用メールを保存済みのときだけ）
   // ・ログイン用のURL：開くとすぐにログイン画面になる（LINE などでスタッフに送る）
-  // ・パスワード設定用のメールを送る：保存済みのメールアドレスに、Firebase からリンクを送る（開くと、新しいパスワードを決める画面）
+  // ・パスワード設定用のメールを送る：保存済みのメールアドレスに、Firebase からパスワード再設定メールを送る（開くと、新しいパスワードを決める画面）
+  //   まだ一度もログインしたことがない人には届かないので、そのときは、ログイン用のURLから「初めての方・パスワードを忘れた方」で始めてもらう
   function loginBox(member, emailInput) {
     const backend = K.storage.isCloud() && K.app.cloudBackend ? K.app.cloudBackend() : null;
     if (!backend || !member || !member.email || member.active === false) return null;
@@ -462,12 +463,12 @@
         status.textContent = 'メールアドレスが変わっています。先に「保存する」を押してから送ってください。';
         return;
       }
-      if (!window.confirm(`${member.name}さんの登録メールに、パスワード設定用のリンクを送りますか？\nスタッフがリンクを開くと、メールアドレスをもう一度入れてから、パスワードを決めます。`)) return;
+      if (!window.confirm(`${member.name}さんの登録メールに、パスワード設定用のメールを送りますか？\nスタッフがメールのリンクを開くと、新しいパスワードを決める画面になります。`)) return;
       btn.disabled = true;
       status.textContent = '送っています…';
       try {
-        await backend.sendStaffLoginLink(member.email);
-        status.textContent = 'パスワード設定用のメールを送りました。届かないときは、迷惑メールのフォルダーも見てもらってください。';
+        await (backend.sendPasswordReset ? backend.sendPasswordReset(member.email) : backend.sendStaffLoginLink(member.email));
+        status.textContent = 'パスワード設定用のメールを送りました。届かないときは、迷惑メールのフォルダーも見てもらってください（まだ一度もログインしたことがない人には届きません。その場合は、ログイン用のURLを送り、「初めての方・パスワードを忘れた方」から始めてもらってください）。';
       } catch (err) {
         status.textContent = `送れませんでした（${err.message}）。少し待ってから、もう一度試してください。`;
       } finally {
@@ -490,7 +491,7 @@
         'div',
         { class: 'actions' },
         url ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: copyUrl }, 'URLをコピー') : null,
-        backend.sendStaffLoginLink ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: sendMail }, 'パスワード設定用のメールを送る') : null
+        (backend.sendPasswordReset || backend.sendStaffLoginLink) ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: sendMail }, 'パスワード設定用のメールを送る') : null
       ),
       status
     );

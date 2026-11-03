@@ -343,7 +343,7 @@
           label: 'メールアドレス',
           button: 'メールを送る',
           value: info.email || (K.cloud && K.cloud.savedEmail ? K.cloud.savedEmail() : ''),
-          onSubmit: (email) => K.app.cloudActions.sendLink(email),
+          onSubmit: (email) => K.app.cloudActions.sendReset(email),
         }),
         el('div', { class: 'login-sub' }, el('button', { type: 'button', class: 'text-btn login-link', onclick: () => K.app.cloudActions.showLogin() }, '‹ ログインに戻る'))
       );
@@ -362,8 +362,49 @@
           label: 'メールアドレス',
           button: '新しいメールを送る',
           value: info.email || (K.cloud && K.cloud.savedEmail ? K.cloud.savedEmail() : ''),
-          onSubmit: (email) => K.app.cloudActions.sendLink(email),
+          onSubmit: (email) => K.app.cloudActions.sendReset(email),
         }),
+        el('div', { class: 'login-sub' }, el('button', { type: 'button', class: 'text-btn login-link', onclick: () => K.app.cloudActions.showLogin() }, '‹ ログインに戻る'))
+      );
+    } else if (s === 'sent-reset') {
+      const firstStatus = el('p', { class: 'form-error', role: 'alert', hidden: true });
+      const firstBtn = el(
+        'button',
+        {
+          type: 'button',
+          class: 'btn btn--ghost btn--block',
+          onclick: async () => {
+            firstBtn.disabled = true;
+            firstStatus.hidden = true;
+            try {
+              await K.app.cloudActions.sendLink(info.email);
+            } catch (err) {
+              firstStatus.textContent = err.message;
+              firstStatus.hidden = false;
+              firstBtn.disabled = false;
+            }
+          },
+        },
+        '初めてログインする方はこちら（ログイン用のメールを送る）'
+      );
+      body = card(
+        'メールを送りました',
+        el('p', { class: 'hint hint--left' }, `${info.email} に「パスワードの再設定」のメールを送りました。`),
+        el(
+          'ol',
+          { class: 'gate-notes' },
+          el('li', null, 'メールのリンクを押します（スマホ・パソコンのどちらで開いても大丈夫です）。'),
+          el('li', null, '開いた画面で、新しいパスワード（8文字以上）を入れて「保存」を押します。'),
+          el('li', null, 'このアプリに戻って、メールアドレスと新しいパスワードでログインします。')
+        ),
+        el('p', { class: 'hint hint--left' }, 'メールが届かないときは、迷惑メールのフォルダーも確認してください。パスワードを決めると、ほかの端末は1時間ほどでログアウトされます（新しいパスワードでログインし直します）。'),
+        el(
+          'div',
+          { class: 'first-login' },
+          el('p', { class: 'hint hint--left' }, '数分たっても届かないとき：まだ一度もログインしたことがない方には、このメールは届きません。下のボタンを押してください。'),
+          firstBtn,
+          firstStatus
+        ),
         el('div', { class: 'login-sub' }, el('button', { type: 'button', class: 'text-btn login-link', onclick: () => K.app.cloudActions.showLogin() }, '‹ ログインに戻る'))
       );
     } else if (s === 'sent') {
@@ -481,7 +522,7 @@
           status.textContent = '送っています…';
           try {
             await K.app.cloudActions.requestPasswordChange();
-            status.textContent = 'メールを送りました。メールのリンクを押すと、新しいパスワードを決める画面が開きます。';
+            status.textContent = 'パスワード再設定のメールを送りました。メールのリンクを押して、新しいパスワードを決めてください。決めたあと、この端末を含むログイン中の端末は1時間ほどでログアウトされるので、新しいパスワードでログインし直してください。';
           } catch (err) {
             status.textContent = `送れませんでした（${err.message}）。少し待ってから、もう一度試してください。`;
           } finally {

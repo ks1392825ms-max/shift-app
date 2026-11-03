@@ -382,7 +382,12 @@
 
   // ログイン画面などのボタンから呼ぶ操作
   const cloudActions = {
-    // パスワードを決める（決め直す）ためのメールを送る（中身は、今までのログイン用のリンクと同じ）
+    // パスワード再設定メールを送る（初めての方・パスワードを忘れた方。1日に送れる数が多い）
+    async sendReset(email) {
+      await cloud.backend.sendPasswordReset(email);
+      showGate('sent-reset', { email });
+    },
+    // まだ一度もログインしたことがない人：ログイン用のリンクを送る（開くと、その場でパスワードを決める）
     async sendLink(email) {
       await cloud.backend.sendLoginLink(email);
       showGate('sent', { email });
@@ -422,7 +427,7 @@
     // ログイン中の人が、パスワードを決め直す：自分のメールにリンクを送る（開くと、新しいパスワードを決める画面）
     async requestPasswordChange() {
       if (!cloud.user) throw new Error('ログインしていません。');
-      await cloud.backend.sendLoginLink(cloud.user.email);
+      await cloud.backend.sendPasswordReset(cloud.user.email);
     },
     // 「初めての方・パスワードを忘れた方」
     showReset(email) {
