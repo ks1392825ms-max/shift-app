@@ -347,6 +347,25 @@
         }),
         el('div', { class: 'login-sub' }, el('button', { type: 'button', class: 'text-btn login-link', onclick: () => K.app.cloudActions.showLogin() }, '‹ ログインに戻る'))
       );
+    } else if (s === 'link-error') {
+      body = card(
+        'このリンクは使えません',
+        el('p', { class: 'hint hint--left' }, 'リンクの期限が切れているか、すでに使われています。新しいメールを送ってください。'),
+        el(
+          'ul',
+          { class: 'gate-notes' },
+          el('li', null, '届いたメールのうち、いちばん新しいメールのリンクを押してください。'),
+          el('li', null, 'リンクは1回しか使えません。長押し（下見）をせずに、1回だけ押してください。')
+        ),
+        emailForm({
+          id: 'resend-email',
+          label: 'メールアドレス',
+          button: '新しいメールを送る',
+          value: info.email || (K.cloud && K.cloud.savedEmail ? K.cloud.savedEmail() : ''),
+          onSubmit: (email) => K.app.cloudActions.sendLink(email),
+        }),
+        el('div', { class: 'login-sub' }, el('button', { type: 'button', class: 'text-btn login-link', onclick: () => K.app.cloudActions.showLogin() }, '‹ ログインに戻る'))
+      );
     } else if (s === 'sent') {
       body = card(
         'メールを送りました',
@@ -355,6 +374,7 @@
           'ul',
           { class: 'gate-notes' },
           el('li', null, 'リンクは、スマホ・パソコンのどちらで開いても大丈夫です（Safari などのブラウザが開きます）。'),
+          el('li', null, 'リンクは1回しか使えません。いちばん新しいメールのリンクを、長押し（下見）をせずに1回だけ押してください。'),
           el('li', null, 'パスワードを決めたら、ホーム画面（Dock）のアプリに戻って、メールアドレスとパスワードでログインしてください。'),
           el('li', null, 'メールが届かないときは、迷惑メールのフォルダーも確認してください。')
         ),

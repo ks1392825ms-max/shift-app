@@ -273,10 +273,17 @@
       if (K.quickLock) K.quickLock.clear();
       if (K.storage.isCloud()) K.storage.detachCloud();
       // ほかの端末でメールのリンクを開いた場合は、メールアドレスの入力を待つ
+      if (cloud.linkError) {
+        // 使えないリンクを開いたとき：行き止まりにせず、新しいメールを送れる画面にする
+        showGate('link-error', cloud.linkError);
+        cloud.linkError = null;
+        return;
+      }
       showGate(cloud.awaitingConfirm ? 'confirm-email' : 'login', cloud.loginNotice ? { notice: cloud.loginNotice } : {});
       cloud.loginNotice = '';
       return;
     }
+    cloud.linkError = null; // ログインできているので、使えなかったリンクの案内は出さない
     // メールの確認が済んでいないアカウント（パスワードだけで作られたもの）では使わない
     if (user.emailVerified === false) {
       cloud.loginNotice = 'このメールアドレスは、まだ確認が済んでいません。「初めての方・パスワードを忘れた方」から、パスワードを決めてください。';
@@ -381,9 +388,21 @@
       showGate('sent', { email });
     },
     async confirmEmail(email) {
-      cloud.awaitingConfirm = false;
       setNeedPassword('*');
-      const uid = await cloud.backend.completeLogin(email);
+      let uid;
+      try {
+        uid = await cloud.backend.completeLogin(email);
+      } catch (err) {
+        setNeedPassword(null);
+        if (err && err.code === 'link-invalid') {
+          cloud.awaitingConfirm = false;
+          showGate('link-error', { email });
+          return;
+        }
+        // アドレスの入れ間違いなど：同じリンクのまま、もう一度入れられる
+        throw err;
+      }
+      cloud.awaitingConfirm = false;
       if (uid) setNeedPassword(uid);
       // ログインが完了すると onAuth が呼ばれる
     },
@@ -449,8 +468,16 @@
         }
         // リンクでログインしたら、このあとパスワードを決めてもらう
         setNeedPassword('*');
-        const uid = await backend.completeLogin(email);
-        if (uid) setNeedPassword(uid);
+        try {
+          const uid = await backend.completeLogin(email);
+          if (uid) setNeedPassword(uid);
+        } catch (err) {
+          setNeedPassword(null);
+          if (!err || err.code !== 'link-invalid') throw err;
+          // 使えないリンク：ログインしていなければ「新しいメールを送る」画面（すでにログイン中なら、そのまま使える）
+          cloud.linkError = { email };
+          toast('このリンクは使えませんでした（期限切れか、使用済み）', 5000);
+        }
       }
       await backend.start(onAuth);
     } catch (err) {

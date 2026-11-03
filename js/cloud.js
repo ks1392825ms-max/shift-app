@@ -9,7 +9,8 @@
 //   savedEmail()                ログイン用のメールを送ったメールアドレス（同じ端末なら覚えている）
 //   sendLoginLink(email)        ログイン用のメールを送る
 //   sendStaffLoginLink(email)   オーナーが、登録したスタッフのメールにログイン用のメールを送る（この端末には覚えない）
-//   completeLogin(email)        メールのリンクでログインを完了する（戻り値：ログインした人の uid）
+//   completeLogin(email)        メールのリンクでログインを完了する（戻り値：ログインした人の uid）。使えないリンクは code='link-invalid'
+//   clearLoginLink()            アドレスバーから、ログイン用のリンクの文字を消す
 //   signInWithPassword(email, password)  メールアドレスとパスワードでログインする
 //   setPassword(password)       ログイン中の人のパスワードを決める（メールのリンクでログインした直後に使う）
 //   checkAdmin()                管理者として登録されているか（ルールで読めるかどうかで判断）
@@ -105,6 +106,11 @@
   }
 
   // 貼り付けた文字が、ログイン用のリンクの形か（Firebase を読み込む前に、入力の間違いを知らせるため）
+  // アドレスバーから、ログイン用のリンクの文字を消す
+  function clearLoginLink() {
+    history.replaceState(null, '', returnUrl());
+  }
+
   async function completeLogin(email) {
     const { authMod, auth } = await load();
     const url = location.href;
@@ -114,7 +120,13 @@
       result = await authMod.signInWithEmailLink(auth, email, url);
     } catch (err) {
       const code = err && err.code;
-      if (code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') throw new Error('このリンクは使えません（期限切れか、使用済みです）。ログイン用のメールを送り直してください。');
+      if (code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') {
+        // 使えないリンク：アドレスからリンクの文字を消す（読み込み直しても、同じエラーがくり返されないように）
+        clearLoginLink();
+        const e = new Error('このリンクは使えません（期限が切れているか、すでに使われています）。');
+        e.code = 'link-invalid';
+        throw e;
+      }
       if (code === 'auth/invalid-email') throw new Error('メールアドレスが、ログイン用のメールを送ったアドレスと違います。');
       throw err;
     }
@@ -630,6 +642,7 @@
     sendLoginLink,
     sendStaffLoginLink,
     completeLogin,
+    clearLoginLink,
     signInWithPassword,
     setPassword,
     passwordError, // テスト用（エラーの文）
