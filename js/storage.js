@@ -130,6 +130,39 @@
     }
   }
 
+  // モードを選んだことがあるか（「共有モードに切り替える」「この端末だけで使う形に戻す」を押したことがあるか）
+  function hasChosenMode() {
+    try {
+      return localStorage.getItem(MODE_KEY) !== null;
+    } catch (err) {
+      return true;
+    }
+  }
+
+  // この端末のデータが、最初に作られた見本（店舗A・店舗B・見本の勤務パターン）のままか。読むだけで、データは変えない。
+  // スタッフ・シフトなどが1件でもある、店舗やパターンを変えた・足した・消したことがあるときは false
+  function isPristineSample() {
+    let obj;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw === null) return true;
+      obj = JSON.parse(raw);
+    } catch (err) {
+      return false;
+    }
+    if (!obj || typeof obj !== 'object') return false;
+    const sameDefaults = (list, defaults) =>
+      Array.isArray(list) &&
+      list.length === defaults.length &&
+      list.every((r) => r && !r.deleted && r.updatedAt === DEFAULTS_TIMESTAMP && defaults.some((d) => d.id === r.id));
+    for (const key of LIST_KEYS) {
+      if (key === 'stores' || key === 'shiftPatterns') continue;
+      if (Array.isArray(obj[key]) && obj[key].length) return false;
+    }
+    if (!sameDefaults(obj.stores, K.defaults.stores) || !sameDefaults(obj.shiftPatterns, K.defaults.shiftPatterns)) return false;
+    return !obj.settings || !obj.settings.updatedAt || obj.settings.updatedAt === DEFAULTS_TIMESTAMP;
+  }
+
   function setMode(mode) {
     localStorage.setItem(MODE_KEY, mode === 'cloud' ? 'cloud' : 'local');
   }
@@ -2095,6 +2128,8 @@
     undoRestore,
     LIST_KEYS,
     getMode,
+    hasChosenMode,
+    isPristineSample,
     setMode,
     isCloud,
     onCloudError,

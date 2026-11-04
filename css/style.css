@@ -2943,6 +2943,25 @@ body:has(.screen[data-screen="summary"]) .app-header__inner {
   background: var(--surface-2);
 }
 
+/* ---- 「この端末だけ」モードの案内（公開URLで開いたとき） ---- */
+.local-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  margin: 8px 16px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 0.85rem;
+}
+
+.local-notice__text {
+  min-width: 0;
+}
+
 /* ---- 簡単ログイン：ロックの画面（PIN・顔認証/指紋認証） ---- */
 /* ロック中は、うしろのアプリの画面を見せない（押せないようにするのは JS の inert） */
 body.is-locked > :not(.qlock) {
@@ -3700,6 +3719,63 @@ body.is-gate .bottom-nav {
 @media (max-width: 420px) {
   .mode-badge {
     padding: 2px 8px;
+  }
+}
+
+/* ==== 誰としてログインしているか（「SHIFT」の枠と名札） ==== */
+/* 枠の中は白・文字は黒（暗い表示でも同じ）。外枠：管理者＝オレンジ・幹部＝赤・スタッフ＝白（外側に細い灰色の線） */
+body[data-role="admin"] {
+  --role-color: #f08c00;
+}
+
+body[data-role="manager"] {
+  --role-color: #e03131;
+}
+
+body[data-role="staff"] {
+  --role-color: #ffffff;
+}
+
+body[data-role] .app-title {
+  padding: 2px 6px 2px calc(8px + 0.18em);
+  border: 3px solid var(--role-color);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111214;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.role-badge {
+  padding: 2px 10px;
+  border: 2px solid var(--role-color, var(--border));
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+body[data-role="staff"] .app-title,
+body[data-role="staff"] .role-badge {
+  box-shadow: 0 0 0 1px #9a9a96;
+}
+
+@media (max-width: 420px) {
+  .role-badge {
+    padding: 2px 8px;
+  }
+
+  /* 幅の狭いスマホでは、管理者の名札があれば「共有中」は省く（管理者の名札が出るのは共有モードだけ） */
+  body[data-role="admin"] .mode-badge {
+    display: none;
+  }
+
+  /* 店舗の切り替えが入りきらないときは、次の行に出す（店舗名が縦に細くつぶれないように） */
+  body[data-role] .app-header__inner {
+    flex-wrap: wrap;
+    row-gap: 8px;
   }
 }
 

@@ -785,7 +785,7 @@
       'section',
       { class: 'card req-card' },
       el('h2', { class: 'card__title' }, '希望休・有給の申請'),
-      el('p', { class: 'hint hint--left' }, `${view.email} でログインしています。`),
+      el('p', { class: 'hint hint--left' }, `${view.email} でログインしています（${params.manager ? '幹部・自分の申請' : 'スタッフ'}）。`),
       el(
         'div',
         { class: 'actions' },

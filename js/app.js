@@ -134,11 +134,13 @@
     const gate = state.screen === 'login' || state.screen === 'request' || state.screen === 'manager';
     document.body.classList.toggle('is-gate', gate);
     renderModeBadge();
+    renderRoleBadge();
     if (!gate) renderStoreSwitch();
 
     const container = document.getElementById('screen');
     container.replaceChildren();
     container.dataset.screen = state.screen;
+    renderLocalNotice(gate);
 
     const title = SCREEN_TITLES[state.screen];
     document.getElementById('screen-title').textContent = title;
@@ -156,6 +158,26 @@
     restoreView(kept);
   }
 
+  // 「この端末だけ」モードの案内（公開URLで開いたときだけ）：見本や端末だけのデータを、共有のデータと間違えないように
+  function renderLocalNotice(gate) {
+    let box = document.getElementById('local-notice');
+    const show = !gate && !K.storage.isCloud() && Boolean(K.cloud && K.cloud.supported());
+    if (!show) {
+      if (box) box.remove();
+      return;
+    }
+    if (box) return;
+    box = U.el(
+      'div',
+      { id: 'local-notice', class: 'local-notice', role: 'note' },
+      U.el('span', { class: 'local-notice__text' }, K.storage.isPristineSample() ? 'この端末だけの見本のデータを表示しています。' : 'この端末だけのデータを表示しています（共有のデータではありません）。'),
+      U.el('button', { type: 'button', class: 'btn btn--primary btn--small', onclick: () => cloudActions.switchToCloud() }, '共有のデータを見る（ログイン）')
+    );
+    const header = document.querySelector('.app-header');
+    if (header) header.after(box);
+    else document.body.prepend(box);
+  }
+
   // ヘッダーの「共有中」の印
   function renderModeBadge() {
     const badge = document.getElementById('mode-badge');
@@ -164,6 +186,33 @@
     badge.hidden = !on;
     badge.textContent = on ? '共有中' : '';
     badge.title = on ? `共有モード（${cloud.user.email} でログイン中）` : '';
+  }
+
+  // 誰としてログインしているか：「SHIFT」の枠の色と名札（管理者＝オレンジ・幹部＝赤・スタッフ＝白）
+  // ログインの前・「この端末だけ」モードでは出さない
+  const ROLE_LABELS = { admin: '管理者', manager: '幹部', 'manager-self': '幹部（自分の申請）', staff: 'スタッフ' };
+
+  function currentRole() {
+    if (!cloud.user) return null;
+    if (state.screen === 'manager') return 'manager';
+    if (state.screen === 'request') return state.params && state.params.manager ? 'manager-self' : 'staff';
+    if (state.screen !== 'login' && cloud.ready && K.storage.isCloud()) return 'admin';
+    return null;
+  }
+
+  function renderRoleBadge() {
+    const role = currentRole();
+    if (role) document.body.dataset.role = role === 'manager-self' ? 'manager' : role;
+    else delete document.body.dataset.role;
+    const title = document.querySelector('.app-title');
+    if (!title) return;
+    let badge = document.getElementById('role-badge');
+    if (!badge) {
+      badge = U.el('span', { id: 'role-badge', class: 'role-badge' });
+      title.after(badge);
+    }
+    badge.hidden = !role;
+    badge.textContent = role ? ROLE_LABELS[role] : '';
   }
 
   function navigate(screen, params = {}) {
@@ -511,7 +560,10 @@
     // メールのログイン用リンクを開いたとき（別のブラウザで開いた場合も）は、共有モードに切り替えてログインを進める
     // ログイン用のURL（末尾に ?login）で開いたときも、共有モードのログイン画面にする（スタッフ向け）
     const loginEntry = Boolean(K.cloud && K.cloud.isLoginEntry && K.cloud.isLoginEntry());
-    if (K.cloud && K.cloud.supported() && (K.storage.getMode() === 'cloud' || K.cloud.isLoginLink() || loginEntry)) {
+    // まだモードを選んだことがなく、この端末のデータが見本のまま（ホーム画面・Dock に追加したばかりのアプリなど）
+    // → 見本の店舗A・Bではなく、共有モード（ログイン画面）で始める。実際に入力したことがある端末は、勝手に切り替えない
+    const firstOpen = Boolean(K.cloud && K.cloud.supported() && !K.storage.hasChosenMode() && K.storage.isPristineSample());
+    if (K.cloud && K.cloud.supported() && (K.storage.getMode() === 'cloud' || K.cloud.isLoginLink() || loginEntry || firstOpen)) {
       if (K.storage.getMode() !== 'cloud') K.storage.setMode('cloud');
       // アドレスバーから ?login を消す（ホーム画面に追加したときに、ふつうのURLになるように）
       if (loginEntry) history.replaceState(null, '', location.pathname + location.hash);
