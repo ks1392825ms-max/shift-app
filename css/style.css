@@ -3746,7 +3746,8 @@ body[data-role] .app-title {
   white-space: nowrap;
 }
 
-.role-badge {
+/* 名札（「St」「As」の印の role-badge とは別の名前にする） */
+.login-role {
   padding: 2px 10px;
   border: 2px solid var(--role-color, var(--border));
   border-radius: 999px;
@@ -3758,12 +3759,12 @@ body[data-role] .app-title {
 }
 
 body[data-role="staff"] .app-title,
-body[data-role="staff"] .role-badge {
+body[data-role="staff"] .login-role {
   box-shadow: 0 0 0 1px #9a9a96;
 }
 
 @media (max-width: 420px) {
-  .role-badge {
+  .login-role {
     padding: 2px 8px;
   }
 
@@ -3776,6 +3777,548 @@ body[data-role="staff"] .role-badge {
   body[data-role] .app-header__inner {
     flex-wrap: wrap;
     row-gap: 8px;
+  }
+}
+
+/* ==== 幹部の画面：確定シフト（管理者のシフト表と同じ見た目・見るだけ） ==== */
+.manager-roster {
+  max-height: calc(100dvh - 140px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+}
+
+.manager-roster .roster__staff,
+.cell--static,
+.roster__date-btn--static {
+  cursor: default;
+}
+
+.roster__date-btn--static:hover .roster__day {
+  text-decoration: none;
+}
+
+/* ==== スタッフの申請画面（シンプル・分かりやすく） ==== */
+/* 上から：あいさつ（名前・店舗・受付の状況）→ タブ → カレンダー → 申請の状況 → アカウント（閉じておく）。色は白黒が基本 */
+.req-hero {
+  display: grid;
+  gap: 6px;
+  padding: 20px 20px 18px;
+  border-radius: 20px;
+  background: #111214;
+  color: #ffffff;
+  box-shadow: 0 10px 30px rgba(17, 18, 20, 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  .req-hero {
+    border: 1px solid #3a3b40;
+    background: #1c1d21;
+    box-shadow: none;
+  }
+}
+
+.req-hero__eyebrow {
+  margin: 0;
+  color: #b9bac0;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.req-hero__name {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.req-hero__store {
+  margin: 0;
+  color: #d9dade;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.req-hero__window {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.req-hero__badge {
+  padding: 3px 12px;
+  border: 1.5px solid #8d8e94;
+  border-radius: 999px;
+  color: #d9dade;
+  font-size: 0.78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.req-hero__window.is-open .req-hero__badge {
+  border-color: #ffffff;
+  background: #ffffff;
+  color: #111214;
+}
+
+.req-hero__back {
+  justify-self: start;
+  margin-top: 8px;
+  border-color: #8d8e94;
+  background: transparent;
+  color: #ffffff;
+}
+
+.screen[data-screen="request"] .req-hero + .req-card,
+.screen[data-screen="request"] .req-card + .req-card {
+  margin-top: 14px;
+}
+
+.screen[data-screen="request"] .req-card {
+  padding: 18px;
+  border-radius: 18px;
+}
+
+.screen[data-screen="request"] .req-tabs {
+  margin: 16px 0 14px;
+}
+
+.screen[data-screen="request"] .req-tabs .segment__btn {
+  min-height: 46px;
+  font-size: 0.95rem;
+}
+
+.screen[data-screen="request"] .req-card > h2.card__title {
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+
+.req-guide {
+  display: grid;
+  gap: 2px;
+  margin: 10px 0 4px;
+}
+
+.req-guide__main {
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.req-guide__left {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.req-guide__left.is-full {
+  color: var(--text);
+}
+
+.req-more {
+  margin: 2px 0 6px;
+  font-size: 0.85rem;
+}
+
+.req-more > summary {
+  width: fit-content;
+  color: var(--text-muted);
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.req-more > .hint {
+  margin-top: 6px;
+}
+
+.screen[data-screen="request"] .req-cal {
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.screen[data-screen="request"] .req-day {
+  min-height: 52px;
+  border-radius: 12px;
+}
+
+.screen[data-screen="request"] .req-legend {
+  gap: 4px 10px;
+  margin-top: 10px;
+  font-size: 0.72rem;
+}
+
+.req-send {
+  min-height: 52px;
+  border-radius: 14px;
+  font-size: 1rem;
+}
+
+.screen[data-screen="request"] .actions:has(.req-send) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.screen[data-screen="request"] .actions:has(.req-send) .hint--inline {
+  text-align: center;
+}
+
+.req-status-card .card__title--section {
+  margin-top: 20px;
+  padding-top: 14px;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.req-status-card > h2.card__title + .card__title--section {
+  margin-top: 10px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* 押せないとき（日を選んでいない・送信済み）は、押せるボタンと見分けがつくように薄い灰色 */
+.req-send:disabled {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  opacity: 1;
+  cursor: default;
+}
+
+/* アカウント・この端末の設定（ふだんは閉じておく） */
+.req-account {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+.req-account__summary {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  padding: 16px 18px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.req-account__summary::-webkit-details-marker {
+  display: none;
+}
+
+.req-account__summary::after {
+  content: "▾";
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+.req-account[open] > .req-account__summary::after {
+  transform: rotate(180deg);
+}
+
+.req-account__title {
+  font-weight: 800;
+}
+
+.req-account__hint {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.req-account__body {
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 16px;
+}
+
+.req-account__body .card {
+  box-shadow: none;
+}
+
+/* ==== スタッフの確定シフト「自分のシフトだけ」：縦に日付・横に時間の帯 ==== */
+.pub-tl {
+  margin-top: 10px;
+}
+
+.pub-tl__sum {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.pub-tl__head,
+.pub-tl__row {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.pub-tl__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.pub-tl__axis {
+  position: relative;
+  height: 1.2em;
+  margin: 0 12px;
+}
+
+.pub-tl__tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+}
+
+.pub-tl__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pub-tl__row {
+  min-height: 38px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pub-tl__row.is-today {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.pub-tl__date {
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* 帯を引く場所：1時間ごとに細い縦線 */
+.pub-tl__track {
+  position: relative;
+  display: block;
+  height: 26px;
+  margin: 0 12px;
+  background: repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px var(--tl-step));
+  background-position: 0 0;
+}
+
+.pub-tl__bar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--bg);
+  overflow: hidden;
+}
+
+.pub-tl__bar.is-business {
+  border: 1px dashed var(--text);
+  background: repeating-linear-gradient(135deg, var(--surface), var(--surface) 4px, color-mix(in srgb, var(--text) 18%, var(--surface)) 4px, color-mix(in srgb, var(--text) 18%, var(--surface)) 8px);
+  color: var(--text);
+}
+
+.pub-tl__bar-text {
+  padding: 0 6px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pub-tl__label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.pub-tl__label.is-paid {
+  color: var(--text);
+}
+
+.pub-tl__row.is-closed .pub-tl__track {
+  background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--text) 6%, transparent) 6px 12px);
+}
+
+@media (max-width: 360px) {
+  .pub-tl__head,
+  .pub-tl__row {
+    grid-template-columns: 70px 1fr;
+    gap: 4px;
+  }
+
+  .pub-tl__track,
+  .pub-tl__axis {
+    margin: 0 8px;
+  }
+}
+
+/* ==== 幹部の画面（シンプル・分かりやすく：スタッフの画面とそろえる） ==== */
+.screen[data-screen="manager"] {
+  max-width: 720px;
+}
+
+.mgr-hero__pending {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #3a3b40;
+  color: #d9dade;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.mgr-hero__count {
+  color: #ffffff;
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.mgr-hero__pending:not(.has-pending) .mgr-hero__count {
+  color: #8d8e94;
+}
+
+.screen[data-screen="manager"] .mgr-tabs {
+  display: flex;
+  margin: 16px 0 12px;
+}
+
+/* 文字の長さに合わせて幅を分ける（「確定シフト」まで1行に収める） */
+.screen[data-screen="manager"] .mgr-tabs .segment__btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 46px;
+  padding: 4px 6px;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.mgr-hero__month {
+  margin-left: auto;
+  color: #b9bac0;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 420px) {
+  .screen[data-screen="manager"] .mgr-tabs .segment__btn {
+    padding: 4px 3px;
+    font-size: 0.8rem;
+  }
+
+  .screen[data-screen="manager"] .mgr-tabs .req-badge {
+    margin-left: 2px;
+  }
+}
+
+.mgr-stores {
+  margin: 0 0 10px;
+}
+
+.mgr-bar {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+.mgr-bar .month-nav {
+  margin: 0;
+}
+
+.mgr-bar__hint {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+}
+
+.screen[data-screen="manager"] .mgr-body {
+  padding: 16px;
+  border-radius: 18px;
+}
+
+/* スマホ：希望休の表を、スタッフごとの小さなまとまりにする（名前と日数を上に、申請と判断のボタンを下に横並び） */
+@media (max-width: 560px) {
+  .screen[data-screen="manager"] .req-table,
+  .screen[data-screen="manager"] .req-table tbody {
+    display: block;
+  }
+
+  .screen[data-screen="manager"] .req-table thead {
+    display: none;
+  }
+
+  .screen[data-screen="manager"] .req-table tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 6px 10px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .screen[data-screen="manager"] .req-table th,
+  .screen[data-screen="manager"] .req-table td {
+    padding: 0;
+    border: 0;
+  }
+
+  .screen[data-screen="manager"] .req-table td:nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .screen[data-screen="manager"] .req-table td:last-child {
+    grid-column: 2;
+    grid-row: 1;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+
+  .screen[data-screen="manager"] .req-decision {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+  }
+
+  .screen[data-screen="manager"] .req-decision .actions,
+  .screen[data-screen="manager"] .req-decision .btn {
+    margin: 0;
+  }
+}
+
+@media (max-width: 360px) {
+  .screen[data-screen="manager"] .mgr-tabs .segment__btn {
+    padding: 4px 2px;
+    font-size: 0.72rem;
   }
 }
 
@@ -4278,6 +4821,15 @@ body[data-role="staff"] .role-badge {
   color: var(--text-muted);
 }
 
+/* 社用で不在（幹部が自分で登録）：点線の枠 */
+.req-day.is-bday {
+  border: 2px dashed var(--accent);
+}
+
+.req-bday-form .field__input + .field__input {
+  margin-top: 6px;
+}
+
 .req-day.is-picked {
   box-shadow: 0 0 0 3px var(--accent);
 }
@@ -4337,6 +4889,254 @@ body[data-role="staff"] .role-badge {
 /* 希望休の承認制（段階②）：申請中は点線・塗りなし、却下は薄く */
 .cell.has-wish.is-wish-pending {
   outline-style: dotted;
+}
+
+/* 社用で不在（幹部が自分で登録）：左下に「不在」の印（点線の枠） */
+.cell.has-bday {
+  position: relative;
+}
+
+.cell__bday {
+  position: absolute;
+  bottom: 1px;
+  left: 2px;
+  padding: 0 2px;
+  border: 1px dashed var(--accent);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 0.5rem;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+/* ==== 日付ごとの一覧（幹部・オーナー）：縦に日付、横にスタッフ名と状態の札 ==== */
+:root {
+  --chip-pending-bg: #fff4c2;
+  --chip-pending-fg: #7a5a00;
+  --chip-approved-bg: #dcf5e3;
+  --chip-approved-fg: #17663a;
+  --chip-rejected-bg: #ececea;
+  --chip-rejected-fg: #6e6f73;
+  --chip-paid-bg: #dfeafe;
+  --chip-paid-fg: #1d4ed8;
+  --chip-business-bg: #efe5fd;
+  --chip-business-fg: #6d28d9;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --chip-pending-bg: #3d3310;
+    --chip-pending-fg: #fcd34d;
+    --chip-approved-bg: #12321f;
+    --chip-approved-fg: #6ee7a0;
+    --chip-rejected-bg: #2a2b30;
+    --chip-rejected-fg: #9a9ba1;
+    --chip-paid-bg: #172a4d;
+    --chip-paid-fg: #93b8fb;
+    --chip-business-bg: #2c1d4a;
+    --chip-business-fg: #c4a5fb;
+  }
+}
+
+.day-legend,
+.day-list__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.day-legend {
+  margin: 4px 0 10px;
+}
+
+.day-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.day-chip__name {
+  font-weight: 700;
+}
+
+.day-chip__st {
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.day-chip--wish-pending,
+.day-chip--paid-pending {
+  background: var(--chip-pending-bg);
+  color: var(--chip-pending-fg);
+}
+
+.day-chip--wish-approved {
+  background: var(--chip-approved-bg);
+  color: var(--chip-approved-fg);
+}
+
+.day-chip--wish-rejected,
+.day-chip--paid-rejected {
+  background: var(--chip-rejected-bg);
+  color: var(--chip-rejected-fg);
+}
+
+.day-chip--wish-rejected .day-chip__name,
+.day-chip--paid-rejected .day-chip__name {
+  text-decoration: line-through;
+}
+
+.day-chip--paid-approved {
+  background: var(--chip-paid-bg);
+  color: var(--chip-paid-fg);
+}
+
+/* 有給の申請中は、黄色の地に青の線（有給と分かるように） */
+.day-chip--paid-pending {
+  box-shadow: inset 0 0 0 1.5px var(--chip-paid-fg);
+}
+
+.day-chip--business {
+  background: var(--chip-business-bg);
+  color: var(--chip-business-fg);
+}
+
+.day-list {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.day-list th:first-child {
+  width: 6.2rem;
+}
+
+.day-list__date {
+  white-space: nowrap;
+  text-align: left;
+}
+
+.day-list__md {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.day-list__wd {
+  margin-left: 4px;
+}
+
+.day-list__row.is-sat .day-list__md,
+.day-list__row.is-sat .day-list__wd {
+  color: #2563eb;
+}
+
+.day-list__row.is-sun .day-list__md,
+.day-list__row.is-sun .day-list__wd,
+.day-list__holiday {
+  color: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  .day-list__row.is-sat .day-list__md,
+  .day-list__row.is-sat .day-list__wd {
+    color: #60a5fa;
+  }
+
+  .day-list__row.is-sun .day-list__md,
+  .day-list__row.is-sun .day-list__wd,
+  .day-list__holiday {
+    color: #f87171;
+  }
+}
+
+.day-list__holiday {
+  margin-left: 2px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.day-list__count {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.day-list .day-list__items {
+  text-align: left;
+}
+
+.day-list__row.is-closed {
+  background: var(--surface-2);
+}
+
+.day-list__closed {
+  display: inline-block;
+  margin: 0 6px 2px 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.day-list__none {
+  color: var(--text-muted);
+}
+
+/* オーナーの申請の画面（スマホ）：タブを2段（3つずつ）にして、文字が途中で折り返さないようにする */
+@media (max-width: 560px) {
+  .screen[data-screen="requests"] .req-tabs {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .screen[data-screen="requests"] .req-tabs .segment__btn {
+    padding: 6px 4px;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-width: 360px) {
+  .screen[data-screen="requests"] .req-tabs .segment__btn {
+    font-size: 0.78rem;
+  }
+
+  .screen[data-screen="requests"] .req-tabs .req-badge {
+    margin-left: 2px;
+  }
+}
+
+/* とても細い画面（〜360px）：幹部のタブを2段（3つずつ）にする */
+@media (max-width: 360px) {
+  .screen[data-screen="manager"] .mgr-tabs {
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+
+  .screen[data-screen="manager"] .mgr-tabs .segment__btn {
+    flex: 1 1 30%;
+    min-height: 40px;
+  }
+}
+
+@media (max-width: 420px) {
+  .day-list th:first-child {
+    width: 4.4rem;
+  }
+
+  .day-chip {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+  }
 }
 
 .cell.has-wish.is-wish-pending .cell__wish {

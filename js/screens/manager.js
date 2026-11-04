@@ -93,7 +93,7 @@
   function canChange(r) {
     if (r.status === 'cancelled') return { ok: false, why: '取り消し済み' };
     if (r.reflectedAt) return { ok: false, why: 'シフト表に反映済み' };
-    if (view.account && view.account.staffIds.includes(r.staffId)) return { ok: false, why: '自分の申請（オーナーが判断します）' };
+    if (view.account && view.account.staffIds.includes(r.staffId)) return { ok: false, why: R().isSelfWish(r, view.email) ? '自分で登録（確定）' : '自分の申請（オーナーが判断します）' };
     const w = R().requestWindow();
     if (!w.open || r.month !== w.month) return { ok: false, why: '受付期間外のため、変更はオーナーだけです' };
     if (r.status === 'pending') return { ok: true };
@@ -196,13 +196,14 @@
     const pend = (list) => list.filter((r) => r.storeId === view.storeId && r.status === 'pending').length;
     return el(
       'div',
-      { class: 'segment segment--compact req-tabs', role: 'tablist', 'aria-label': '幹部の画面の切り替え' },
+      { class: 'segment segment--compact req-tabs mgr-tabs', role: 'tablist', 'aria-label': '幹部の画面の切り替え' },
       [
         ['wish', '希望休', pend(view.data.wishRequests)],
+        ['days', '日付ごと', 0],
         ['paid', '有給', pend(view.data.paidRequests)],
         ['change', '変更申請', pend(view.data.changeRequests || [])],
-        ['log', '判断の履歴', 0],
-        ['roster', '確定シフト（担当店舗）', 0],
+        ['log', '履歴', 0],
+        ['roster', '確定シフト', 0],
       ].map(([key, label, n]) =>
         el(
           'button',
@@ -256,6 +257,20 @@
         el('tbody', null, rows)
       )
     );
+  }
+
+  // ---- 日付ごと（見るだけ）：縦に日付、横にスタッフ名と状態 ----
+  function daysView() {
+    const mine = (list) => (list || []).filter((r) => r.storeId === view.storeId && r.month === view.month);
+    return K.dayList.render({
+      month: view.month,
+      store: view.ctx.stores.find((s) => s.id === view.storeId),
+      staff: view.ctx.staff.filter((m) => m.storeId === view.storeId),
+      nameOf: staffName,
+      wishes: mine(view.data.wishRequests),
+      paid: mine(view.data.paidRequests),
+      bdays: mine(view.data.businessDays),
+    });
   }
 
   // ---- 有給 ----
@@ -349,13 +364,108 @@
     K.app.rerender();
   }
 
-  function cellText(cell) {
-    if (!cell) return '';
-    if (cell.k === 'work') return cell.t;
-    if (cell.k === 'business') return `社用 ${cell.t}`;
-    if (cell.k === 'closed') return cell.t || '定休';
-    if (cell.k === 'off') return '休';
-    return '';
+  // 確定シフトの表：管理者のシフト表と同じ見た目（見るだけ・押しても何も変わらない）
+  // 中身は公開用の写しだけ（勤務パターンの色は写しにないので、勤務のマスは1色）
+  const PUB_WORK_COLOR = '#64748b';
+  // 「9:00〜18:00」→「9-18」（分があるときは「9:30-18」）。管理者のシフト表のマスと同じくらいの幅にする
+  function shortRange(t) {
+    return String(t || '').replace(/:00/g, '').replace('〜', '-');
+  }
+
+  function pubCell(cell, closed) {
+    if (!cell) return closed ? { cls: 'cell--closed', text: '定休', label: '定休日' } : { cls: 'cell--blank', text: '', label: '空欄' };
+    if (cell.k === 'work') return { cls: 'cell--work', text: shortRange(cell.t), label: `勤務 ${cell.t}` };
+    if (cell.k === 'business') return { cls: 'cell--business', text: [el('span', { class: 'cell__tag' }, '社'), shortRange(cell.t)], label: `社用 ${cell.t}` };
+    if (cell.k === 'closed') return { cls: 'cell--closed', text: cell.t || '定休', label: cell.t === '休業' ? '臨時休業' : '定休日' };
+    if (cell.k === 'off') return { cls: 'cell--off', text: '休', label: '休み' };
+    return { cls: 'cell--blank', text: '', label: '空欄' };
+  }
+
+  function pubRoster(roster) {
+    const today = U.todayStr();
+    const head = el(
+      'thead',
+      null,
+      el(
+        'tr',
+        null,
+        el('th', { class: 'roster__corner', scope: 'col' }, '日付'),
+        roster.staff.map((m) =>
+          el(
+            'th',
+            { class: 'roster__staff', scope: 'col' },
+            el('span', { class: 'roster__staff-name' }, m.name),
+            el(
+              'span',
+              { class: 'roster__staff-meta' },
+              m.role ? el('span', { class: `role-badge role-badge--${m.role === 'St' ? 'stylist' : 'assistant'}` }, m.role) : null,
+              m.title ? el('span', { class: 'roster__staff-title' }, m.title) : null
+            )
+          )
+        ),
+        el('th', { class: 'roster__count roster__count--st roster__count-head', scope: 'col', title: 'スタイリスト' }, 'St'),
+        el('th', { class: 'roster__count roster__count--as roster__count-head', scope: 'col', title: 'アシスタント' }, 'As'),
+        el('th', { class: 'roster__count roster__count--total roster__count-head', scope: 'col', title: '合計' }, '計')
+      )
+    );
+    const rows = roster.days.map((d) => {
+      const w = K.calc.weekdayOf(d.date);
+      const closedAll = Boolean(d.closed);
+      const classes = ['roster__row'];
+      if (w === 0 || d.holiday) classes.push('is-sun');
+      if (w === 6 && !d.holiday) classes.push('is-sat');
+      if (closedAll) classes.push('is-closed');
+      if (d.date === today) classes.push('is-today');
+      // 出勤の人数（勤務のマスだけ。社用・休みは数えない）
+      let st = 0;
+      let as = 0;
+      for (const m of roster.staff) {
+        const c = d.cells[m.id];
+        if (!c || c.k !== 'work') continue;
+        if (m.role === 'St') st++;
+        else if (m.role === 'As') as++;
+      }
+      const closedTag = closedAll ? Object.values(d.cells).find((c) => c && c.k === 'closed' && c.t) : null;
+      return el(
+        'tr',
+        { class: classes.join(' '), 'data-date': d.date },
+        el(
+          'th',
+          { class: 'roster__date', scope: 'row' },
+          el(
+            'span',
+            { class: 'roster__date-btn roster__date-btn--static' },
+            el('span', { class: 'roster__day' }, String(Number(d.date.slice(8)))),
+            el('span', { class: 'roster__wd' }, d.holiday ? '祝' : U.WEEKDAYS[w]),
+            d.holiday ? el('span', { class: 'roster__closed-tag roster__holiday-tag' }, d.holiday) : null,
+            closedAll ? el('span', { class: 'roster__closed-tag' }, closedTag ? closedTag.t : '定休') : null,
+            d.hours ? el('span', { class: 'roster__closed-tag roster__special-tag', title: `特別営業時間 ${d.hours}` }, '特別') : null
+          )
+        ),
+        roster.staff.map((m) => {
+          const c = pubCell(d.cells[m.id], closedAll);
+          return el(
+            'td',
+            { class: 'roster__cell' },
+            el('span', { class: `cell cell--static ${c.cls}`, style: { '--pattern-color': PUB_WORK_COLOR }, role: 'img', 'aria-label': `${shortDate(d.date)} ${m.name}：${c.label}`, title: c.label }, c.text)
+          );
+        }),
+        el('td', { class: 'roster__count roster__count--st' }, String(st)),
+        el('td', { class: 'roster__count roster__count--as' }, String(as)),
+        el('td', { class: 'roster__count roster__count--total' }, String(st + as))
+      );
+    });
+    return el(
+      'div',
+      { class: 'roster-wrap manager-roster' },
+      el(
+        'table',
+        { class: 'roster req-pub-table', style: { '--store-color': roster.storeColor || 'var(--border)' } },
+        el('caption', { class: 'visually-hidden' }, `${roster.storeName} ${R().monthLabel(roster.month)} の確定シフト`),
+        head,
+        el('tbody', null, rows)
+      )
+    );
   }
 
   function rosterView() {
@@ -414,62 +524,88 @@
         )
       )
     );
-    parts.push(
+    parts.push(pubRoster(roster));
+    return el('div', null, parts);
+  }
+
+  // 申請中の件数（選んでいる店舗・表示している月）：判断が必要なもの
+  function pendingCount() {
+    if (!view.data) return 0;
+    const pend = (list) => (list || []).filter((r) => r.storeId === view.storeId && r.status === 'pending').length;
+    return pend(view.data.wishRequests) + pend(view.data.paidRequests) + pend(view.data.changeRequests);
+  }
+
+  // いちばん上の「あいさつ」：幹部の画面・担当店舗・受付の状況・申請中の件数（スタッフも兼ねる人は「自分の申請へ」）
+  function hero() {
+    const w = R().requestWindow();
+    const stores = view.ctx ? view.ctx.stores : [];
+    const n = pendingCount();
+    return el(
+      'section',
+      { class: 'req-hero mgr-hero' },
+      el('p', { class: 'req-hero__eyebrow' }, '幹部'),
+      el('h2', { class: 'req-hero__name' }, '幹部の画面'),
+      stores.length ? el('p', { class: 'req-hero__store' }, `担当：${stores.map((x) => x.name).join('・')}`) : null,
+      el(
+        'p',
+        { class: `req-hero__window${w.open ? ' is-open' : ''}` },
+        el('span', { class: 'req-hero__badge' }, w.open ? '受付中' : '受付期間外'),
+        el('span', null, w.open ? `${R().monthLabel(w.month)}分・${Number(w.today.slice(5, 7))}月末まで判断できます` : `判断・変更はオーナーだけ（${R().monthLabel(w.month)}分は${Number(w.opensOn.slice(5, 7))}月25日から）`)
+      ),
+      view.data
+        ? el('p', { class: `mgr-hero__pending${n ? ' has-pending' : ''}` }, el('span', { class: 'mgr-hero__count' }, String(n)), el('span', null, n ? '件が判断待ち' : '件：判断待ちはありません'), el('span', { class: 'mgr-hero__month' }, `${R().monthLabel(view.month)}分`))
+        : null,
+      view.account ? el('button', { type: 'button', class: 'btn btn--ghost btn--small req-hero__back', onclick: () => K.app.navigate('request', { email: view.email, account: view.account, manager: view.manager }) }, '自分の休み・社用を入れる') : null
+    );
+  }
+
+  // いちばん下の「アカウント・この端末の設定」（スタッフの画面と同じ形。ふだんは閉じておく）
+  function accountSection() {
+    const user = K.app.cloudUser();
+    return el(
+      'details',
+      { class: 'req-account' },
+      el('summary', { class: 'req-account__summary' }, el('span', { class: 'req-account__title' }, 'アカウント・この端末の設定'), el('span', { class: 'req-account__hint' }, '簡単ログイン・パスワード・ログアウト')),
       el(
         'div',
-        { class: 'table-wrap' },
-        el(
-          'table',
-          { class: 'data-table req-pub-table' },
-          el('thead', null, el('tr', null, el('th', { scope: 'col' }, '日付'), roster.staff.map((m) => el('th', { scope: 'col' }, m.name, m.title ? el('span', { class: 'title-badge' }, ` ${m.title}`) : null, el('span', { class: 'detail-item__note' }, ` ${m.role || ''}`))))),
-          el(
-            'tbody',
-            null,
-            roster.days.map((d) => el('tr', null, el('th', { scope: 'row' }, shortDate(d.date), d.holiday ? el('span', { class: 'detail-item__note' }, ` ${d.holiday}`) : null, d.hours ? el('span', { class: 'detail-item__note' }, ` 特別営業 ${d.hours}`) : null), roster.staff.map((m) => el('td', null, cellText(d.cells[m.id])))))
-          )
-        )
+        { class: 'req-account__body' },
+        el('p', { class: 'hint hint--left req-account__who' }, `${view.email} でログインしています（幹部）。担当店舗の申請を、受付期間（25日〜月末）に判断できます。`),
+        // 簡単ログイン（この端末のロック）の設定
+        K.quickLock && user ? K.quickLock.card(user, K.app.rerender) : null,
+        K.loginUI && user ? K.loginUI.passwordCard(user) : null,
+        el('button', { type: 'button', class: 'btn btn--ghost btn--block', onclick: () => K.app.cloudActions.signOut() }, 'ログアウト')
       )
     );
-    return el('div', null, parts);
   }
 
   function render(container, params) {
     if (!view || view.email !== params.email) reset(params);
-    const head = el(
-      'section',
-      { class: 'card req-card' },
-      el('h2', { class: 'card__title' }, '幹部の画面'),
-      el('p', { class: 'hint hint--left' }, `${view.email} でログインしています（幹部）。担当店舗の申請を、受付期間（25日〜月末）に判断できます。`),
-      el(
-        'div',
-        { class: 'actions' },
-        view.account ? el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => K.app.navigate('request', { email: view.email, account: view.account, manager: view.manager }) }, '自分の申請へ') : null,
-        el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => K.app.cloudActions.signOut() }, 'ログアウト')
-      )
-    );
     if (view.loading) {
-      container.append(head, el('p', { class: 'hint' }, '読み込んでいます…'));
+      container.append(hero(), el('p', { class: 'hint' }, '読み込んでいます…'), accountSection());
       return;
     }
     if (!view.ctx || !view.ctx.stores.length || !view.data) {
-      container.append(head, el('p', { class: 'form-error' }, (view.message && view.message.text) || '担当店舗が見つかりませんでした。オーナーに連絡してください。'));
+      container.append(hero(), el('p', { class: 'form-error' }, (view.message && view.message.text) || '担当店舗が見つかりませんでした。オーナーに連絡してください。'), accountSection());
       return;
     }
     const w = R().requestWindow();
-    const parts = [head];
+    const parts = [hero(), tabs()];
     if (view.tab !== 'roster') {
+      // 担当が2店舗以上の人だけ、店舗を選ぶ
+      if (view.ctx.stores.length > 1) parts.push(el('div', { class: 'mgr-stores' }, storeChips()));
+      // 月の切り替えと、受付の説明を1か所に
       parts.push(
-        el('section', { class: 'card req-card' }, el('h3', { class: 'card__title' }, '担当店舗'), storeChips()),
-        monthNav(),
-        el('p', { class: 'hint' }, w.open ? `${R().monthLabel(w.month)}分の申請を受付中です（今月末まで）。この月の分だけ判断できます。` : `今は受付期間外です。判断・変更はオーナーだけができます（${R().monthLabel(w.month)}分は${Number(w.opensOn.slice(5, 7))}月25日から）。`)
+        el(
+          'div',
+          { class: 'mgr-bar' },
+          monthNav(),
+          el('p', { class: 'hint mgr-bar__hint' }, w.open ? (view.month === w.month ? 'この月の分を判断できます（今月末まで）。' : `判断できるのは${R().monthLabel(w.month)}分だけです（この月は見るだけ）。`) : `今は受付期間外です。判断・変更はオーナーだけができます（${R().monthLabel(w.month)}分は${Number(w.opensOn.slice(5, 7))}月25日から）。`)
+        )
       );
     }
-    parts.push(tabs());
     if (view.message && view.message.text) parts.push(el('p', { class: view.message.ok ? 'sync__result' : 'form-error', role: 'status' }, view.message.text));
-    parts.push(view.tab === 'wish' ? wishView() : view.tab === 'paid' ? paidView() : view.tab === 'change' ? changeView() : view.tab === 'log' ? logView() : rosterView());
-    // 簡単ログイン（この端末のロック）の設定
-    parts.push(K.quickLock && K.app.cloudUser() ? K.quickLock.card(K.app.cloudUser(), K.app.rerender) : null);
-    parts.push(K.loginUI && K.app.cloudUser() ? K.loginUI.passwordCard(K.app.cloudUser()) : null);
+    parts.push(el('section', { class: 'card req-card mgr-body' }, view.tab === 'wish' ? wishView() : view.tab === 'days' ? daysView() : view.tab === 'paid' ? paidView() : view.tab === 'change' ? changeView() : view.tab === 'log' ? logView() : rosterView()));
+    parts.push(accountSection());
     container.append(...parts.filter(Boolean));
   }
 

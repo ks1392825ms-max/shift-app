@@ -17,6 +17,7 @@
 //   checkAdmin()                管理者として登録されているか（ルールで読めるかどうかで判断）
 //   checkStaff(email)           スタッフとして登録されているか（staffAccounts に本人のメールがあるか）
 //   loadStaffContext / loadMyRequests / addWishRequest / removeWishRequest / submitNoWish / addPaidRequest / withdrawPaidRequest   スタッフ本人の申請
+//   addSelfWish / removeSelfWish / addBusinessDay / removeBusinessDay   幹部が自分で登録する休み・社用で不在の日（その場で確定）
 //   decideRequest / changePaidDateLogged                                                    判断（承認・却下・申請中に戻す）と有給の日付の変更（履歴と一緒に）
 //   subscribeRequests / adminSet / adminUpdate / adminDelete                                 管理者の申請の受け取り・変更
 //   publishRoster / unpublishRoster / loadPublishedRosters                                確定シフトの公開用の写し
@@ -357,8 +358,9 @@
   async function loadMyRequests(staffId, month) {
     const { fsMod, db } = await load();
     const mine = (col) => fsMod.getDocs(fsMod.query(fsMod.collection(db, col), fsMod.where('staffId', '==', staffId), fsMod.where('month', '==', month)));
-    const [wishes, counts, paid, quota, changes] = await Promise.all([mine('wishRequests'), mine('wishCounts'), mine('paidRequests'), mine('requestQuotas'), mine('changeRequests')]);
+    const [wishes, counts, paid, quota, changes, business] = await Promise.all([mine('wishRequests'), mine('wishCounts'), mine('paidRequests'), mine('requestQuotas'), mine('changeRequests'), mine('businessDays')]);
     return {
+      businessDays: business.docs.map((d) => ({ id: d.id, ...d.data() })),
       changes: changes.docs.map((d) => ({ id: d.id, ...d.data() })),
       wishes: wishes.docs.map((d) => ({ id: d.id, ...d.data() })),
       count: counts.docs.length ? counts.docs[0].data() : null,
@@ -401,7 +403,7 @@
   // ---- 希望休・有給（オーナー）：全店舗の申請と判断の履歴を受け取り続ける ----
   function subscribeRequests(onData, onError) {
     const { fsMod, db } = fb;
-    const parts = { wishRequests: null, wishCounts: null, paidRequests: null, changeRequests: null, quotas: null, logs: null, settings: undefined };
+    const parts = { wishRequests: null, wishCounts: null, paidRequests: null, changeRequests: null, quotas: null, logs: null, businessDays: null, settings: undefined };
     let timer = null;
     const emit = () => {
       if (Object.values(parts).some((v) => v === null || v === undefined)) return;
@@ -425,6 +427,7 @@
       listen('requestQuotas', 'quotas'),
       listen('changeRequests', 'changeRequests'),
       listen('decisionLogs', 'logs'),
+      listen('businessDays', 'businessDays'),
       fsMod.onSnapshot(
         fsMod.doc(db, 'settings', 'requests'),
         (snap) => {
@@ -521,6 +524,46 @@
     batch.delete(fsMod.doc(db, 'wishRequests', R.wishId(staffId, date)));
     batch.set(countRef, R.countDoc({ staffId, storeId, month, count: Math.max(0, count - 1), lastDate: date, email, now }));
     await batch.commit();
+  }
+
+  // 幹部：自分の休みを1日登録する（承認済みで作る。希望休の記録・月の日数・履歴を、1回の書き込みで）
+  async function addSelfWish({ staffId, storeId, date, email }) {
+    const { fsMod, db } = await load();
+    const R = K.records;
+    const month = date.slice(0, 7);
+    const countRef = fsMod.doc(db, 'wishCounts', R.countId(staffId, month));
+    const snap = await fsMod.getDoc(countRef);
+    const count = snap.exists() ? snap.data().count || 0 : 0;
+    const now = new Date().toISOString();
+    const id = R.wishId(staffId, date);
+    const data = R.newSelfWish({ staffId, storeId, date, email, now });
+    const log = R.newLog('wish', { ...data, id }, { from: '', to: 'approved', email, role: 'manager', now, note: '幹部が自分で登録' });
+    const batch = fsMod.writeBatch(db);
+    batch.set(fsMod.doc(db, 'wishRequests', id), data);
+    batch.set(countRef, R.countDoc({ staffId, storeId, month, count: count + 1, lastDate: date, email, now }));
+    batch.set(fsMod.doc(db, 'decisionLogs', log.id), log.data);
+    await batch.commit();
+  }
+
+  // 幹部：自分で登録した休みを取り消す（受付期間だけ。月の日数を1つ減らすのと、1回の書き込みで）
+  async function removeSelfWish({ staffId, storeId, date, email }) {
+    await removeWishRequest({ staffId, storeId, date, email });
+  }
+
+  // 幹部：社用で不在の日を登録する・取り消す
+  async function addBusinessDay(rec) {
+    const { fsMod, db } = await load();
+    try {
+      await fsMod.setDoc(fsMod.doc(db, 'businessDays', rec.id), rec.data);
+    } catch (err) {
+      if (err && err.code === 'permission-denied') throw new Error('登録できませんでした（受付期間外・担当外・すでに登録済み など）。画面を読み込み直してください。');
+      throw err;
+    }
+  }
+
+  async function removeBusinessDay(id) {
+    const { fsMod, db } = await load();
+    await fsMod.deleteDoc(fsMod.doc(db, 'businessDays', id));
   }
 
   // スタッフ：「希望なし」を送る（日数は変えずに、送信した印だけを残す）
@@ -634,15 +677,16 @@
       );
       return snaps.flatMap((snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     };
-    const [wishRequests, wishCounts, paidRequests, changeRequests, quotas, logs] = await Promise.all([
+    const [wishRequests, wishCounts, paidRequests, changeRequests, quotas, logs, businessDays] = await Promise.all([
       read('wishRequests'),
       read('wishCounts'),
       read('paidRequests'),
       read('changeRequests'),
       read('requestQuotas'),
       read('decisionLogs'),
+      read('businessDays'),
     ]);
-    return { wishRequests, wishCounts, paidRequests, changeRequests, quotas, logs };
+    return { wishRequests, wishCounts, paidRequests, changeRequests, quotas, logs, businessDays };
   }
 
   // 幹部：担当店舗の確定シフトの写しを、店舗ごと・指定した月の分だけ読む（作成中のシフトは読めない）
@@ -701,6 +745,10 @@
     addWishRequest,
     removeWishRequest,
     submitNoWish,
+    addSelfWish,
+    removeSelfWish,
+    addBusinessDay,
+    removeBusinessDay,
     decideRequest,
     changePaidDateLogged,
     loadManagerPublishedRosters,

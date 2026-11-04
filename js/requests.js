@@ -25,7 +25,7 @@
   let clock = () => new Date(); // テストでは日付を固定する
 
   // 管理者が受け取っている申請データ（シフト表の「希」の印などに使う）
-  const admin = { settings: null, wishRequests: [], wishCounts: [], paidRequests: [], changeRequests: [], quotas: [], logs: [] };
+  const admin = { settings: null, wishRequests: [], wishCounts: [], paidRequests: [], changeRequests: [], quotas: [], logs: [], businessDays: [] };
 
   function attach(b) {
     backend = b;
@@ -139,6 +139,55 @@
     return { added: toAdd.length, removed: toRemove.length };
   }
 
+  // ---- 幹部が自分で登録する（承認なしで、その場で確定） ----
+  // 休み：決まりはスタッフの希望休と同じ（受付期間・翌月分・月の上限まで・定休日は不可）。選んだ日を、承認済みで足す
+  async function saveSelfWishes({ staffId, storeId, month, draft, saved, limit, store, email }) {
+    requireOpen(month);
+    const savedList = saved || [];
+    const has = new Set(savedList.map((w) => w.date));
+    const toAdd = [...new Set(draft)].filter((d) => !has.has(d)).sort();
+    if (!toAdd.length) throw new Error('登録する日を選んでください。');
+    if (savedList.length + toAdd.length > limit) throw new Error(limitMessage(limit));
+    for (const d of toAdd) {
+      const err = checkDate(store, month, d);
+      if (err) throw new Error(err);
+    }
+    const b = requireBackend();
+    for (const d of toAdd) await b.addSelfWish({ staffId, storeId, date: d, email });
+    return { added: toAdd.length };
+  }
+
+  // 自分で登録した休みを取り消す（受付期間だけ）
+  async function removeSelfWish(wish, { email }) {
+    requireOpen(wish.month);
+    if (!isSelfWish(wish, email)) throw new Error('自分で登録した休みだけを取り消せます。');
+    await requireBackend().removeSelfWish({ staffId: wish.staffId, storeId: wish.storeId, date: wish.date, email });
+  }
+
+  // 幹部が自分で登録した休みか（承認した人が本人・役割が幹部）
+  function isSelfWish(wish, email) {
+    return wish.status === 'approved' && wish.decidedRole === 'manager' && Boolean(email) && wish.decidedBy === email && wish.createdBy === email;
+  }
+
+  // 社用で不在の日：受付期間・翌月分・定休日は不可・休み（希望休・有給）と同じ日は不可
+  async function registerBusinessDay({ staffId, storeId, date, what, detail, store, email, existing, wishes, paid }) {
+    const month = date.slice(0, 7);
+    requireOpen(month);
+    const err = checkDate(store, month, date);
+    if (err) throw new Error(err);
+    if ((existing || []).some((x) => x.date === date)) throw new Error('この日は、すでに社用で不在を登録しています。');
+    if ((wishes || []).some((w) => w.date === date && (w.status === 'pending' || w.status === 'approved'))) throw new Error('この日は休み（希望休）にしています。');
+    if ((paid || []).some((r) => r.date === date && r.status !== 'rejected')) throw new Error('この日は有給希望を出しています。');
+    const rec = K.records.newBusinessDay({ staffId, storeId, date, what, detail, email, now: new Date().toISOString() });
+    await requireBackend().addBusinessDay(rec);
+    return rec;
+  }
+
+  async function removeBusinessDay(rec) {
+    requireOpen(rec.month);
+    await requireBackend().removeBusinessDay(rec.id);
+  }
+
   // 申請中・却下の希望休を1日消す（却下のあと、ほかの日を出し直すため）。承認済みは消せない
   async function removeWish(wish, { email }) {
     requireOpen(wish.month);
@@ -209,6 +258,7 @@
     admin.changeRequests = d.changeRequests || [];
     admin.quotas = d.quotas || [];
     admin.logs = d.logs || [];
+    admin.businessDays = d.businessDays || [];
   }
 
   function clearAdminData() {
@@ -254,6 +304,19 @@
 
   function adminPaid({ month, storeId } = {}) {
     return admin.paidRequests.filter((r) => (!month || r.month === month) && (!storeId || r.storeId === storeId)).sort(byDate);
+  }
+
+  // 社用で不在の日（幹部が自分で登録）：シフト表の印と、AIシフト作成で「社用」を入れる日
+  function adminBusinessDay(staffId, date) {
+    return (admin.businessDays || []).find((x) => x.staffId === staffId && x.date === date && x.status === 'approved') || null;
+  }
+
+  function adminBusinessDays({ month, storeId } = {}) {
+    return (admin.businessDays || []).filter((x) => (!month || x.month === month) && (!storeId || x.storeId === storeId)).sort(byDate);
+  }
+
+  function adminBusinessDates(staffId, month) {
+    return (admin.businessDays || []).filter((x) => x.staffId === staffId && x.month === month && x.status === 'approved').map((x) => x.date);
   }
 
   // 承認済みの有給の日付（AIシフト作成で「有給」を入れる日）
@@ -426,6 +489,14 @@
     adminLimit,
     adminPaid,
     adminApprovedPaidDates,
+    adminBusinessDay,
+    adminBusinessDates,
+    adminBusinessDays,
+    saveSelfWishes,
+    removeSelfWish,
+    isSelfWish,
+    registerBusinessDay,
+    removeBusinessDay,
     pendingCounts,
     adminLogs,
     setDefaultLimit,

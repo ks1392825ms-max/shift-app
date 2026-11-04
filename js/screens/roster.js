@@ -101,6 +101,12 @@
       c.cls += ` has-wish${wishStatus === 'pending' ? ' is-wish-pending' : ''}`;
       c.label += wishStatus === 'pending' ? '（希望休：申請中）' : '（希望休：承認済み）';
     }
+    // 社用で不在の日（幹部が自分で登録・その場で確定）：左下に「不在」の印。シフトのデータは変えない（AIシフト作成で「社用」を入れる）
+    const bday = K.storage.isCloud() && K.requests.adminBusinessDay ? K.requests.adminBusinessDay(member.id, date) : null;
+    if (bday) {
+      c.cls += ' has-bday';
+      c.label += `（社用で不在：${bday.what}${bday.detail ? ` ${bday.detail}` : ''}）`;
+    }
     // 当日の欠勤・休暇（急な休み）：右上に「急」の印。対応中は点線の枠
     const absence = shift && shift.absence;
     if (absence) {
@@ -131,6 +137,7 @@
         planLine ? el('span', { class: 'cell__main' }, c.text) : c.text,
         planLine,
         wish ? el('span', { class: 'cell__wish', 'aria-hidden': 'true' }, wishStatus === 'pending' ? '希?' : '希') : null,
+        bday ? el('span', { class: 'cell__bday', 'aria-hidden': 'true' }, '不在') : null,
         absence ? el('span', { class: 'cell__absence', 'aria-hidden': 'true' }, '急') : null
       )
     );

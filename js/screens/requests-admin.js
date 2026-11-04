@@ -7,7 +7,7 @@
   const el = U.el;
   const R = () => K.requests;
 
-  let tab = 'wish'; // wish / paid / limit
+  let tab = 'wish'; // wish / days / paid / change / log / limit
   let month = null; // 表示する月（初めは申請を受け付ける月）
   let message = null; // { ok, text }
 
@@ -136,6 +136,23 @@
         el('tbody', null, rows)
       )
     );
+  }
+
+  // ---- 日付ごと（見るだけ）：縦に日付、横にスタッフ名と状態 ----
+  function daysView(store) {
+    const staff = K.storage.getStaff({ storeId: store.id });
+    return K.dayList.render({
+      month,
+      store,
+      staff,
+      nameOf: (id) => {
+        const m = K.storage.getStaffMember(id);
+        return m ? m.name : '（不明なスタッフ）';
+      },
+      wishes: R().adminWishes({ month, storeId: store.id }),
+      paid: R().adminPaid({ month, storeId: store.id }),
+      bdays: R().adminBusinessDays({ month, storeId: store.id }),
+    });
   }
 
   // ---- 有給申請一覧 ----
@@ -340,6 +357,7 @@
       { class: 'segment segment--compact req-tabs', role: 'tablist', 'aria-label': '申請の種類' },
       [
         ['wish', '希望休一覧'],
+        ['days', '日付ごと'],
         ['paid', '有給申請一覧'],
         ['change', '変更申請'],
         ['log', '判断の履歴'],
@@ -385,7 +403,7 @@
       el('p', { class: 'hint' }, w.open ? `${R().monthLabel(w.month)}分の申請を受付中です（今月末まで）。` : `${R().monthLabel(w.month)}分の申請は、${Number(w.opensOn.slice(5, 7))}月25日から受け付けます。`),
       tabs,
       message ? el('p', { class: message.ok ? 'sync__result' : 'form-error', role: 'status' }, message.text) : null,
-      tab === 'wish' ? wishView(store) : tab === 'paid' ? paidView(store) : tab === 'change' ? changeView(store) : tab === 'log' ? logView(store) : limitView(store),
+      tab === 'wish' ? wishView(store) : tab === 'days' ? daysView(store) : tab === 'paid' ? paidView(store) : tab === 'change' ? changeView(store) : tab === 'log' ? logView(store) : limitView(store),
     ];
     container.append(...parts.filter(Boolean));
   }

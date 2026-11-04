@@ -74,6 +74,8 @@
     // 承認済みの希望休・有給だけを使う（申請中・却下は勤務の候補のまま）
     const wishesOf = options.wishes || ((staffId) => (K.storage.isCloud() ? K.requests.adminWishDates(staffId, month) : []));
     const paidOf = options.paid || ((staffId) => (K.storage.isCloud() ? K.requests.adminApprovedPaidDates(staffId, month) : []));
+    // 社用で不在の日（幹部が自分で登録）
+    const businessOf = options.business || ((staffId) => (K.storage.isCloud() && K.requests.adminBusinessDates ? K.requests.adminBusinessDates(staffId, month) : []));
     const notes = [];
     if (!options.wishes && K.storage.isCloud()) {
       const pend = K.requests.pendingCounts(storeId, month);
@@ -126,6 +128,7 @@
       const workDays = p.m.workWeekdays || [];
       const wishes = new Set(wishesOf(p.m.id));
       const paidDays = new Set(paidOf(p.m.id));
+      const businessDays = new Set(businessOf(p.m.id));
       for (const date of dates) {
         const shift = map.get(`${p.m.id}|${date}`);
         const w = K.calc.weekdayOf(date);
@@ -141,6 +144,7 @@
           st = 'off';
           p.contractOff.add(date); // 固定休（契約上の休み）。必要人数不足の理由を分けるのに使う
         }
+        else if (businessDays.has(date)) st = 'business'; // 社用で不在（シフト表に「社用」を入れる。店舗の人数には数えない）
         else if (paidDays.has(date)) st = 'paid'; // 承認済みの有給（シフト表に「有給」を入れる）
         else if (wishes.has(date)) st = 'off'; // 承認済みの希望休（平日・土日祝とも）
         else st = 'cand';
@@ -877,6 +881,7 @@
       for (const date of dates) {
         const st = p.status.get(date);
         if (st === 'off' || st === 'paid') assignments.push({ staffId: p.m.id, date, kind: st, patternId: null });
+        else if (st === 'business') assignments.push({ staffId: p.m.id, date, kind: 'business', patternId: p.pats[0].id });
       }
     }
     assignments.sort((a, b) => a.date.localeCompare(b.date));

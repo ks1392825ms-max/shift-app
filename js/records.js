@@ -7,6 +7,7 @@
 //   paidRequests/{スタッフID_日付_回数} 有給希望（今までの形に、判断の項目を足す）
 //   changeRequests/{種類_記録の名前_回数} 変更申請：承認済みの希望休・有給の取り消し（cancel）・日付の変更（move）
 //                                  同じ申請への変更申請は3回まで（2回目・3回目は前の回が却下のときだけ）。承認されたら、オーナーがシフト表に反映する
+//   businessDays/{スタッフID_日付}     社用で不在の日（幹部が自分で登録する。1日まるごと・その場で確定）：what（内容）・detail（詳細）
 //   decisionLogs/{種類_記録の名前_日時} 判断の履歴：誰が・いつ・どの申請を・どう変えたか。追加するだけで、書き換え・削除はできない
 //                                  種類：'wish'（希望休）/ 'paid'（有給）/ 'change'（変更申請）
 //
@@ -42,6 +43,34 @@
   // スタッフが出す希望休（1日分）
   function newWish({ staffId, storeId, date, email, now }) {
     return { staffId, storeId, month: date.slice(0, 7), date, status: 'pending', createdAt: now, updatedAt: now, createdBy: email || '' };
+  }
+
+  // 幹部が自分で登録する休み（1日分）：承認なしで、その場で「承認済み」。判断した人は本人・役割は幹部
+  // （ルールで、本人・担当店舗・受付期間・上限までのときだけ許す。履歴も同じ書き込みで残す）
+  function newSelfWish({ staffId, storeId, date, email, now }) {
+    return {
+      ...newWish({ staffId, storeId, date, email, now }),
+      status: 'approved',
+      reason: '',
+      decidedBy: email || '',
+      decidedRole: 'manager',
+      decidedAt: now,
+      lastActionBy: email || '',
+      lastActionAt: now,
+    };
+  }
+
+  // 社用で不在の日の内容（オーナーの社用予定と同じ選び方）
+  const BUSINESS_WHATS = ['外部講習', '店舗間の移動', '会議・ミーティング', '撮影・SNS業務', '買い出し', 'その他'];
+  const MAX_BUSINESS_DETAIL = 30;
+  const businessDayId = (staffId, date) => `${staffId}_${date}`;
+
+  // 社用で不在の日（1日まるごと・その場で確定）
+  function newBusinessDay({ staffId, storeId, date, what, detail, email, now }) {
+    if (!BUSINESS_WHATS.includes(what)) throw new Error('社用の内容を選んでください。');
+    const d = String(detail || '').trim();
+    if ([...d].length > MAX_BUSINESS_DETAIL) throw new Error(`詳細は${MAX_BUSINESS_DETAIL}文字以内で入れてください。`);
+    return { id: businessDayId(staffId, date), data: { staffId, storeId, month: date.slice(0, 7), date, what, detail: d, status: 'approved', createdAt: now, updatedAt: now, createdBy: email || '' } };
   }
 
   // 希望休の日数。count を1つ増やす・減らすときは、増減した日を lastDate に入れる
@@ -116,7 +145,7 @@
     };
   }
 
-  const api = { MAX_REASON, STATUSES, CHANGE_TYPES, MAX_CHANGE_ATTEMPTS, DECISION_KEYS, wishId, countId, logId, changeId, collectionOf, cleanReason, newWish, countDoc, newChange, decision, newLog };
+  const api = { MAX_REASON, STATUSES, CHANGE_TYPES, MAX_CHANGE_ATTEMPTS, DECISION_KEYS, BUSINESS_WHATS, MAX_BUSINESS_DETAIL, wishId, countId, logId, changeId, businessDayId, collectionOf, cleanReason, newWish, newSelfWish, newBusinessDay, countDoc, newChange, decision, newLog };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else (root.ShiftApp = root.ShiftApp || {}).records = api;
 })(typeof window !== 'undefined' ? window : globalThis);

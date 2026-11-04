@@ -208,7 +208,7 @@
     if (!title) return;
     let badge = document.getElementById('role-badge');
     if (!badge) {
-      badge = U.el('span', { id: 'role-badge', class: 'role-badge' });
+      badge = U.el('span', { id: 'role-badge', class: 'login-role' });
       title.after(badge);
     }
     badge.hidden = !role;
