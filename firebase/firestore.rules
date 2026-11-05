@@ -1,28 +1,32 @@
-// Firestore のルール（管理者は全店舗。スタッフは本人の情報・申請と、所属店舗の確定シフトだけ）
+// Firestore のルール（オーナー・幹部・スタッフ）
 //
 // 使い方：Firebase の管理画面 → Firestore Database → 「ルール」タブに、この内容をそのまま貼り付けて「公開」。
 //
-// 管理者の登録（今までどおり）：Firestore Database → 「データ」タブで、
-//   コレクション「access」→ ドキュメント「admins」→ フィールド「emails」（型：array）に、
-//   管理者のメールアドレスを、すべて小文字で1つずつ入れる。
-//   （この登録は管理画面からだけ変えられる。アプリからは変えられない）
-//
-// スタッフの登録：管理者がアプリの「設定 > スタッフ」でログイン用のメールを入れると、
-//   アプリが staffAccounts/{メールアドレス} を作る（本人のスタッフ記録と所属店舗の対応）。
+// 役割の登録：
+//   オーナー：「データ」タブで access/admins の emails（array）に、メールアドレスをすべて小文字で入れる（今までどおり）。
+//   幹部：「データ」タブで、コレクション「managers」に、ドキュメント名＝メールアドレス（小文字）で作り、
+//         フィールド storeIds（array・担当店舗のID）と deleted（boolean・false）を入れる。
+//   （オーナーと幹部の登録は、管理画面からだけ変えられる。アプリからは誰も変えられない）
+//   スタッフ：オーナーがアプリの「設定 > スタッフ」でログイン用のメールを入れると、アプリが staffAccounts/{メール} を作る。
 //
 // まとめ：
 //   ・未ログインの人：何も読めず、何も書けない。
-//   ・管理者：すべてのデータを読み書きできる（access は読むだけ）。
-//   ・スタッフ：自分の staffAccounts・自分のスタッフ記録・所属店舗・希望休の設定を読める。
-//       希望休（wishOffs）：自分の分を、日本時間の毎月25日〜月末に、翌月分だけ、上限の日数まで保存できる。
-//       有給希望（paidRequests）：自分の分を、同じ受付期間に「申請中」で出せる。取り下げは「申請中」のものだけ。
-//       承認・却下・日付の変更は管理者だけ。
-//       確定シフトの公開用の写し（publishedRosters）：自分の所属店舗のものだけ読める。
-//       シフトなど、ほかのデータは読めない。
+//   ・オーナー：すべてのデータを読み書きできる。ただし、申請の判断は履歴（decisionLogs）と一緒にだけ変えられ、
+//       履歴は書き換え・削除できない。access と managers は読むだけ。
+//   ・幹部：担当店舗の希望休・有給・スタッフ記録・判断の履歴と、担当店舗の確定シフトの写しを読める。
+//       担当店舗の申請を、受付期間（日本時間の毎月25日〜月末、翌月分）だけ、承認・却下・申請中に戻すことができる。
+//       自分（スタッフとしての自分）の申請・ほかの幹部やオーナーが判断したものは変えられない。却下は理由（50文字以内）が必須。
+//       作成中のシフト・設定は読めない。
+//   ・スタッフ：自分の staffAccounts・スタッフ記録・所属店舗・希望休の設定と、所属店舗の確定シフトの写しを読める。
+//       希望休（wishRequests）：受付期間に、1日ずつ「申請中」で出す（wishCounts の日数と一緒に。上限まで）。
+//         消せるのは申請中・却下のものだけ（承認済みは変更申請）。
+//       有給希望（paidRequests）：受付期間に「申請中」で出す。取り下げは申請中のものだけ。
+//       変更申請（changeRequests）：自分の承認済みの希望休・有給の取り消し・日付の変更を、いつでも「申請中」で出せる。
+//         取り下げは申請中のものだけ。判断（担当店舗の幹部・オーナー）は希望休・有給と同じ決まり。反映はオーナーだけ。
+//       判断や日付の変更はできない。
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
     function signedIn() {
       return request.auth != null
         && request.auth.token.email != null
@@ -60,13 +64,95 @@ service cloud.firestore {
       return isStaff() && storeId in get(accountPath()).data.storeIds;
     }
 
-    // 日本時間で今日が25日〜月末で、month（"2026-11" の形）が翌月か
+    // 【修正案】スタッフ記録の所属店舗と、申請の店舗が同じか（2店舗に所属する人が、店舗を取り違えて出せないように）
+    function staffInStore(staffId, storeId) {
+      return get(/databases/$(database)/documents/staff/$(staffId)).data.storeId == storeId;
+    }
+
+    // 【修正案】「更新した人」「申請した人」が、ログインしている本人のメールか
+    function isMe(value) {
+      return value is string && value.lower() == myEmail();
+    }
+
+    // 【修正案】有給希望の記録の名前は「スタッフID_日付_回数」。2回目・3回目は、前の回が却下のときだけ（同じ日は3回まで）
+    function paidRejected(docId) {
+      let p = /databases/$(database)/documents/paidRequests/$(docId);
+      return exists(p) && get(p).data.status == 'rejected';
+    }
+
+    function paidIdOk(id, d) {
+      let base = d.staffId + '_' + d.date + '_';
+      return id == base + '1'
+        || (id == base + '2' && paidRejected(base + '1'))
+        || (id == base + '3' && paidRejected(base + '2'));
+    }
+
+    // 【修正案】その月（"2026-11" の形）に実在する日付の一覧（"2026-11-01"〜"2026-11-30"）。うるう年も見る
+    // 31日分を並べて、その月の日数（n）だけ先頭から切り出す（ルールではリストどうしを + でつなげないため）
+    // date が month（"2026-11"）の本当にある日か（monthDates と同じ結果を、少ない計算で出す）。
+    // 1〜28日はどの月にもある。29〜31日は、その月の日数と比べる
+    // （ルールの計算の回数の上限があるため。month は、同じ決まりの中で受付期間の翌月と同じであることも確かめている）
+    function dateInMonth(date, month) {
+      return date.matches(month + '-(0[1-9]|1[0-9]|2[0-8])')
+        || (date.matches(month + '-(29|30|31)') && int(date.split('-')[2]) <= monthDays(month));
+    }
+    function monthDays(month) {
+      let y = int(month.split('-')[0]);
+      let m = int(month.split('-')[1]);
+      return m == 2 ? ((y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 29 : 28) : (m in [4, 6, 9, 11] ? 30 : 31);
+    }
+    function monthDates(month) {
+      let y = int(month.split('-')[0]);
+      let m = int(month.split('-')[1]);
+      let n = m == 2 ? ((y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 29 : 28)
+        : (m in [4, 6, 9, 11] ? 30 : 31);
+      let p = month + '-';
+      return [p + '01', p + '02', p + '03', p + '04', p + '05', p + '06', p + '07',
+              p + '08', p + '09', p + '10', p + '11', p + '12', p + '13', p + '14',
+              p + '15', p + '16', p + '17', p + '18', p + '19', p + '20', p + '21',
+              p + '22', p + '23', p + '24', p + '25', p + '26', p + '27', p + '28',
+              p + '29', p + '30', p + '31'][0:n];
+    }
+
+    // 【修正案】日時 t の日付を "2026-10-12" の形に（UTC）
+    function utcDay(t) {
+      return string(t.year()) + '-' + (t.month() < 10 ? '0' : '') + string(t.month())
+        + '-' + (t.day() < 10 ? '0' : '') + string(t.day());
+    }
+
+    // 【修正案】作成・更新日時が、アプリの入れる形（"2026-10-12T03:04:05.678Z"）で、日付が今日の前後1日以内か（UTC）
+    function isNowIso(v) {
+      return v is string
+        && v.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9][.][0-9]{3}Z')
+        && v.split('T')[0] in [utcDay(request.time - duration.value(1, 'd')), utcDay(request.time), utcDay(request.time + duration.value(1, 'd'))];
+    }
+
+    // 日本時間で今日が受付期間（オーナーが選んだ「開始日〜終了日」。初めは25日〜月末）で、month（"2026-11" の形）が翌月か
+    // （ルールの let は、使うたびに計算し直されるので、1回計算した値を関数に渡す形にしている：計算の回数の上限があるため）
     function requestWindowOpen(month) {
       let t = request.time + duration.value(9, 'h');
-      let y = t.month() == 12 ? t.year() + 1 : t.year();
-      let m = t.month() == 12 ? 1 : t.month() + 1;
-      let next = string(y) + '-' + (m < 10 ? '0' + string(m) : string(m));
-      return t.day() >= 25 && month == next;
+      return windowOpenAt(month, t);
+    }
+    function windowOpenAt(month, t) {
+      return month == nextMonthOf(t.year(), t.month()) && dayInPeriod(t.day(), requestSettings());
+    }
+    // 翌月の "2026-11" の形
+    function nextMonthOf(y, m) {
+      return m == 12 ? string(y + 1) + '-01' : string(y) + '-' + (m < 9 ? '0' : '') + string(m + 1);
+    }
+    // 受付期間の設定（settings/requests）。この記録は必ずある前提（ないときは、受付期間の判断ができず、申請は断られる＝安全側）。
+    // （exists と get の両方を使うと、ルールの計算の回数の上限をこえることがあるため、get だけにしている。11/5）
+    // 本番に公開する前に、settings/requests があることを確かめる（オーナーが「受付期間・上限」で保存すると作られる）
+    function requestSettings() {
+      return get(/databases/$(database)/documents/settings/requests).data;
+    }
+    function dayInPeriod(day, s) {
+      return dayInRange(day, s.get('openDay', 25), s.get('closeDay', 31));
+    }
+    // 開始日は1〜28、終了日は開始日〜31（31＝月末。29・30 も、その月の最後の日までと同じ）。
+    // どちらかがおかしな値なら 25日〜月末（アプリの js/requests.js の periodOf と同じ決まり。設定を変えられるのはオーナーだけ）
+    function dayInRange(day, o, c) {
+      return (o is int && c is int && o >= 1 && o <= 28 && c >= o && c <= 31) ? (day >= o && day <= c) : day >= 25;
     }
 
     // 希望休の上限：その月のスタッフ別の上限（管理者が変えた場合）→ なければ全体の初期値 → なければ2日
@@ -77,45 +163,125 @@ service cloud.firestore {
         : (exists(settings) ? get(settings).data.defaultLimit : 2);
     }
 
-    // ---- コレクションごと ----
+    // ---- 幹部 ----
+    function managerPath() {
+      return /databases/$(database)/documents/managers/$(myEmail());
+    }
+    function isManager() {
+      return signedIn()
+        && exists(managerPath())
+        && get(managerPath()).data.deleted == false
+        && get(managerPath()).data.storeIds.size() > 0;
+    }
+    function manages(storeId) {
+      return isManager() && storeId in get(managerPath()).data.storeIds;
+    }
 
-    // 管理者の名簿：管理者が読むだけ（書き換えは管理画面からだけ）
+    // ---- 希望休の日数（wishCounts）----
+    function countPath(staffId, month) {
+      return /databases/$(database)/documents/wishCounts/$(staffId + '_' + month);
+    }
+    function countBefore(staffId, month) {
+      return exists(countPath(staffId, month)) ? get(countPath(staffId, month)).data.count : 0;
+    }
+    function countAfter(staffId, month) {
+      return existsAfter(countPath(staffId, month)) ? getAfter(countPath(staffId, month)).data.count : 0;
+    }
+    function wishPath(staffId, date) {
+      return /databases/$(database)/documents/wishRequests/$(staffId + '_' + date);
+    }
+
+    // ---- 判断（承認・却下・申請中に戻す）と履歴 ----
+    function logPath(kind, id) {
+      return /databases/$(database)/documents/decisionLogs/$(kind + '_' + id + '_' + request.resource.data.lastActionAt);
+    }
+    // 同じ書き込みの中に、本人が書いた・前と後の状態が合う履歴があるか
+    function logged(kind, id) {
+      return existsAfter(logPath(kind, id))
+        && getAfter(logPath(kind, id)).data.by == myEmail()
+        && getAfter(logPath(kind, id)).data.from == resource.data.status
+        && getAfter(logPath(kind, id)).data.to == request.resource.data.status;
+    }
+    // 却下の理由：却下のときだけ必須（空白だけは不可・50文字以内）。それ以外は空
+    function reasonOk(d) {
+      return d.status == 'rejected'
+        ? (d.reason is string && d.reason.trim().size() > 0 && d.reason.size() <= 50)
+        : d.reason == '';
+    }
+    // 判断の項目だけを変え、状態が変わり、最後に変えた人が本人で、履歴があるか
+    function decisionShape(kind, id) {
+      let a = request.resource.data;
+      return a.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'reason', 'decidedBy', 'decidedRole', 'decidedAt', 'lastActionBy', 'lastActionAt', 'updatedAt'])
+        && a.status in ['pending', 'approved', 'rejected', 'cancelled']
+        && a.status != resource.data.status
+        && reasonOk(a)
+        && a.lastActionBy == myEmail()
+        && isNowIso(a.lastActionAt)
+        && a.updatedAt == a.lastActionAt
+        && logged(kind, id);
+    }
+    // 判断した人の項目：申請中に戻すときは空、判断するときは本人と役割
+    function deciderOk(role) {
+      let a = request.resource.data;
+      return a.status == 'pending'
+        ? (a.decidedBy == '' && a.decidedRole == '' && a.decidedAt == '')
+        : (a.decidedBy == myEmail() && a.decidedRole == role && a.decidedAt == a.lastActionAt);
+    }
+    // オーナー：全店舗・いつでも・だれの判断でも変えられる（履歴は必須）
+    function ownerDecides(kind, id) {
+      return isAdmin() && decisionShape(kind, id) && deciderOk('owner');
+    }
+    // 幹部：担当店舗・受付期間だけ。自分の申請は不可。変えられるのは、申請中のものと、自分が判断したものだけ
+    function managerDecides(kind, id) {
+      let b = resource.data;
+      return manages(b.storeId)
+        && request.resource.data.status != 'cancelled'
+        && b.status != 'cancelled'
+        && !ownsStaff(b.staffId)
+        && requestWindowOpen(b.month)
+        && (b.status == 'pending' || (b.get('decidedRole', '') == 'manager' && b.get('decidedBy', '') == myEmail()))
+        && decisionShape(kind, id)
+        && deciderOk('manager');
+    }
+
+    // ---- コレクションごと ----
+    // オーナーの名簿：オーナーが読むだけ（書き換えは管理画面からだけ）
     match /access/{doc} {
       allow read: if isAdmin();
       allow write: if false;
     }
-
-    // スタッフのログイン用メールの対応表：本人は自分の分だけ読める。作るのは管理者（アプリ）だけ
+    // 幹部の名簿：本人が自分の分を読むだけ（書き換えは管理画面からだけ）
+    match /managers/{email} {
+      allow read: if isAdmin() || (signedIn() && email == myEmail());
+      allow write: if false;
+    }
+    // スタッフのログイン用メールの対応表：本人は自分の分だけ読める。作るのはオーナー（アプリ）だけ
     match /staffAccounts/{email} {
       allow read: if isAdmin() || (signedIn() && email == myEmail());
       allow write: if isAdmin();
     }
-
-    // 店舗：スタッフは所属店舗だけ読める
+    // 店舗：スタッフは所属店舗、幹部は担当店舗を読める
     match /stores/{storeId} {
-      allow read: if isAdmin() || inMyStore(storeId);
+      allow read: if isAdmin() || inMyStore(storeId) || manages(storeId);
       allow write: if isAdmin();
     }
-
-    // スタッフ：スタッフは自分の記録だけ読める（ほかの人の情報は読めない）
+    // スタッフ：スタッフは自分の記録、幹部は担当店舗の記録を読める
     match /staff/{staffId} {
-      allow read: if isAdmin() || ownsStaff(staffId);
+      allow read: if isAdmin() || ownsStaff(staffId) || manages(resource.data.storeId);
       allow write: if isAdmin();
     }
-
-    // 設定：スタッフは希望休の設定（settings/requests）だけ読める
+    // 設定：スタッフと幹部は希望休の設定（settings/requests）だけ読める。変えるのはオーナーだけ
     match /settings/{id} {
-      allow read: if isAdmin() || (id == 'requests' && isStaff());
+      allow read: if isAdmin() || (id == 'requests' && (isStaff() || isManager()));
       allow write: if isAdmin();
     }
-
-    // 希望休の上限の変更（スタッフ別・月別）：本人は読むだけ
+    // 希望休の上限の変更（スタッフ別・月別）：本人と担当の幹部は読むだけ。変えるのはオーナーだけ
     match /requestQuotas/{id} {
-      allow read: if isAdmin() || ownsStaff(resource.data.staffId);
+      allow read: if isAdmin() || ownsStaff(resource.data.staffId) || manages(resource.data.storeId);
       allow write: if isAdmin();
     }
-
-    // 希望休（1人1か月1つ。id は「スタッフID_月」）
+    // 希望休（以前の形：1人1か月1つ）。新しい画面（wishRequests）に切り替えるまで残す
     match /wishOffs/{id} {
       allow read: if isAdmin() || ownsStaff(resource.data.staffId);
       allow create, update: if isAdmin() || (
@@ -126,36 +292,295 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'dates', 'updatedAt', 'updatedBy'])
         && request.resource.data.dates is list
         && request.resource.data.dates.size() <= wishOffLimit(request.resource.data.staffId, request.resource.data.month)
+        && request.resource.data.dates.toSet().size() == request.resource.data.dates.size()
+        && staffInStore(request.resource.data.staffId, request.resource.data.storeId)
+        && isMe(request.resource.data.updatedBy)
+        && request.resource.data.dates.hasOnly(monthDates(request.resource.data.month))
+        && isNowIso(request.resource.data.updatedAt)
         && requestWindowOpen(request.resource.data.month)
       );
       allow delete: if isAdmin();
     }
-
-    // 有給希望（1日1つ）：スタッフは「申請中」で出す・取り下げるだけ
+    // 希望休（1日ごと。名前は「スタッフID_日付」）
+    match /wishRequests/{id} {
+      allow read: if isAdmin() || ownsStaff(resource.data.staffId) || manages(resource.data.storeId);
+      // スタッフ：受付期間に「申請中」で出す。同じ書き込みで、日数（wishCounts）を1つ増やす（上限は wishCounts で確かめる）
+      // （「申請中」かどうかを先に見て、幹部が自分で登録する形のときは、すぐ次の決まりへ進む：ルールの計算の量を減らすため）
+      allow create: if isAdmin() || (
+        request.resource.data.status == 'pending'
+        && ownsStaff(request.resource.data.staffId)
+        && inMyStore(request.resource.data.storeId)
+        && staffInStore(request.resource.data.staffId, request.resource.data.storeId)
+        && id == request.resource.data.staffId + '_' + request.resource.data.date
+        && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'date', 'status', 'createdAt', 'updatedAt', 'createdBy'])
+        && request.resource.data.status == 'pending'
+        && request.resource.data.date is string
+        && dateInMonth(request.resource.data.date, request.resource.data.month)
+        && isMe(request.resource.data.createdBy)
+        && isNowIso(request.resource.data.createdAt)
+        && request.resource.data.updatedAt == request.resource.data.createdAt
+        && requestWindowOpen(request.resource.data.month)
+        && countAfter(request.resource.data.staffId, request.resource.data.month) == countBefore(request.resource.data.staffId, request.resource.data.month) + 1
+      ) || managerSelfWish(id);
+      // 判断：オーナーか、担当店舗の幹部（履歴は必須）
+      allow update: if ownerDecides('wish', id) || managerDecides('wish', id);
+      // 削除：オーナーは申請中のものだけ（判断済みは、先に申請中に戻す＝履歴が残る）。
+      //       スタッフは受付期間に、申請中・却下のものだけ（承認済みは変更申請）。同じ書き込みで日数を1つ減らす
+      allow delete: if (isAdmin() && resource.data.status == 'pending') || (
+        ownsStaff(resource.data.staffId)
+        && resource.data.status in ['pending', 'rejected']
+        && requestWindowOpen(resource.data.month)
+        && countAfter(resource.data.staffId, resource.data.month) == countBefore(resource.data.staffId, resource.data.month) - 1
+      ) || (
+        // 幹部が自分で登録した休み（承認した人が本人・役割が幹部）だけ
+        ownsStaff(resource.data.staffId)
+        && manages(resource.data.storeId)
+        && resource.data.status == 'approved'
+        && resource.data.get('decidedRole', '') == 'manager'
+        && resource.data.get('decidedBy', '') == myEmail()
+        && isMe(resource.data.createdBy)
+        && requestWindowOpen(resource.data.month)
+        && countAfter(resource.data.staffId, resource.data.month) == countBefore(resource.data.staffId, resource.data.month) - 1
+      );
+    }
+    // 幹部が自分の休みを登録する形：スタッフの希望休と同じ決まり（本人・所属店舗・受付期間・日数を1つ増やす）に加えて、
+    // 担当店舗であること・承認済み・判断した人は本人（役割は幹部）。判断の履歴は、別の書き込みで残す
+    function managerSelfWish(id) {
+      let d = request.resource.data;
+      // 手元で確かめられることを先に（ルールの計算の量を減らすため）
+      return d.status == 'approved'
+        && d.decidedRole == 'manager'
+        && d.reason == ''
+        && d.decidedBy == myEmail()
+        && d.lastActionBy == myEmail()
+        && isMe(d.createdBy)
+        && d.updatedAt == d.createdAt
+        && d.decidedAt == d.createdAt
+        && d.lastActionAt == d.createdAt
+        && id == d.staffId + '_' + d.date
+        && d.keys().hasOnly(['staffId', 'storeId', 'month', 'date', 'status', 'createdAt', 'updatedAt', 'createdBy', 'reason', 'decidedBy', 'decidedRole', 'decidedAt', 'lastActionBy', 'lastActionAt'])
+        && d.date is string
+        && requestWindowOpen(d.month)
+        && isNowIso(d.createdAt)
+        && dateInMonth(d.date, d.month)
+        && ownsStaff(d.staffId)
+        && inMyStore(d.storeId)
+        && manages(d.storeId)
+        && staffInStore(d.staffId, d.storeId)
+        && countAfter(d.staffId, d.month) == countBefore(d.staffId, d.month) + 1;
+      // 判断の履歴は、この書き込みのあとに別の書き込みで残す（11/5・オーナーの判断で決定）。
+      // 同じ書き込みにまとめると、ルールの計算の回数の上限（1000）をこえるため。履歴の中身は decisionLogs の決まりで確かめる
+    }
+    // 希望休の日数（名前は「スタッフID_月」）。スタッフは希望休を1日出す・消すのと同時に、1つずつ増減する
+    match /wishCounts/{id} {
+      allow read: if isAdmin() || ownsStaff(resource.data.staffId) || manages(resource.data.storeId);
+      allow create, update: if isAdmin() || (
+        ownsStaff(request.resource.data.staffId)
+        && inMyStore(request.resource.data.storeId)
+        && staffInStore(request.resource.data.staffId, request.resource.data.storeId)
+        && id == request.resource.data.staffId + '_' + request.resource.data.month
+        && (resource == null || (resource.data.staffId == request.resource.data.staffId && resource.data.storeId == request.resource.data.storeId))
+        && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'count', 'lastDate', 'submitted', 'updatedAt', 'updatedBy'])
+        && request.resource.data.count is int
+        && request.resource.data.count >= 0
+        && request.resource.data.count <= wishOffLimit(request.resource.data.staffId, request.resource.data.month)
+        && request.resource.data.submitted == true
+        && isMe(request.resource.data.updatedBy)
+        && isNowIso(request.resource.data.updatedAt)
+        && requestWindowOpen(request.resource.data.month)
+        && countChangeOk()
+      );
+      allow delete: if isAdmin();
+    }
+    // 日数の増減と、希望休の記録の増減が合っているか（1つ増えたら lastDate の希望休が新しくでき、1つ減ったら消える）
+    // （日付が実在するかは、希望休の記録の側で確かめる。ここでは形だけを見て、評価の量を減らす）
+    function countChangeOk() {
+      let d = request.resource.data;
+      let before = resource == null ? 0 : resource.data.count;
+      return d.count == before
+        || (d.count == before + 1 && d.lastDate.matches(d.month + '-[0-3][0-9]') && !exists(wishPath(d.staffId, d.lastDate)) && existsAfter(wishPath(d.staffId, d.lastDate)))
+        || (d.count == before - 1 && d.lastDate.matches(d.month + '-[0-3][0-9]') && exists(wishPath(d.staffId, d.lastDate)) && !existsAfter(wishPath(d.staffId, d.lastDate)));
+    }
+    // 有給希望（名前は「スタッフID_日付_回数」。同じ日は3回まで）
     match /paidRequests/{id} {
-      allow read: if isAdmin() || ownsStaff(resource.data.staffId);
+      allow read: if isAdmin() || ownsStaff(resource.data.staffId) || manages(resource.data.storeId);
       allow create: if isAdmin() || (
         ownsStaff(request.resource.data.staffId)
         && inMyStore(request.resource.data.storeId)
         && request.resource.data.status == 'pending'
         && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'date', 'status', 'note', 'createdAt', 'updatedAt', 'createdBy'])
         && request.resource.data.date is string
-        && request.resource.data.date.matches(request.resource.data.month + '-[0-9][0-9]')
+        && request.resource.data.date in monthDates(request.resource.data.month)
+        && (!('note' in request.resource.data) || (request.resource.data.note is string && request.resource.data.note.size() <= 50))
+        && staffInStore(request.resource.data.staffId, request.resource.data.storeId)
+        && isMe(request.resource.data.createdBy)
+        && isNowIso(request.resource.data.createdAt)
+        && request.resource.data.updatedAt == request.resource.data.createdAt
+        && requestWindowOpen(request.resource.data.month)
+        && paidIdOk(id, request.resource.data)
+      );
+      // 判断：オーナーか、担当店舗の幹部（履歴は必須）。日付の変更：オーナーだけ（申請中のもの・履歴は必須）
+      allow update: if ownerDecides('paid', id) || managerDecides('paid', id) || ownerChangesPaidDate(id);
+      // 削除：オーナーは申請中のものだけ。スタッフは自分の申請中のものだけ（取り下げ）
+      allow delete: if (isAdmin() && resource.data.status == 'pending')
+        || (ownsStaff(resource.data.staffId) && resource.data.status == 'pending');
+    }
+    function ownerChangesPaidDate(id) {
+      let a = request.resource.data;
+      return isAdmin()
+        && resource.data.status == 'pending'
+        && a.status == 'pending'
+        && a.diff(resource.data).affectedKeys().hasOnly(['date', 'month', 'originalDate', 'changedBy', 'lastActionBy', 'lastActionAt', 'updatedAt'])
+        && a.date is string
+        && a.date in monthDates(a.month)
+        && a.lastActionBy == myEmail()
+        && isNowIso(a.lastActionAt)
+        && a.updatedAt == a.lastActionAt
+        && logged('paid', id);
+    }
+    // 変更申請（名前は「種類_対象の記録の名前_回数」。同じ対象へは3回まで）
+    match /changeRequests/{id} {
+      allow read: if isAdmin() || ownsStaff(resource.data.staffId) || manages(resource.data.storeId);
+      // スタッフ：自分の承認済みの希望休・有給に、取り消し（cancel）か日付の変更（move・同じ月の日付）を「申請中」で出す
+      allow create: if isAdmin() || (
+        ownsStaff(request.resource.data.staffId)
+        && inMyStore(request.resource.data.storeId)
+        && staffInStore(request.resource.data.staffId, request.resource.data.storeId)
+        && request.resource.data.keys().hasOnly(['kind', 'targetId', 'staffId', 'storeId', 'month', 'date', 'type', 'newDate', 'note', 'status', 'createdAt', 'updatedAt', 'createdBy'])
+        && request.resource.data.kind in ['wish', 'paid']
+        && request.resource.data.status == 'pending'
+        && changeTargetOk(request.resource.data)
+        && (request.resource.data.type == 'cancel'
+          ? request.resource.data.newDate == ''
+          : (request.resource.data.type == 'move'
+            && request.resource.data.newDate is string
+            && request.resource.data.newDate in monthDates(request.resource.data.month)
+            && request.resource.data.newDate != request.resource.data.date))
+        && request.resource.data.note is string
+        && request.resource.data.note.size() <= 50
+        && isMe(request.resource.data.createdBy)
+        && isNowIso(request.resource.data.createdAt)
+        && request.resource.data.updatedAt == request.resource.data.createdAt
+        && changeIdOk(id, request.resource.data)
+      );
+      // 判断：オーナーか、担当店舗の幹部（履歴は必須）。反映の印：オーナーだけ（承認済みのもの・履歴は必須）
+      allow update: if ownerDecides('change', id) || managerDecides('change', id) || ownerReflects(id);
+      // 削除：オーナーは申請中のものだけ。スタッフは自分の申請中のものだけ（取り下げ）
+      allow delete: if (isAdmin() && resource.data.status == 'pending')
+        || (ownsStaff(resource.data.staffId) && resource.data.status == 'pending');
+    }
+    function changeTargetPath(d) {
+      return d.kind == 'wish'
+        ? /databases/$(database)/documents/wishRequests/$(d.targetId)
+        : /databases/$(database)/documents/paidRequests/$(d.targetId);
+    }
+    // 変更申請の対象が、本人の承認済みの申請で、日付・店舗・月が合っているか
+    function changeTargetOk(d) {
+      return exists(changeTargetPath(d))
+        && get(changeTargetPath(d)).data.status == 'approved'
+        && get(changeTargetPath(d)).data.staffId == d.staffId
+        && get(changeTargetPath(d)).data.storeId == d.storeId
+        && get(changeTargetPath(d)).data.month == d.month
+        && get(changeTargetPath(d)).data.date == d.date;
+    }
+    function changeRejected(docId) {
+      let p = /databases/$(database)/documents/changeRequests/$(docId);
+      return exists(p) && get(p).data.status == 'rejected';
+    }
+    function changeIdOk(id, d) {
+      let base = d.kind + '_' + d.targetId + '_';
+      return id == base + '1'
+        || (id == base + '2' && changeRejected(base + '1'))
+        || (id == base + '3' && changeRejected(base + '2'));
+    }
+    // 反映の印（オーナーだけ）：承認済みで、まだ反映していないものに、反映した人・日時を入れる
+    function ownerReflects(id) {
+      let a = request.resource.data;
+      return isAdmin()
+        && resource.data.status == 'approved'
+        && a.status == 'approved'
+        && !('reflectedAt' in resource.data)
+        && a.diff(resource.data).affectedKeys().hasOnly(['reflectedAt', 'reflectedBy', 'lastActionBy', 'lastActionAt', 'updatedAt'])
+        && a.reflectedBy == myEmail()
+        && a.reflectedAt == a.lastActionAt
+        && a.lastActionBy == myEmail()
+        && isNowIso(a.lastActionAt)
+        && a.updatedAt == a.lastActionAt
+        && logged('change', id);
+    }
+    // 判断の履歴：オーナーと幹部が、判断と同じ書き込みでだけ追加する。書き換え・削除は誰もできない
+    match /decisionLogs/{id} {
+      allow read: if isAdmin() || manages(resource.data.storeId);
+      allow create: if (isAdmin() || isManager())
+        && request.resource.data.keys().hasOnly(['kind', 'targetId', 'staffId', 'storeId', 'month', 'date', 'from', 'to', 'reason', 'note', 'by', 'role', 'at'])
+        && request.resource.data.kind in ['wish', 'paid', 'change']
+        && id == request.resource.data.kind + '_' + request.resource.data.targetId + '_' + request.resource.data.at
+        && request.resource.data.by == myEmail()
+        && request.resource.data.role == (isAdmin() ? 'owner' : 'manager')
+        && isNowIso(request.resource.data.at)
+        && logTargetOk(request.resource.data);
+      allow update, delete: if false;
+    }
+    function logTargetPath(l) {
+      return l.kind == 'wish'
+        ? /databases/$(database)/documents/wishRequests/$(l.targetId)
+        : (l.kind == 'paid'
+          ? /databases/$(database)/documents/paidRequests/$(l.targetId)
+          : /databases/$(database)/documents/changeRequests/$(l.targetId));
+    }
+    // 履歴の中身が、同じ書き込みで変わった申請と合っているか（申請の側でも、履歴があることを確かめる）
+    // （同じ申請を1回だけ読んで使い回す：ルールの計算の回数の上限があるため）
+    function logTargetOk(l) {
+      let path = logTargetPath(l);
+      return existsAfter(path) && logTargetMatches(getAfter(path).data, l);
+    }
+    function logTargetMatches(t, l) {
+      return t.lastActionAt == l.at
+        && t.lastActionBy == myEmail()
+        && t.status == l.to
+        && t.staffId == l.staffId
+        && t.storeId == l.storeId;
+    }
+    // 社用で不在の日（名前は「スタッフID_日付」）：幹部が自分の分を、担当店舗・受付期間に登録する（その場で確定）。
+    // 読めるのはオーナー・本人・担当店舗の幹部。取り消せるのは、オーナーと、受付期間の本人。書き換えはオーナーだけ
+    match /businessDays/{id} {
+      allow read: if isAdmin() || ownsStaff(resource.data.staffId) || manages(resource.data.storeId);
+      allow create: if isAdmin() || (
+        ownsStaff(request.resource.data.staffId)
+        && inMyStore(request.resource.data.storeId)
+        && manages(request.resource.data.storeId)
+        && staffInStore(request.resource.data.staffId, request.resource.data.storeId)
+        && id == request.resource.data.staffId + '_' + request.resource.data.date
+        && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'date', 'what', 'detail', 'status', 'createdAt', 'updatedAt', 'createdBy'])
+        && request.resource.data.status == 'approved'
+        && request.resource.data.what in ['外部講習', '店舗間の移動', '会議・ミーティング', '撮影・SNS業務', '買い出し', 'その他']
+        && request.resource.data.detail is string
+        && request.resource.data.detail.size() <= 30
+        && request.resource.data.date is string
+        && dateInMonth(request.resource.data.date, request.resource.data.month)
+        && isMe(request.resource.data.createdBy)
+        && isNowIso(request.resource.data.createdAt)
+        && request.resource.data.updatedAt == request.resource.data.createdAt
         && requestWindowOpen(request.resource.data.month)
       );
       allow update: if isAdmin();
-      allow delete: if isAdmin() || (ownsStaff(resource.data.staffId) && resource.data.status == 'pending');
+      allow delete: if isAdmin() || (
+        ownsStaff(resource.data.staffId)
+        && manages(resource.data.storeId)
+        && isMe(resource.data.createdBy)
+        && requestWindowOpen(resource.data.month)
+      );
     }
-
-    // 確定したシフトの公開用の写し（表示に必要なものだけ）：スタッフは自分の所属店舗のものだけ読める
+    // 確定したシフトの公開用の写し：スタッフは所属店舗、幹部は担当店舗を読める。作るのはオーナーだけ
     match /publishedRosters/{id} {
-      allow read: if isAdmin() || inMyStore(resource.data.storeId);
+      allow read: if isAdmin() || inMyStore(resource.data.storeId) || manages(resource.data.storeId);
       allow write: if isAdmin();
     }
-
-    // そのほかのデータ（シフト・勤務パターン・必要人数・シフト確定など）：管理者だけ
+    // そのほかのデータ（シフト・勤務パターン・必要人数・シフト確定・希望休の上限の設定など）：オーナーだけ
+    // （上で個別に決めた名簿・申請・履歴は、ここでは許さない）
     match /{collection}/{id} {
-      allow read, write: if isAdmin() && collection != 'access';
+      allow read, write: if isAdmin()
+        && !(collection in ['access', 'managers', 'wishRequests', 'paidRequests', 'changeRequests', 'decisionLogs', 'businessDays']);
     }
   }
 }
