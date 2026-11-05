@@ -974,12 +974,12 @@
       if (!patternAvailableIn(p, fields.storeId)) throw new Error(`「${p.label}」は、ほかの店舗専用の勤務パターンです。`);
     }
 
-    // 曜日ごとのいつもの勤務：{ "0"〜"6"（日〜土）: 勤務パターンID または "off"（通常休） }
+    // 曜日ごとのいつもの勤務：{ "0"〜"6"（日〜土）: 勤務パターンID・"off"（通常休）・"business:勤務パターンID"（社用・11/5〜） }
     // 使える勤務パターンから外したものは、自動で外す
     const weeklyPatterns = {};
     for (const [w, value] of Object.entries(fields.weeklyPatterns || {})) {
       if (!/^[0-6]$/.test(w) || !value) continue;
-      if (value === 'off' || patternIds.includes(value)) weeklyPatterns[w] = value;
+      if (value === 'off' || patternIds.includes(value) || (weeklyBusinessPattern(value) && patternIds.includes(weeklyBusinessPattern(value)))) weeklyPatterns[w] = value;
     }
 
     return {
@@ -995,18 +995,25 @@
     };
   }
 
+  // いつもの勤務の「社用」（"business:勤務パターンID"）なら、その勤務パターンID。ほかは null
+  function weeklyBusinessPattern(value) {
+    return typeof value === 'string' && value.startsWith('business:') ? value.slice(9) || null : null;
+  }
+
   // 勤務条件（AIシフト作成でも使う）：雇用形態・新人・戦力外・週休・月の休日数・固定休・この店舗で働く曜日・備考・ログイン用メール
   function normalizeStaffConditions(fields) {
     const employment = fields.employment || 'full';
     if (!EMPLOYMENTS.includes(employment)) throw new Error('雇用形態を選んでください。');
+    // パートの「休みの日数を決めない」（11/5〜）：AIシフト作成は、人数が足りない日にだけ入れる。週休・月の休日数は使わない
+    const offFlex = employment === 'part' && Boolean(fields.offFlex);
 
-    let weeklyOffDays = fields.weeklyOffDays === '' || fields.weeklyOffDays === undefined ? null : fields.weeklyOffDays;
+    let weeklyOffDays = offFlex || fields.weeklyOffDays === '' || fields.weeklyOffDays === undefined ? null : fields.weeklyOffDays;
     if (weeklyOffDays !== null) {
       weeklyOffDays = Number(weeklyOffDays);
       if (!Number.isInteger(weeklyOffDays) || weeklyOffDays < 1 || weeklyOffDays > 6) throw new Error('週休の日数が正しくありません。');
     }
     // 本人の月の休日数（空＝設定 > チェックの「月の休日数の目安」を使う）
-    let monthlyOffDays = fields.monthlyOffDays === '' || fields.monthlyOffDays === undefined || fields.monthlyOffDays === null ? null : fields.monthlyOffDays;
+    let monthlyOffDays = offFlex || fields.monthlyOffDays === '' || fields.monthlyOffDays === undefined || fields.monthlyOffDays === null ? null : fields.monthlyOffDays;
     if (monthlyOffDays !== null) {
       monthlyOffDays = Number(monthlyOffDays);
       if (!Number.isInteger(monthlyOffDays) || monthlyOffDays < 0 || monthlyOffDays > 31) throw new Error('月の休日数が正しくありません（0〜31日）。');
@@ -1030,6 +1037,7 @@
 
     return {
       employment,
+      offFlex,
       isNew: Boolean(fields.isNew),
       excludeFromCount: Boolean(fields.excludeFromCount),
       weeklyOffDays,
@@ -1149,7 +1157,8 @@
         const value = s.weeklyPatterns[String(weekday)];
         if (!value) continue;
         if (data.shifts.some((x) => x.id === shiftId(s.id, date) && !x.deleted)) continue; // 入力済みは変えない
-        if (value !== 'off' && !data.shiftPatterns.some((p) => p.id === value && !p.deleted)) continue;
+        const pid = weeklyBusinessPattern(value) || value;
+        if (value !== 'off' && !data.shiftPatterns.some((p) => p.id === pid && !p.deleted)) continue;
         plans.push({ staffId: s.id, date, value });
       }
     }
@@ -1158,8 +1167,10 @@
       const now = U.nowIso();
       for (const { staffId, date, value } of plans) {
         const id = shiftId(staffId, date);
-        const fields = { kind: value === 'off' ? 'off' : 'work', patternId: value === 'off' ? null : value, storeId, breaks: [] };
+        const biz = weeklyBusinessPattern(value);
+        const fields = { kind: value === 'off' ? 'off' : biz ? 'business' : 'work', patternId: value === 'off' ? null : biz || value, storeId, breaks: [] };
         const existing = d.shifts.find((x) => x.id === id);
+        if (existing) clearCustomTime(existing);
         if (existing) Object.assign(existing, fields, { deleted: false, updatedAt: now });
         else d.shifts.push({ id, staffId, date, ...fields, createdAt: now, updatedAt: now, deleted: false });
       }
@@ -1371,6 +1382,7 @@
         const id = shiftId(a.staffId, a.date);
         const fields = { kind: a.kind, patternId: TIMED_KINDS.includes(a.kind) ? a.patternId : null, storeId, breaks: [], autoRunId: runId };
         const existing = d.shifts.find((x) => x.id === id);
+        if (existing) clearCustomTime(existing);
         if (existing) Object.assign(existing, fields, { deleted: false, updatedAt: now });
         else d.shifts.push({ id, staffId: a.staffId, date: a.date, ...fields, createdAt: now, updatedAt: now, deleted: false });
       }
@@ -1436,6 +1448,8 @@
       if (existing) delete existing.autoRunId;
       // 手で直したマスは、当日の欠勤・休暇の情報も外す（古い情報が残らないように）
       if (existing) delete existing.absence;
+      // 勤務パターンを選び直したら、その日だけの勤務時間は消す（パターンの時間に戻す）
+      if (existing) clearCustomTime(existing);
       if (existing) Object.assign(existing, fields, { deleted: false, updatedAt: now });
       else d.shifts.push({ id, staffId, date, ...fields, createdAt: now, updatedAt: now, deleted: false });
     });
@@ -1477,7 +1491,7 @@
     const { store, existing } = absenceTarget(staffId, date, storeId);
     if (existing && existing.absence) throw new Error('この日は、すでに欠勤・休暇が登録されています。');
     const { type, reason } = cleanAbsenceFields(fields);
-    const planned = existing ? { kind: existing.kind, patternId: existing.patternId || null, breaks: Array.isArray(existing.breaks) ? copy(existing.breaks) : [] } : null;
+    const planned = existing ? { kind: existing.kind, patternId: existing.patternId || null, breaks: Array.isArray(existing.breaks) ? copy(existing.breaks) : [], ...(hasCustomTime(existing) ? { start: existing.start, end: existing.end } : {}) } : null;
     const id = shiftId(staffId, date);
     const now = U.nowIso();
     commit((d) => {
@@ -1491,6 +1505,7 @@
       };
       if (s) {
         delete s.autoRunId;
+        clearCustomTime(s);
         Object.assign(s, next, { deleted: false, updatedAt: now });
       } else d.shifts.push({ id, staffId, date, ...next, createdAt: now, updatedAt: now, deleted: false });
     });
@@ -1540,7 +1555,8 @@
       const s = d.shifts.find((x) => x.id === id);
       const now = U.nowIso();
       delete s.absence;
-      if (planned) Object.assign(s, { kind: planned.kind, patternId: planned.patternId || null, breaks: planned.breaks || [], updatedAt: now });
+      clearCustomTime(s);
+      if (planned) Object.assign(s, { kind: planned.kind, patternId: planned.patternId || null, breaks: planned.breaks || [], ...(hasCustomTime(planned) ? { start: planned.start, end: planned.end } : {}), updatedAt: now });
       else Object.assign(s, { deleted: true, updatedAt: now });
     });
     return getShift(staffId, date);
@@ -1571,8 +1587,55 @@
   function workShiftOf(staffId, date, label) {
     const shift = getShift(staffId, date);
     if (!shift || shift.kind !== 'work') throw new Error(`${label}は、通常勤務の日だけ設定できます。`);
-    const pattern = getPattern(shift.patternId);
+    const pattern = shiftPattern(shift);
     return { shift, range: { start: pattern.start, end: pattern.end } };
+  }
+
+  // ---- その日だけの勤務時間（日別のタイムラインで長押しして動かす・11/5〜） ----
+  // シフトに start・end（"10:00" の形）があれば、その日はその時間で働く（通常勤務だけ）。勤務パターンそのものは変えない
+  function hasCustomTime(shift) {
+    return Boolean(shift) && typeof shift.start === 'string' && typeof shift.end === 'string';
+  }
+
+  function clearCustomTime(shift) {
+    delete shift.start;
+    delete shift.end;
+  }
+
+  // シフトの勤務時間：勤務パターンと同じ形で返す（その日だけの時間なら start・end を置きかえて custom: true）。パターンがなければ null
+  function shiftPattern(shift) {
+    if (!shift || !shift.patternId) return null;
+    const p = getPattern(shift.patternId);
+    if (!p) return null;
+    return shift.kind === 'work' && hasCustomTime(shift) ? { ...p, start: shift.start, end: shift.end, custom: true } : p;
+  }
+
+  // その日だけの勤務時間を保存する（range：{ start, end }。パターンと同じ時間なら、その日だけの時間を消す）
+  // 15分単位・0:00〜24:00・30分以上。確定済みの月は変えられない。休憩・社用予定（日付指定）がはみ出すときは保存しない
+  function setShiftTime(staffId, date, range) {
+    const shift = getShift(staffId, date);
+    if (!shift || shift.kind !== 'work') throw new Error('勤務時間は、通常勤務の日だけ変えられます。');
+    const pattern = getPattern(shift.patternId);
+    if (!pattern) throw new Error('勤務パターンが見つかりませんでした。');
+    assertEditable(shiftStoreId(shift), date);
+    if (!range || !U.isValidTime(range.start, 15) || !U.isValidTime(range.end, 15)) throw new Error('勤務時間の時刻が正しくありません。');
+    if (U.toMinutes(range.end) - U.toMinutes(range.start) < 30) throw new Error('勤務時間は30分以上にしてください。');
+    const inside = (r) => r.start >= range.start && r.end <= range.end;
+    const outBreak = (shift.breaks || []).find((b) => !inside(b));
+    if (outBreak) throw new Error(`休憩（${U.formatTime(outBreak.start)}〜${U.formatTime(outBreak.end)}）が、新しい勤務時間からはみ出します。先に休憩を直してください。`);
+    const outPlan = getBusinessTimes({ staffId }).find((b) => b.type === 'date' && b.date === date && !inside(b));
+    if (outPlan) throw new Error(`社用の予定（${U.formatTime(outPlan.start)}〜${U.formatTime(outPlan.end)}）が、新しい勤務時間からはみ出します。先に社用の予定を直してください。`);
+    const same = range.start === pattern.start && range.end === pattern.end;
+    const id = shiftId(staffId, date);
+    commit((d) => {
+      const s = d.shifts.find((x) => x.id === id);
+      // 手で直したシフトは、自動作成の印を外す（「自動作成を取り消す」で消えないように）
+      delete s.autoRunId;
+      if (same) clearCustomTime(s);
+      else Object.assign(s, { start: range.start, end: range.end });
+      s.updatedAt = U.nowIso();
+    });
+    return getShift(staffId, date);
   }
 
   // その日の休憩をまとめて保存する（breaks：[{ start, end }]。空の配列で休憩なし）
@@ -1904,6 +1967,14 @@
     return { ...K.defaults.checks, ...data.settings.checks, ...((store && store.checks) || {}) };
   }
 
+  // 毎日そろえる出勤時刻："HH:MM"（15分単位）の配列。6個まで・重ならない・早い順
+  function startTimesIn(value, label) {
+    const list = Array.isArray(value) ? value : [];
+    if (list.length > 6) throw new Error(`${label}は6個までにしてください。`);
+    if (list.some((t) => !U.isValidTime(t, 15) || t === '24:00')) throw new Error(`${label}が正しくありません。`);
+    return [...new Set(list)].sort();
+  }
+
   // チェックの基準を保存する（storeId を渡すと、その店舗専用の基準として保存する）
   function updateChecks(storeIdOrFields, maybeFields) {
     const storeId = typeof storeIdOrFields === 'string' ? storeIdOrFields : null;
@@ -1933,6 +2004,9 @@
       // 平日の週のシフト休・月の連休（渡されなければ今の値のまま）
       weekdayShiftOff: intIn(fields.weekdayShiftOff ?? getChecks(storeId).weekdayShiftOff, '平日の週のシフト休', 0, 5),
       monthlyRenkyu: intIn(fields.monthlyRenkyu ?? getChecks(storeId).monthlyRenkyu, '月の連休の回数', 0, 10),
+      // 毎日そろえる出勤時刻（平日・土日祝。渡されなければ今の値のまま）
+      startTimesWeekday: startTimesIn(fields.startTimesWeekday ?? getChecks(storeId).startTimesWeekday, '平日の出勤時刻'),
+      startTimesHoliday: startTimesIn(fields.startTimesHoliday ?? getChecks(storeId).startTimesHoliday, '土日祝の出勤時刻'),
     };
     commit((d) => {
       if (storeId) {
@@ -2065,6 +2139,10 @@
     comparePatterns,
     movePattern,
     getPattern,
+    shiftPattern,
+    weeklyBusinessPattern,
+    hasCustomTime,
+    setShiftTime,
     addPattern,
     updatePattern,
     getPatternUsers,

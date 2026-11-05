@@ -60,19 +60,143 @@
     });
   }
 
+  // ---- 勤務の棒を長押しして動かす（11/5〜） ----
+  // 長押し（0.5秒）で動かせる状態になる。真ん中をつかむと全体がずれ、左右の端をつかむと開始・終了だけが変わる（30分ごと）。
+  // 離すと確かめてから保存（K.storage.setShiftTime）。長押しする前に指が動いたら、ふつうのスクロールにする
+  const LONG_PRESS_MS = 500;
+  const MOVE_TOLERANCE = 8; // 長押しの間に、これより動いたらやめる（px）
+  const DAY_END = 24 * 60;
+
+  // 動かしたあとの時間（分）。mode：'move'（全体）/ 'start'（開始だけ）/ 'end'（終了だけ）。delta は30分の倍数
+  function draggedRange(day, mode, delta) {
+    let start = day.start;
+    let end = day.end;
+    if (mode === 'move') {
+      const shift = Math.min(Math.max(delta, -start), DAY_END - end);
+      start += shift;
+      end += shift;
+    } else if (mode === 'start') {
+      start = Math.min(Math.max(0, start + delta), end - 30);
+      if (start < 0) start = 0;
+    } else {
+      end = Math.max(Math.min(DAY_END, end + delta), start + 30);
+    }
+    return { start, end };
+  }
+
+  function attachDrag(seg, day, date, from, span) {
+    let press = null;
+    const place = (r) => {
+      seg.style.left = `${((r.start - from) / span) * 100}%`;
+      seg.style.width = `${((r.end - r.start) / span) * 100}%`;
+    };
+    const finish = () => {
+      if (!press) return;
+      clearTimeout(press.timer);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      seg.classList.remove('is-dragging', 'is-pressing');
+      if (press.label) press.label.remove();
+      press = null;
+    };
+    function onMove(e) {
+      if (!press || e.pointerId !== press.id) return;
+      if (!press.active) {
+        if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > MOVE_TOLERANCE) finish();
+        return;
+      }
+      e.preventDefault();
+      const minutes = (e.clientX - press.x) / press.pxPerMin;
+      const delta = Math.round(minutes / 30) * 30;
+      press.range = draggedRange(day, press.mode, delta);
+      place(press.range);
+      press.label.textContent = `${U.formatTime(U.fromMinutes(press.range.start))}〜${U.formatTime(U.fromMinutes(press.range.end))}`;
+    }
+    function onCancel(e) {
+      if (!press || e.pointerId !== press.id) return;
+      const wasActive = press.active;
+      finish();
+      if (wasActive) place(day);
+    }
+    function onUp(e) {
+      if (!press || e.pointerId !== press.id) return;
+      const { active, range } = press;
+      finish();
+      if (!active) return;
+      if (range.start === day.start && range.end === day.end) {
+        place(day);
+        return;
+      }
+      const before = `${U.formatTime(U.fromMinutes(day.start))}〜${U.formatTime(U.fromMinutes(day.end))}`;
+      const after = `${U.formatTime(U.fromMinutes(range.start))}〜${U.formatTime(U.fromMinutes(range.end))}`;
+      // 長押しのあとの「離す」は、タップ（クリック）として扱わない
+      seg.addEventListener('click', (ev) => ev.stopPropagation(), { capture: true, once: true });
+      if (!window.confirm(`${day.member.name}さんの${shortDate(date)}の勤務時間を\n${before} → ${after}\nに変えますか？`)) {
+        place(day);
+        return;
+      }
+      try {
+        K.storage.setShiftTime(day.member.id, date, { start: U.fromMinutes(range.start), end: U.fromMinutes(range.end) });
+        K.app.toast(`${day.member.name}さんの勤務時間を ${after} にしました`);
+      } catch (err) {
+        place(day);
+        window.alert(err.message);
+      }
+      K.app.rerender();
+    }
+    seg.addEventListener('pointerdown', (e) => {
+      if (press || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      const rect = seg.getBoundingClientRect();
+      const track = seg.parentElement.getBoundingClientRect();
+      const edge = Math.min(16, rect.width / 4);
+      const mode = e.clientX - rect.left <= edge ? 'start' : rect.right - e.clientX <= edge ? 'end' : 'move';
+      press = { id: e.pointerId, x: e.clientX, y: e.clientY, mode, active: false, range: { start: day.start, end: day.end }, pxPerMin: track.width / span, label: null };
+      seg.classList.add('is-pressing');
+      press.timer = setTimeout(() => {
+        if (!press) return;
+        press.active = true;
+        seg.classList.remove('is-pressing');
+        seg.classList.add('is-dragging');
+        seg.dataset.mode = mode;
+        try {
+          seg.setPointerCapture(press.id);
+        } catch (err) {
+          // 指が離れたあとなど（そのまま続ける）
+        }
+        if (navigator.vibrate) navigator.vibrate(15);
+        press.label = el('span', { class: 'tl-drag-label', role: 'status' }, `${U.formatTime(U.fromMinutes(day.start))}〜${U.formatTime(U.fromMinutes(day.end))}`);
+        seg.append(press.label);
+      }, LONG_PRESS_MS);
+      window.addEventListener('pointermove', onMove, { passive: false });
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onCancel);
+    });
+    // 動かしている間は、画面がスクロールしないようにする（iPhone の Safari など）
+    seg.addEventListener('touchmove', (e) => {
+      if (press && press.active) e.preventDefault();
+    }, { passive: false });
+    // 長押しで出る文字の選択・メニューを出さない
+    seg.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
   function timeline(result, date, others) {
     const { from, to, days } = result;
     const span = to - from;
     const hours = [];
     for (let t = Math.ceil(from / 60) * 60; t <= to; t += 60) hours.push(t);
     const slotCount = span / K.calc.SLOT_MINUTES;
+    // 確定済みの月は動かせない（シフト表と同じ）
+    const editable = !K.storage.getPublication(K.app.currentStore().id, date.slice(0, 7));
 
     const rows = days.map((d) => {
       const isWork = d.kind === 'work';
       const color = d.pattern.color;
       const segs = [];
       if (isWork) {
-        segs.push(segment('tl-seg--work', d, from, span, `勤務 ${rangeLabel(d)}`, { '--pattern-color': color }));
+        const work = segment(`tl-seg--work${editable ? ' is-draggable' : ''}${d.pattern.custom ? ' is-custom-time' : ''}`, d, from, span, `勤務 ${rangeLabel(d)}${d.pattern.custom ? '（この日だけの時間）' : ''}`, { '--pattern-color': color });
+        if (editable) attachDrag(work, d, date, from, span);
+        segs.push(work);
         for (const b of d.breaks) segs.push(segment('tl-seg--break', b, from, span, `休憩 ${rangeLabel(b)}`));
         for (const b of d.business) {
           segs.push(
@@ -130,7 +254,7 @@
         '休憩',
         el('span', { class: 'tl-key tl-seg--business' }),
         '社用',
-        el('span', { class: 'tl-legend__note' }, '名前をタップして休憩・社用時間を編集')
+        el('span', { class: 'tl-legend__note' }, editable ? '名前をタップして休憩・社用時間を編集。勤務の棒を長押しすると、時間を動かせます（端をつかむと開始・終了だけ）' : '名前をタップして休憩・社用時間を編集（確定済みの月は、勤務時間を動かせません）')
       ),
       days.length
         ? el(
@@ -432,6 +556,34 @@
         : el('li', { class: 'detail-item detail-item--empty' }, '設定なし（時間帯別の人数からは除きません）')
     );
 
+    // 勤務時間（その日だけ。長押しで動かすのと同じ。勤務パターンの時間に戻すこともできる）
+    const timeSel = {
+      start: U.timeSelect({ id: 'work-start', value: U.fromMinutes(day.start), from: 0, to: 24 * 60 - 30, step: 15 }),
+      end: U.timeSelect({ id: 'work-end', value: U.fromMinutes(day.end), from: 30, to: 24 * 60, step: 15 }),
+    };
+    const base = K.storage.getPattern(day.shift.patternId);
+    const timeBox = el(
+      'div',
+      { class: 'detail-add' },
+      el('div', { class: 'time-range' }, timeSel.start, el('span', { class: 'time-range__sep' }, '〜'), timeSel.end),
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'btn btn--ghost btn--small',
+          onclick: () => run(() => K.storage.setShiftTime(member.id, date, { start: timeSel.start.value, end: timeSel.end.value }), '勤務時間を変えました'),
+        },
+        '勤務時間を変える'
+      ),
+      day.pattern.custom && base
+        ? el(
+            'button',
+            { type: 'button', class: 'btn btn--ghost btn--small', onclick: () => run(() => K.storage.setShiftTime(member.id, date, { start: base.start, end: base.end }), `「${base.label}」の時間に戻しました`) },
+            `「${base.label}」の時間（${U.formatTime(base.start)}〜${U.formatTime(base.end)}）に戻す`
+          )
+        : null
+    );
+
     // 社用予定（日付指定の一覧・追加・編集・削除。毎週の社用は「この日だけ取り消す」）
     const plans = K.businessUI.section({ member, date, day, idPrefix: 'biz', onDone: (message) => { K.app.toast(message); K.app.rerender(); } });
 
@@ -449,6 +601,9 @@
         ),
         el('button', { type: 'button', class: 'sheet__close', 'aria-label': '閉じる', onclick: closeEditor }, '×')
       ),
+
+      el('p', { class: 'sheet__label' }, day.pattern.custom ? '勤務時間（この日だけ変えています）' : '勤務時間'),
+      timeBox,
 
       el('p', { class: 'sheet__label' }, '休憩'),
       breakList,

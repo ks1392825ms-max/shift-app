@@ -21,6 +21,7 @@
     ['weekShiftOff', '週のシフト休'],
     ['renkyu', '月の連休'],
     ['earlyZero', '早番0人'],
+    ['startMissing', '出勤時刻'],
     ['slotRepeat', '早早・遅遅'],
     ['businessPlan', '社用予定'],
     ['blank', '未入力'],
@@ -111,6 +112,31 @@
         result.issues.push({ type: 'over', date, message: `${who}過多　${rangesText(sc.slots, (s) => s.overSt || s.overAs)}` });
       }
       result.dates.set(date, flag);
+    }
+
+    // ---- 出勤時刻（日ごと）：設定 > チェックの「毎日そろえる出勤時刻」に出勤する人がいない日（11/5〜）
+    //      その時刻に始まる勤務パターンを使える人がいる店舗だけ。出勤している人がいない日・定休日は知らせない
+    {
+      const startable = new Set();
+      for (const m of staff) {
+        if (!K.calc.countsAsStaff(m)) continue;
+        for (const id of m.patternIds || []) {
+          const p = K.storage.getPattern(id);
+          if (p && !p.deleted) startable.add(p.start);
+        }
+      }
+      for (const date of dates) {
+        if (K.calc.isStoreClosed(store, date)) continue;
+        const need = (K.calc.dayInfo(store, date).dayType === 'holiday' ? checks.startTimesHoliday : checks.startTimesWeekday) || [];
+        const starts = staff
+          .filter((m) => K.calc.countsAsStaff(m))
+          .map((m) => map.get(`${m.id}|${date}`))
+          .filter((s) => s && s.kind === 'work')
+          .map((s) => (K.storage.shiftPattern(s) || {}).start);
+        if (!starts.length) continue;
+        const missing = need.filter((t) => startable.has(t) && !starts.includes(t));
+        if (missing.length) result.issues.push({ type: 'startMissing', date, message: `${missing.map((t) => U.formatTime(t)).join('・')}に出勤する人がいません` });
+      }
     }
 
     // ---- 早番0人（日ごと）：出勤している人（人数に数える人）が全員遅番の日。早番の勤務パターンを持つ人がいる店舗だけ ----

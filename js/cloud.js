@@ -541,8 +541,14 @@
     const batch = fsMod.writeBatch(db);
     batch.set(fsMod.doc(db, 'wishRequests', id), data);
     batch.set(countRef, R.countDoc({ staffId, storeId, month, count: count + 1, lastDate: date, email, now }));
-    batch.set(fsMod.doc(db, 'decisionLogs', log.id), log.data);
     await batch.commit();
+    // 判断の履歴は、別の書き込みで残す（1回の書き込みにまとめると、Firestore のルールの計算の回数の上限をこえるため。11/5）
+    // 休みの記録そのものに「誰が・いつ・幹部として確定したか」は入っている。履歴を書けなくても、休みの登録は済んでいる
+    try {
+      await fsMod.setDoc(fsMod.doc(db, 'decisionLogs', log.id), log.data);
+    } catch (err) {
+      console.warn('判断の履歴を残せませんでした', err && err.message);
+    }
   }
 
   // 幹部：自分で登録した休みを取り消す（受付期間だけ。月の日数を1つ減らすのと、1回の書き込みで）

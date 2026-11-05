@@ -50,6 +50,8 @@
           closedDayAsOff: val('chk-closed').checked,
           weekdayShiftOff: val('chk-week-off').value,
           monthlyRenkyu: val('chk-renkyu').value,
+          startTimesWeekday: chosenTimes('chk-start-weekday'),
+          startTimesHoliday: chosenTimes('chk-start-holiday'),
         });
         K.app.toast(`${store.name}の基準を保存しました`);
         K.app.rerender();
@@ -89,6 +91,15 @@
           note: 'シフト休が2日以上続く所（定休日を含む・有給は含めない）を、月にこの回数作ります。月をまたぐ連休は、始まった日の月に数えます。',
         }),
 
+        el('h2', { class: 'card__title card__title--section' }, '毎日そろえる出勤時刻（AIシフト作成）'),
+        startTimesField('chk-start-weekday', '平日', c.startTimesWeekday || []),
+        startTimesField('chk-start-holiday', '土日祝', c.startTimesHoliday || []),
+        el(
+          'p',
+          { class: 'field__note' },
+          '選んだ時刻に出勤する人が、毎日最低1人ずつになるように、AIシフト作成が勤務パターンを選びます（必要人数を満たすほうを優先し、足りなくなるときは無理に変えません）。その時刻に始まる勤務パターンを、スタッフの「使える勤務パターン」に入れておいてください。シフト表の「チェック」でも、その時刻に出勤する人がいない日を知らせます。'
+        ),
+
         el('h2', { class: 'card__title card__title--section' }, '労働時間'),
         switchField('chk-hours', '労働時間をチェックする', c.hoursCheckEnabled),
         numberField('chk-daily', '1日の実働時間の目安', c.dailyHoursLimit, '時間', { step: '0.5' }),
@@ -101,6 +112,33 @@
         el('div', { class: 'actions' }, el('button', { type: 'submit', class: 'btn btn--primary' }, '保存する'))
       )
     );
+  }
+
+  // 出勤時刻を選ぶ（6:00〜13:00 の30分ごと。いくつでも選べる。選んだ時刻は ✓）
+  const START_CHOICES = Array.from({ length: 15 }, (_, i) => U.fromMinutes(6 * 60 + i * 30));
+  function startTimesField(id, label, current) {
+    const chosen = new Set(current);
+    return el(
+      'div',
+      { class: 'field' },
+      el('p', { class: 'field__label' }, label),
+      el(
+        'div',
+        { class: 'start-chips', id, role: 'group', 'aria-label': `${label}の出勤時刻` },
+        [...new Set([...START_CHOICES, ...current])].sort().map((t) =>
+          el(
+            'label',
+            { class: 'start-chip' },
+            el('input', { type: 'checkbox', value: t, checked: chosen.has(t) }),
+            el('span', null, U.formatTime(t))
+          )
+        )
+      )
+    );
+  }
+
+  function chosenTimes(id) {
+    return [...document.querySelectorAll(`#${id} input:checked`)].map((x) => x.value);
   }
 
   K.settingsViews = K.settingsViews || {};

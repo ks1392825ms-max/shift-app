@@ -49,6 +49,7 @@
   async function load() {
     try {
       view.ctx = await backend().loadStaffContext(view.account);
+      R().usePeriodSettings(view.ctx.settings); // オーナーが選んだ受付期間
       // 所属が1店舗なら、店舗とスタッフを自動で選ぶ
       if (view.ctx.staff.length === 1) await selectStaff(view.ctx.staff[0], false);
     } catch (err) {
@@ -213,7 +214,7 @@
     const { store } = current();
     const w = R().requestWindow();
     let text;
-    if (!w.open) text = `今は受付期間外です。${R().monthLabel(w.month)}分は${Number(w.opensOn.slice(5, 7))}月25日から受け付けます。`;
+    if (!w.open) text = `今は受付期間外です。${R().closedText(w)}`;
     else if (closed) text = `${shortDate(date)}：${R().checkDate(store, w.month, date) || '定休日は選べません。'}`;
     else text = view.busy ? '送信中です。終わるまでお待ちください。' : '読み込み中です。少し待ってから、もう一度押してください。';
     view.message = { ok: false, text };
@@ -824,7 +825,7 @@
       'section',
       { class: 'card req-card' },
       el('h2', { class: 'card__title' }, view.selfMode ? `${R().monthLabel(w.month)}の休み・社用` : `${R().monthLabel(w.month)}の休み希望`),
-      w.open ? null : el('p', { class: 'form-error' }, `今は受付期間外です。${R().monthLabel(w.month)}分は${Number(w.opensOn.slice(5, 7))}月25日から受け付けます。`),
+      w.open ? null : el('p', { class: 'form-error' }, `今は受付期間外です。${R().closedText(w)}`),
       modeSwitch,
       view.selfMode && view.mode === 'business'
         ? el('p', { class: 'req-guide' }, el('span', { class: 'req-guide__main' }, '不在の日を押して、内容を選んで「登録」'), el('span', { class: 'req-guide__left' }, 'その場で確定します（店舗の人数には数えません）'))
@@ -844,7 +845,7 @@
           'p',
           { class: 'hint hint--left' },
           view.selfMode && view.mode !== 'paid'
-            ? `幹部は、自分の休み・社用で不在の日を、承認なしで登録できます（その場で確定し、オーナーのシフト表に表示されます）。休みの決まりはスタッフの希望休と同じで、受付期間（25日〜月末）に翌月分を、月に${limit}日まで登録できます。社用で不在は、日数の上限はありません。受付期間の間は、自分で取り消せます。有給は、今までどおりオーナーが承認します。`
+            ? `幹部は、自分の休み・社用で不在の日を、承認なしで登録できます（その場で確定し、オーナーのシフト表に表示されます）。休みの決まりはスタッフの希望休と同じで、受付期間（${R().periodLabel()}）に翌月分を、月に${limit}日まで登録できます。社用で不在は、日数の上限はありません。受付期間の間は、自分で取り消せます。有給は、今までどおりオーナーが承認します。`
             : view.mode === 'wish'
             ? `休みたい日を押して「希望休を送信」を押してください。通常の希望休は${limit}日まで選べます。希望休は、店長・幹部が承認すると休みになります。土日祝は原則出勤です。年次有給休暇など、法令上の休暇の申出は、この限りではありません（有給は「有給希望」から申請してください）。`
             : '有給を希望する日を押して、「有給希望を申請」を押してください。管理者が承認すると確定します。'
@@ -995,7 +996,7 @@
         'p',
         { class: `req-hero__window${w.open ? ' is-open' : ''}` },
         el('span', { class: 'req-hero__badge' }, w.open ? '受付中' : '受付期間外'),
-        el('span', null, w.open ? `${R().monthLabel(w.month)}分・${Number(w.today.slice(5, 7))}月末まで` : `${R().monthLabel(w.month)}分は${Number(w.opensOn.slice(5, 7))}月25日から`)
+        el('span', null, w.open ? `${R().monthLabel(w.month)}分・${R().untilText(w)}` : `${R().monthLabel(w.opensFor)}分は${Number(w.opensOn.slice(5, 7))}月${Number(w.opensOn.slice(8, 10))}日から`)
       ),
       // 幹部がスタッフも兼ねるときは、幹部の画面へ戻れる
       params.manager

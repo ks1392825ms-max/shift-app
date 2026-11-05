@@ -23,14 +23,14 @@
       for (const m of staff) {
         let s = map.get(`${m.id}|${date}`);
         // 対応中の欠勤・休暇は、もとのマス（勤務・休み。もともと空欄なら空欄）で入れる
-        if (s && s.absence && s.absence.status !== 'settled') s = s.absence.planned ? { kind: s.absence.planned.kind, patternId: s.absence.planned.patternId } : null;
+        if (s && s.absence && s.absence.status !== 'settled') s = s.absence.planned ? { kind: s.absence.planned.kind, patternId: s.absence.planned.patternId, start: s.absence.planned.start, end: s.absence.planned.end } : null;
         if (!s) {
           // 臨時休業の日は t に「休業」を入れる（定休日は今までどおり t なし）
           if (closed) cells[m.id] = K.calc.closedPeriodOf(store, date) ? { k: 'closed', t: '休業' } : { k: 'closed' };
           continue;
         }
         if (s.kind === 'work' || s.kind === 'business') {
-          const p = K.storage.getPattern(s.patternId);
+          const p = K.storage.shiftPattern(s); // その日だけ変えた勤務時間も、そのまま出す
           cells[m.id] = { k: s.kind, t: p ? `${U.formatTime(p.start)}〜${U.formatTime(p.end)}` : '' };
         } else {
           // 通常休・有給は、どちらも「休」

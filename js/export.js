@@ -32,11 +32,12 @@
         if (!s) return closed ? { kind: 'closed', text: K.calc.closedLabel(store, date) } : { kind: 'blank', text: '' };
         if (s.kind === 'off') return { kind: 'off', text: '休' };
         if (s.kind === 'paid') return { kind: 'paid', text: '有' };
-        const p = K.storage.getPattern(s.patternId);
+        const p = K.storage.shiftPattern(s);
         // 勤務の日の社用予定（取り消し中のものは出さない）
         const day = s.kind === 'work' ? K.calc.staffDay(m, s, date) : null;
         const plans = day ? day.business.filter((b) => !b.skipped).map((b) => `社 ${shortRange(b)} ${K.calc.businessWhat(b)}`) : [];
-        return { kind: s.kind, text: p ? p.label : '?', color: p ? p.color : '#64748b', plans };
+        // その日だけ勤務時間を変えた日は、パターンの名前ではなく時間（例：10-19）
+        return { kind: s.kind, text: p ? (p.custom ? `${shortTime(U.toMinutes(p.start))}-${shortTime(U.toMinutes(p.end))}` : p.label) : '?', color: p ? p.color : '#64748b', plans };
       });
       return { date, closed, holiday: K.holidays.holidayName(date), weekday: K.calc.weekdayOf(date), cells, counts: K.calc.dailyCounts(staff, map, date) };
     });

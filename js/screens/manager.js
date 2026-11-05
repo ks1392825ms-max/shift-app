@@ -1,5 +1,5 @@
 // 幹部の画面（共有モードで、幹部として登録された人＝managers/{メール} があるとき）
-// ・担当店舗の希望休・有給の申請を一覧で見て、受付期間（25日〜月末・翌月分）だけ、承認・却下・申請中に戻すことができる
+// ・担当店舗の希望休・有給の申請を一覧で見て、受付期間（オーナーが選ぶ。初めは25日〜月末・翌月分）だけ、承認・却下・申請中に戻すことができる
 //   変えられるのは「申請中」のものと、自分が判断したものだけ（自分の申請・ほかの幹部やオーナーが判断したものは変えられない）
 // ・担当店舗の判断の履歴を見る
 // ・担当店舗の確定・公開済みのシフト（公開用の写し）を見る（作成中のシフト・担当外の店舗は読めない）
@@ -46,6 +46,7 @@
   async function load() {
     try {
       view.ctx = await backend().loadManagerContext(view.manager);
+      R().usePeriodSettings(view.ctx.settings); // オーナーが選んだ受付期間
       view.storeId = view.ctx.stores.length ? view.ctx.stores[0].id : null;
       await loadRequests();
     } catch (err) {
@@ -550,7 +551,7 @@
         'p',
         { class: `req-hero__window${w.open ? ' is-open' : ''}` },
         el('span', { class: 'req-hero__badge' }, w.open ? '受付中' : '受付期間外'),
-        el('span', null, w.open ? `${R().monthLabel(w.month)}分・${Number(w.today.slice(5, 7))}月末まで判断できます` : `判断・変更はオーナーだけ（${R().monthLabel(w.month)}分は${Number(w.opensOn.slice(5, 7))}月25日から）`)
+        el('span', null, w.open ? `${R().monthLabel(w.month)}分・${R().untilText(w)}判断できます` : `判断・変更はオーナーだけ（${R().monthLabel(w.opensFor)}分は${Number(w.opensOn.slice(5, 7))}月${Number(w.opensOn.slice(8, 10))}日から）`)
       ),
       view.data
         ? el('p', { class: `mgr-hero__pending${n ? ' has-pending' : ''}` }, el('span', { class: 'mgr-hero__count' }, String(n)), el('span', null, n ? '件が判断待ち' : '件：判断待ちはありません'), el('span', { class: 'mgr-hero__month' }, `${R().monthLabel(view.month)}分`))
@@ -569,7 +570,7 @@
       el(
         'div',
         { class: 'req-account__body' },
-        el('p', { class: 'hint hint--left req-account__who' }, `${view.email} でログインしています（幹部）。担当店舗の申請を、受付期間（25日〜月末）に判断できます。`),
+        el('p', { class: 'hint hint--left req-account__who' }, `${view.email} でログインしています（幹部）。担当店舗の申請を、受付期間（${R().periodLabel()}）に判断できます。`),
         // 簡単ログイン（この端末のロック）の設定
         K.quickLock && user ? K.quickLock.card(user, K.app.rerender) : null,
         K.loginUI && user ? K.loginUI.passwordCard(user) : null,
@@ -599,7 +600,7 @@
           'div',
           { class: 'mgr-bar' },
           monthNav(),
-          el('p', { class: 'hint mgr-bar__hint' }, w.open ? (view.month === w.month ? 'この月の分を判断できます（今月末まで）。' : `判断できるのは${R().monthLabel(w.month)}分だけです（この月は見るだけ）。`) : `今は受付期間外です。判断・変更はオーナーだけができます（${R().monthLabel(w.month)}分は${Number(w.opensOn.slice(5, 7))}月25日から）。`)
+          el('p', { class: 'hint mgr-bar__hint' }, w.open ? (view.month === w.month ? `この月の分を判断できます（${R().untilText(w)}）。` : `判断できるのは${R().monthLabel(w.month)}分だけです（この月は見るだけ）。`) : `今は受付期間外です。判断・変更はオーナーだけができます（${R().monthLabel(w.opensFor)}分は${Number(w.opensOn.slice(5, 7))}月${Number(w.opensOn.slice(8, 10))}日から）。`)
         )
       );
     }

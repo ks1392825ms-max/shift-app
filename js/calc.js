@@ -140,7 +140,8 @@
   // 毎週の社用時間は、その日が通常勤務のときだけ反映する（休みの日は無視）
   function staffDay(member, shift, dateStr) {
     if (!shift || (shift.kind !== 'work' && shift.kind !== 'business')) return null;
-    const pattern = K.storage.getPattern(shift.patternId);
+    // 勤務時間は、その日だけ変えた時間があればその時間（K.storage.shiftPattern）
+    const pattern = K.storage.shiftPattern(shift);
     if (!pattern) return null;
     const day = { member, shift, pattern, kind: shift.kind, ...toRange(pattern.start, pattern.end), breaks: [], business: [] };
     if (shift.kind !== 'work') return day;

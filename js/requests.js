@@ -1,13 +1,13 @@
 // 希望休・有給希望（共有モードだけで使う）
 // データは Firestore に置く（この端末には保存しない）。記録の形は js/records.js：
-//   settings/requests              { defaultLimit（希望休の初期の上限）, openDay（受付開始日＝25） }  オーナーだけが変える
+//   settings/requests              { defaultLimit（希望休の初期の上限）, openDay（受付の開始日 1〜28・初期値25）, closeDay（受付の終了日 開始日〜28、31＝月末・初期値31） }  オーナーだけが変える
 //   requestQuotas/{スタッフID_月}   { staffId, storeId, month, limit, note }  スタッフ別・月別の上限（夏休みなど）
 //   wishRequests/{スタッフID_日付}  希望休（1日ごと）：status＝pending（申請中）/ approved（承認）/ rejected（却下・理由つき）
 //   wishCounts/{スタッフID_月}      希望休の日数（月の上限を Firestore のルールで確かめるため）
 //   paidRequests/{スタッフID_日付_回数} 有給希望：status と判断の項目。同じ日は3回まで（2回目・3回目は前の回が却下のときだけ）
 //   changeRequests/{種類_記録_回数}  変更申請（承認済みの希望休・有給の取り消し・日付の変更）。承認されたら、オーナーがシフト表に反映する
 //   decisionLogs/…                  判断の履歴（誰が・いつ・どう変えたか）。追加するだけ
-// 受付は日本時間の毎月25日〜月末に、翌月分。Firestore のルールでも同じ期間・上限で止めている。
+// 受付は日本時間の毎月「開始日〜終了日」に、翌月分（オーナーが選ぶ。初めは25日〜月末）。Firestore のルールでも同じ期間・上限で止めている。
 // 希望休も有給も、承認されたものだけが AIシフト作成で休み（有給）になる。承認済みの申請は、スタッフは消せない（変更申請）。
 // 読み書きは backend（K.cloud。テストでは偽物）を通す。
 (function () {
@@ -15,7 +15,9 @@
   const K = window.ShiftApp;
   const U = K.utils;
 
-  const DEFAULTS = { defaultLimit: 2, openDay: 25 };
+  const DEFAULTS = { defaultLimit: 2, openDay: 25, closeDay: 31 }; // closeDay 31＝月末
+  const MONTH_END = 31;
+  let periodSettings = null; // 受付期間の設定（settings/requests）。読み込むまでは初期値（25日〜月末）
   const MAX_LIMIT = 31;
   const STATUS_LABELS = { pending: '申請中', approved: '承認済み', rejected: '却下', cancelled: '取り消し済み' };
   const CHANGE_TYPE_LABELS = { cancel: '取り消し', move: '日付の変更' };
@@ -53,19 +55,69 @@
     return `${y}年${m}月`;
   }
 
-  // 受付期間：{ open, month（申請する月）, opensOn（次に受付が始まる日） }
+  // 受付期間の設定（開始日・終了日）。ない項目は初期値。どちらかがおかしな値なら、両方とも初期値（25日〜月末）にする
+  // （Firestore のルールの requestPeriod と同じ決まり）
+  function periodOf(settings) {
+    const s = settings || {};
+    const o = s.openDay === undefined ? DEFAULTS.openDay : s.openDay;
+    const c = s.closeDay === undefined ? DEFAULTS.closeDay : s.closeDay;
+    const ok = Number.isInteger(o) && Number.isInteger(c) && o >= 1 && o <= 28 && c >= o && c <= MONTH_END;
+    return ok ? { openDay: o, closeDay: c } : { openDay: DEFAULTS.openDay, closeDay: DEFAULTS.closeDay };
+  }
+
+  // 画面で使う受付期間の設定を覚える（設定を読み込んだとき。スタッフ・幹部・オーナー）
+  function usePeriodSettings(settings) {
+    periodSettings = settings || null;
+  }
+
+  function daysIn(month) {
+    const [y, m] = month.split('-').map(Number);
+    return new Date(y, m, 0).getDate();
+  }
+
+  // 「25日〜月末」「15日〜25日」
+  function periodLabel(p = periodOf(periodSettings)) {
+    return `${p.openDay}日〜${p.closeDay >= 29 ? '月末' : `${p.closeDay}日`}`;
+  }
+
+  // 受付期間：{ open, month（申請する月）, opensOn（次に受付が始まる日）, opensFor（その日に受け付け始める月）,
+  //            closesOn（今の受付が終わる日）, after（今月の受付が終わったあと）, openDay, closeDay, today }
+  // month は、受付が終わったあとも「翌月」のまま（その月の申請の状況を見るため）
   function requestWindow() {
     const today = todayJst();
-    const month = nextMonthOf(today.slice(0, 7));
-    const open = Number(today.slice(8, 10)) >= DEFAULTS.openDay;
-    const opensOn = open ? null : `${today.slice(0, 7)}-${DEFAULTS.openDay}`;
-    return { open, month, opensOn, today };
+    const ym = today.slice(0, 7);
+    const month = nextMonthOf(ym);
+    const { openDay, closeDay } = periodOf(periodSettings);
+    const day = Number(today.slice(8, 10));
+    const open = day >= openDay && day <= closeDay;
+    const after = day > closeDay;
+    const opensOn = open ? null : after ? `${month}-${pad(openDay)}` : `${ym}-${pad(openDay)}`;
+    const opensFor = after ? nextMonthOf(month) : month;
+    const closesOn = `${ym}-${pad(Math.min(closeDay, daysIn(ym)))}`;
+    return { open, month, opensOn, opensFor, closesOn, after, openDay, closeDay, today };
+  }
+
+  // 「11月25日」の形
+  function mdLabel(date) {
+    return `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`;
+  }
+
+  // 受付中の終わり：「11月末まで」「11月25日まで」
+  function untilText(w = requestWindow()) {
+    return w.closeDay >= 29 ? `${Number(w.today.slice(5, 7))}月末まで` : `${mdLabel(w.closesOn)}まで`;
+  }
+
+  // 受付期間外の説明：「2026年12月分は11月25日から受け付けます。」／終わったあとは「…の受付は11月25日で終わりました。2027年1月分は12月15日から受け付けます。」
+  function closedText(w = requestWindow()) {
+    if (w.open) return '';
+    const next = `${monthLabel(w.opensFor)}分は${mdLabel(w.opensOn)}から受け付けます。`;
+    return w.after ? `${monthLabel(w.month)}分の受付は${mdLabel(w.closesOn)}で終わりました。${next}` : next;
   }
 
   function settingsOf(settings) {
     const s = settings || {};
     const defaultLimit = Number.isInteger(s.defaultLimit) && s.defaultLimit >= 0 && s.defaultLimit <= MAX_LIMIT ? s.defaultLimit : DEFAULTS.defaultLimit;
-    return { defaultLimit, openDay: DEFAULTS.openDay };
+    return { defaultLimit, ...periodOf(s) };
   }
 
   // 希望休の上限（スタッフ別・月別の上限があればそれ、なければ全体の初期値）
@@ -109,7 +161,7 @@
 
   function requireOpen(month) {
     const w = requestWindow();
-    if (!w.open) throw new Error(`今は受付期間外です。${monthLabel(w.month)}分は${Number(w.opensOn.slice(5, 7))}月${DEFAULTS.openDay}日から受け付けます。`);
+    if (!w.open) throw new Error(`今は受付期間外です。${closedText(w)}`);
     if (month !== w.month) throw new Error(`今受け付けているのは${monthLabel(w.month)}分です。`);
   }
 
@@ -259,6 +311,7 @@
     admin.quotas = d.quotas || [];
     admin.logs = d.logs || [];
     admin.businessDays = d.businessDays || [];
+    usePeriodSettings(admin.settings); // 受付期間も、オーナーが選んだ設定で判断する
   }
 
   function clearAdminData() {
@@ -389,7 +442,19 @@
   async function setDefaultLimit(value, email) {
     const n = Number(value);
     if (!Number.isInteger(n) || n < 0 || n > MAX_LIMIT) throw new Error(`希望休の上限は0〜${MAX_LIMIT}日で入れてください。`);
-    await requireBackend().adminSet('settings', 'requests', { defaultLimit: n, openDay: DEFAULTS.openDay, updatedAt: U.nowIso(), updatedBy: email || '' });
+    const p = periodOf(admin.settings);
+    await requireBackend().adminSet('settings', 'requests', { defaultLimit: n, openDay: p.openDay, closeDay: p.closeDay, updatedAt: U.nowIso(), updatedBy: email || '' });
+  }
+
+  // 受付期間（オーナーだけ）：開始日 1〜28、終了日は開始日〜28 か 31（月末）。希望休の初期の上限は今のまま
+  async function setRequestPeriod(openValue, closeValue, email) {
+    const openDay = Number(openValue);
+    const closeDay = Number(closeValue);
+    if (!Number.isInteger(openDay) || openDay < 1 || openDay > 28) throw new Error('受付の開始日は1〜28日から選んでください。');
+    if (!Number.isInteger(closeDay) || !((closeDay >= 1 && closeDay <= 28) || closeDay === MONTH_END)) throw new Error('受付の終了日は1〜28日か「月末」から選んでください。');
+    if (closeDay < openDay) throw new Error('受付の終了日は、開始日と同じ日か、あとの日にしてください。');
+    const limit = settingsOf(admin.settings).defaultLimit;
+    await requireBackend().adminSet('settings', 'requests', { defaultLimit: limit, openDay, closeDay, updatedAt: U.nowIso(), updatedBy: email || '' });
   }
 
   // スタッフ別・月別の上限（value が空なら、初期値に戻す）
@@ -418,7 +483,7 @@
   async function decide(kind, record, { status, reason, email, role = 'owner' }) {
     if (role === 'manager') {
       const w = requestWindow();
-      if (!w.open || record.month !== w.month) throw new Error('幹部が判断できるのは、受付期間（25日〜月末）の翌月分だけです。');
+      if (!w.open || record.month !== w.month) throw new Error(`幹部が判断できるのは、受付期間（${periodLabel()}）の翌月分だけです。`);
     }
     K.records.cleanReason(status, reason); // 理由の確認（画面にすぐ知らせるため。ルールでも確かめる）
     return requireBackend().decideRequest(kind, record, { status, reason, email, role });
@@ -464,6 +529,12 @@
     nextMonthOf,
     monthLabel,
     requestWindow,
+    periodOf,
+    periodLabel,
+    usePeriodSettings,
+    untilText,
+    closedText,
+    setRequestPeriod,
     settingsOf,
     limitFor,
     limitMessage,

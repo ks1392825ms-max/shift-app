@@ -55,9 +55,18 @@
         : { cls: 'cell--blank', text: '', label: '未入力' };
     }
     if (TIMED_KINDS.includes(shift.kind)) {
-      const p = K.storage.getPattern(shift.patternId);
+      const p = K.storage.shiftPattern(shift);
       const isBusiness = shift.kind === 'business';
       const time = p ? `${U.formatTime(p.start)}〜${U.formatTime(p.end)}` : '';
+      // その日だけ勤務時間を変えた日（日別のタイムラインで動かした日）は、パターンの名前の代わりに時間を出す
+      if (p && p.custom) {
+        return {
+          cls: `cell--${shift.kind} is-custom-time`,
+          text: K.businessUI.shortRange({ start: U.toMinutes(p.start), end: U.toMinutes(p.end) }),
+          label: `${KIND_LABELS[shift.kind]} ${p.label}（この日だけ ${time}）`,
+          color: p.color,
+        };
+      }
       return {
         cls: `cell--${shift.kind}`,
         text: isBusiness ? [el('span', { class: 'cell__tag' }, '社'), p ? p.label : '?'] : p ? p.label : '?',
@@ -345,17 +354,20 @@
     const current = view.map.get(`${member.id}|${date}`) || null;
     // その曜日のいつもの勤務（スタッフの設定。勤務パターンID または "off"）
     const usual = (member.weeklyPatterns || {})[String(K.calc.weekdayOf(date))] || null;
+    // いつもの勤務の勤務パターンID（社用なら "business:" のあと）
+    const usualPid = K.storage.weeklyBusinessPattern(usual) || usual;
     // いつもの勤務を先頭に、そのあとは店舗ごとの勤務パターンの並び順（設定 > 勤務パターン で変えられる）
     const byStoreOrder = K.storage.comparePatterns(K.app.currentStore().id);
     const patterns = member.patternIds
       .map((id) => K.storage.getPattern(id))
       .filter((p) => p && !p.deleted)
-      .sort((a, b) => (b.id === usual) - (a.id === usual) || byStoreOrder(a, b));
+      .sort((a, b) => (b.id === usualPid) - (a.id === usualPid) || byStoreOrder(a, b));
 
     const isCurrent = (kind, patternId) =>
       Boolean(current && current.kind === kind && (!TIMED_KINDS.includes(kind) || current.patternId === patternId));
 
-    const isUsual = (kind, patternId) => Boolean(usual) && ((kind === 'work' && patternId === usual) || (kind === 'off' && usual === 'off'));
+    const isUsual = (kind, patternId) =>
+      Boolean(usual) && ((kind === 'work' && patternId === usual) || (kind === 'off' && usual === 'off') || (kind === 'business' && usual === `business:${patternId}`));
 
     const option = ({ cls, main, sub, kind, patternId, color }) =>
       el(
@@ -807,6 +819,7 @@
     if (!problems) return null;
     const rows = [
       ['早番不足（早番が0人の日）', problems.earlyZero.length ? `${problems.earlyZero.length}日：${problems.earlyZero.map((x) => `${shortDate(x.date)} ${x.reason}`).join('／')}` : null],
+      ['出勤時刻（毎日そろえる時刻に出勤する人がいない日）', problems.startMissing && problems.startMissing.length ? `${problems.startMissing.length}か所：${problems.startMissing.map((x) => `${shortDate(x.date)} ${U.formatTime(x.time)}`).join('／')}` : null],
       ['連続勤務（早早・遅遅）', problems.repeats.length ? `${problems.repeats.length}か所：${problems.repeats.map((r) => `${r.name}さん ${shortDate(r.dates[0])}〜（${r.reason}）`).join('／')}` : null],
       ['必要人数不足', problems.shortDays.length ? `${problems.shortDays.length}日：${problems.shortDays.join('、')}` : null],
       ['早番と遅番の回数の差（3回以上）', problems.imbalance && problems.imbalance.length ? problems.imbalance.map((x) => `${x.name}さん 早番${x.early}回・遅番${x.late}回`).join('／') : null],
@@ -1228,23 +1241,64 @@
       ),
       // 店舗の切り替えは、画面上部（ヘッダー）で行う
       el('span', { class: 'store-tag', style: { '--store-color': store.color } }, store.name),
-      el(
-        'div',
-        { class: 'roster-toolbar__actions' },
-        checkButton(),
-        absenceButton(),
-        el('button', { type: 'button', class: 'check-btn export-btn', onclick: openExportSheet }, '出力'),
-        el('button', { type: 'button', class: 'check-btn mtl-btn', onclick: () => K.app.navigate('monthTimeline') }, '月のタイムライン'),
-        pub ? null : el('button', { type: 'button', class: 'check-btn weekly-btn', onclick: applyWeekly }, '曜日の設定を反映'),
-        pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn ai-btn', onclick: openAutoSheet }, 'AIで作成'),
-        !pub && autoCount ? el('button', { type: 'button', class: 'check-btn tool-btn undo-auto-btn', onclick: undoAuto }, `自動作成を取り消す（${autoCount}）`) : null,
-        pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn confirm-btn', onclick: confirmShift }, 'シフトを確定'),
-        store.rosterOrder && store.rosterOrder.length
-          ? el('button', { type: 'button', class: 'check-btn tool-btn order-reset-btn', onclick: resetColumnOrder }, '並び順を元に戻す')
-          : null
-      )
+      toolbarActions(pub, autoCount, store)
     );
   }
+
+  // シフト表の上のボタン（11/5〜）：よく使うもの（チェック・AIで作成・シフトを確定）だけを1行に並べ、
+  // 時々使うものは「⋯ そのほか」にまとめる。パソコンの幅では、出力・月のタイムラインも横に出す。ボタンの働きは前と同じ
+  function toolbarActions(pub, autoCount, store) {
+    const absences = K.storage.getAbsences({ storeId: view.store.id, month: view.month });
+    const handling = absences.filter((a) => a.absence.status === 'handling').length;
+    const more = el('details', { class: 'tb-more' });
+    // メニューの項目を押したら、メニューを閉じてから動かす
+    const item = (cls, text, onclick, sub) =>
+      el(
+        'button',
+        {
+          type: 'button',
+          class: `tb-menu__item ${cls}`,
+          onclick: () => {
+            more.open = false;
+            onclick();
+          },
+        },
+        el('span', { class: 'tb-menu__text' }, text),
+        sub ? el('span', { class: 'tb-menu__sub' }, sub) : null
+      );
+    more.append(
+      el('summary', { class: 'check-btn tb-more__btn', 'aria-label': 'そのほかの操作' }, el('span', { class: 'tb-more__dots', 'aria-hidden': 'true' }, '⋯'), el('span', { class: 'tb-more__label' }, 'そのほか')),
+      el(
+        'div',
+        { class: 'tb-menu', role: 'menu' },
+        item('tb-menu__export', '出力', openExportSheet, '印刷・画像・PDF・CSV'),
+        item('tb-menu__mtl', '月のタイムライン', () => K.app.navigate('monthTimeline'), '1か月の勤務を時間の帯で見る'),
+        pub ? null : item('weekly-btn', '曜日の設定を反映', applyWeekly, 'スタッフの曜日ごとの勤務を入れる'),
+        !pub && autoCount ? item('undo-auto-btn', `自動作成を取り消す（${autoCount}）`, undoAuto, 'AIで入れたマスを消す') : null,
+        absences.length && !handling ? item('absence-btn', `欠勤・急な休み（${absences.length}件）`, openAbsenceList) : null,
+        store.rosterOrder && store.rosterOrder.length ? item('order-reset-btn', '並び順を元に戻す', resetColumnOrder) : null
+      )
+    );
+    return el(
+      'div',
+      { class: 'roster-toolbar__actions tb' },
+      checkButton(),
+      // 対応中の欠勤・急な休みは、目立つように外に出す
+      handling ? absenceButton() : null,
+      pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn ai-btn tb-primary', onclick: openAutoSheet }, 'AIで作成'),
+      pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn confirm-btn tb-confirm', onclick: confirmShift }, 'シフトを確定'),
+      el('button', { type: 'button', class: 'check-btn export-btn tb-wide', onclick: openExportSheet }, '出力'),
+      el('button', { type: 'button', class: 'check-btn mtl-btn tb-wide', onclick: () => K.app.navigate('monthTimeline') }, '月のタイムライン'),
+      more
+    );
+  }
+
+  document.addEventListener('pointerdown', (e) => {
+    for (const d of document.querySelectorAll('.tb-more[open]')) if (!d.contains(e.target)) d.open = false;
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') for (const d of document.querySelectorAll('.tb-more[open]')) d.open = false;
+  });
 
   function shiftMonth(month, delta) {
     const [y, m] = month.split('-').map(Number);

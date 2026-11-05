@@ -64,7 +64,7 @@
     let sub = '';
     let cls = 'blank';
     if (r.shift && (r.shift.kind === 'work' || r.shift.kind === 'business')) {
-      const p = r.day ? r.day.pattern : K.storage.getPattern(r.shift.patternId);
+      const p = r.day ? r.day.pattern : K.storage.shiftPattern(r.shift);
       cls = r.shift.kind;
       main = el(
         'span',

@@ -5139,6 +5139,73 @@ body[data-role="staff"] .login-role {
   }
 }
 
+/* ==== その日だけ勤務時間を変えた日（日別のタイムラインで動かした日） ==== */
+/* シフト表のマス：左上に小さな印（点） */
+.cell.is-custom-time {
+  position: relative;
+}
+
+.cell.is-custom-time::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+/* タイムラインの勤務の棒：長押しで動かせる */
+.tl-seg--work.is-draggable {
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.tl-seg--work.is-custom-time {
+  outline: 2px dashed var(--warn);
+  outline-offset: -2px;
+}
+
+.tl-seg--work.is-pressing {
+  filter: brightness(1.08);
+  transition: filter 0.4s;
+}
+
+.tl-seg--work.is-dragging {
+  z-index: 3;
+  cursor: grabbing;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent), 0 6px 14px rgba(0, 0, 0, 0.25);
+  touch-action: none;
+}
+
+/* 端をつかんだときは、つかんだ側に太い線 */
+.tl-seg--work.is-dragging[data-mode='start'] {
+  border-left: 4px solid var(--accent);
+}
+
+.tl-seg--work.is-dragging[data-mode='end'] {
+  border-right: 4px solid var(--accent);
+}
+
+/* 動かしている間の時間（棒の上） */
+.tl-drag-label {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .cell.has-wish.is-wish-pending .cell__wish {
   background: var(--surface);
   color: var(--accent);
@@ -5712,4 +5779,260 @@ body[data-role="staff"] .login-role {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+/* ==== 受付期間（オーナー）：開始日〜終了日を1行に並べる ==== */
+.req-period-card .req-period {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.req-period-card .req-period select {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}
+
+/* オーナーの申請の画面のタブ：名前を途中で折り返さない（「受付期間・上限」など） */
+.screen[data-screen="requests"] .req-tabs .segment__btn {
+  white-space: nowrap;
+}
+
+@media (max-width: 360px) {
+  .screen[data-screen="requests"] .req-tabs .segment__btn {
+    padding: 6px 2px;
+    font-size: 0.74rem;
+  }
+}
+
+/* ==== シフト表の上のボタン（11/5〜）：よく使うものを1行・時々使うものは「⋯ そのほか」 ==== */
+.roster-toolbar__actions.tb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.tb .check-btn {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* AIで作成：いちばん目立つ（黒） */
+.tb .tb-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.tb .tb-primary::before {
+  content: '✦';
+  margin-right: 6px;
+}
+
+/* シフトを確定：太い線 */
+.tb .tb-confirm {
+  border: 2px solid var(--text);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.tb .tb-confirm::before {
+  content: '✓';
+  margin-right: 6px;
+}
+
+/* 出力・月のタイムラインは、パソコンの幅だけ外に出す（スマホは「そのほか」の中） */
+.tb .tb-wide.tb-wide {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .tb .tb-wide.tb-wide {
+    display: inline-flex;
+  }
+
+  /* 外に出ている「出力」「月のタイムライン」は、メニューの中には出さない */
+  .tb-menu .tb-menu__export,
+  .tb-menu .tb-menu__mtl {
+    display: none;
+  }
+}
+
+/* 「⋯ そのほか」 */
+.tb-more {
+  position: relative;
+  margin-left: auto;
+}
+
+.tb-more > summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tb-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tb-more__dots {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.tb-more[open] > summary {
+  border-color: var(--text);
+}
+
+.tb-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 260px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+
+.tb-menu__item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tb-menu__item:hover,
+.tb-menu__item:focus-visible {
+  background: var(--surface-2);
+}
+
+.tb-menu__sub {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+/* スマホ：2段にそろえる（1段目：チェックと ⋯、2段目：AIで作成とシフトを確定を半分ずつ） */
+@media (max-width: 600px) {
+  .tb .check-btn {
+    padding: 8px 12px;
+    font-size: 0.88rem;
+  }
+
+  .tb > .check-btn:not(.tb-primary):not(.tb-confirm) {
+    order: 1;
+    flex: 1 1 calc(100% - 64px);
+  }
+
+  .tb > .tb-more {
+    order: 2;
+    margin-left: 0;
+  }
+
+  .tb > .tb-primary,
+  .tb > .tb-confirm {
+    order: 3;
+    flex: 1 1 calc(50% - 4px);
+  }
+
+  .tb-more__label {
+    display: none;
+  }
+}
+
+@media (max-width: 360px) {
+  .roster-toolbar__actions.tb {
+    gap: 6px;
+  }
+
+  .tb .check-btn {
+    padding: 6px 9px;
+    font-size: 0.78rem;
+  }
+
+  .tb .tb-primary::before,
+  .tb .tb-confirm::before {
+    margin-right: 3px;
+  }
+}
+
+/* スタッフの設定：パートの「休みの日数を決めない」で隠す欄 */
+.field[hidden] {
+  display: none;
+}
+
+/* 設定 > チェック：毎日そろえる出勤時刻（えらぶ札） */
+.start-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.start-chip {
+  position: relative;
+}
+
+.start-chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.start-chip span {
+  display: inline-flex;
+  align-items: center;
+  min-width: 56px;
+  min-height: 40px;
+  justify-content: center;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.start-chip input:checked + span {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.start-chip input:checked + span::before {
+  content: '✓';
+  margin-right: 4px;
+}
+
+.start-chip input:focus-visible + span {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }

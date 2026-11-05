@@ -103,7 +103,7 @@
       }
       const part = m.employment === 'part';
       // 契約の勤務曜日が未登録：働く曜日（空欄＝全曜日）も固定休の曜日も登録されていない
-      if (part && !(m.workWeekdays || []).length && !((m.fixedOff && m.fixedOff.weekdays) || []).length) {
+      if (part && !m.offFlex && !(m.workWeekdays || []).length && !((m.fixedOff && m.fixedOff.weekdays) || []).length) {
         noWorkdays.push(m);
         continue;
       }
@@ -114,12 +114,19 @@
           if (s.kind === 'work' || s.kind === 'business') elsewhere.add(s.date);
         }
       }
-      people.push({ m, pats, status: new Map(), elsewhere, counted: K.calc.countsAsStaff(m), role: m.role, part, contractOff: new Set(), paidFixed: new Set(), aiOff: new Set() });
+      // flex：休みの日数を決めないパート（人数が足りない日にだけ入れる。入れない日は休み）／bizPat：いつもの勤務の社用の日 → 勤務パターンID
+      people.push({ m, pats, status: new Map(), elsewhere, counted: K.calc.countsAsStaff(m), role: m.role, part, flex: part && Boolean(m.offFlex), contractOff: new Set(), paidFixed: new Set(), aiOff: new Set(), bizPat: new Map() });
     }
     if (skipped.length) notes.push(`勤務パターンが登録されていないため対象外：${skipped.map((m) => `${m.name}さん`).join('、')}`);
     if (noWorkdays.length) {
       notes.push(`パートの契約の勤務曜日（この店舗で働く曜日、または固定休の曜日）が登録されていないため対象外：${noWorkdays.map((m) => `${m.name}さん`).join('、')}（設定 > スタッフで登録してください）`);
     }
+
+    // いつもの勤務が「社用」の曜日なら、その勤務パターンID（使える勤務パターンのときだけ）
+    const usualBusiness = (p, w) => {
+      const pid = K.storage.weeklyBusinessPattern((p.m.weeklyPatterns || {})[String(w)]);
+      return pid && p.pats.some((x) => x.id === pid) ? pid : null;
+    };
 
     // ---- 1・2：日ごとの状態 ----
     // work（入力済みの勤務）/ offFixed（入力済みの休み）/ off（新しく休み）/ closed / skip（対象外）/ cand（勤務の候補）
@@ -147,6 +154,11 @@
         else if (businessDays.has(date)) st = 'business'; // 社用で不在（シフト表に「社用」を入れる。店舗の人数には数えない）
         else if (paidDays.has(date)) st = 'paid'; // 承認済みの有給（シフト表に「有給」を入れる）
         else if (wishes.has(date)) st = 'off'; // 承認済みの希望休（平日・土日祝とも）
+        else if (usualBusiness(p, w)) {
+          // いつもの勤務が「社用」の曜日（11/5〜。店舗の人数には数えない）
+          st = 'business';
+          p.bizPat.set(date, usualBusiness(p, w));
+        }
         else st = 'cand';
         p.status.set(date, st);
       }
@@ -471,6 +483,11 @@
       if (sl) daySlot.set(`${p.m.id}|${d0}`, sl);
     }
     const earlyZeroDays = [];
+    // 毎日そろえる出勤時刻（設定 > チェック。平日・土日祝）。その日に、その時刻に出勤する人を最低1人ずつ
+    const startTimesOf = (date) => (info.get(date).dayType === 'holiday' ? checks.startTimesHoliday : checks.startTimesWeekday) || [];
+    const startMissing = []; // { date, time, reason }
+    // その時刻に始まる勤務パターンを使える人が、店舗に1人もいない時刻は、そろえない（知らせない）
+    const storeStartable = new Set(people.filter((p) => p.counted).flatMap((p) => p.pats.map((x) => x.start)));
     const dayCtx = new Map(); // 日付 → { req, fixedWork, optsOf: Map(スタッフID → { opts, usual }) }（⑥で使う）
     for (const date of dates) {
       const i = info.get(date);
@@ -483,10 +500,12 @@
         if (!sl) continue;
         daySlot.set(`${p.m.id}|${date}`, sl);
         if (daySlot.get(`${p.m.id}|${prevDate}`) === sl) repeatWhy.set(`${p.m.id}|${date}`, '入力済みのマスのため');
-        if (p.counted && s.kind === 'work') fixedWork.push({ p, pat: K.storage.getPattern(s.patternId) });
+        if (p.counted && s.kind === 'work') fixedWork.push({ p, pat: K.storage.shiftPattern(s) });
       }
       if (i.closed) continue;
-      const day = people.filter((p) => p.status.get(date) === 'cand');
+      const dayAll = people.filter((p) => p.status.get(date) === 'cand');
+      const day = dayAll.filter((p) => !p.flex);
+      const flexDay = dayAll.filter((p) => p.flex);
       // 30分ごとの必要人数
       const req = new Map();
       for (const b of i.bands) {
@@ -545,6 +564,32 @@
         picks.set(p, old);
         return r;
       };
+      // ①' 休みの日数を決めないパート：足りない時間帯が減るときだけ、1人ずつ入れる（いちばん減る人・パターンから）。入れない人は休み
+      {
+        let left = flexDay.filter((p) => p.counted);
+        let now = shortage();
+        while (now > 0 && left.length) {
+          let best = null;
+          for (const p of left) {
+            const { opts, usual } = optionsOf(p);
+            for (const pat of opts) {
+              picks.set(p, pat);
+              const sh = shortage();
+              picks.delete(p);
+              if (sh >= now) continue;
+              const score = [now - sh, -(slotCount.get(p.m.id) ? slotCount.get(p.m.id).early + slotCount.get(p.m.id).late : 0)];
+              if (!best || better(score, best.score)) best = { p, pat, sh, score, opts, usual };
+            }
+          }
+          if (!best) break;
+          picks.set(best.p, best.pat);
+          ctx.set(best.p, { opts: best.opts, usual: best.usual, prev: daySlot.get(`${best.p.m.id}|${prevDate}`) || null, single: new Set(best.opts.map(slotOf)).size < 2 });
+          optsOfDay.set(best.p.m.id, { opts: best.opts, usual: best.usual });
+          now = best.sh;
+          left = left.filter((p) => p !== best.p);
+        }
+        for (const p of flexDay) if (!picks.has(p)) p.status.set(date, 'off');
+      }
       // ② 必要人数の不足が実際に減るときだけ変える
       let cur = shortage();
       for (let guard = 0; guard < 80 && cur > 0; guard++) {
@@ -597,6 +642,43 @@
             : '早番の勤務パターンを使える人が、この日は出勤できません（休み・希望休・有給・固定休・勤務曜日・いつもの勤務など）',
         });
       }
+      // ③' 毎日そろえる出勤時刻：その時刻に出勤する人がいなければ、不足を増やさない範囲で、1人の勤務をその時刻に始まるパターンに変える
+      //     （ほかのそろえる時刻を0人にしない・早番を0人にしない。早早・遅遅にならない人・回数の少ない人を先に）
+      const needStarts = anyWorker ? startTimesOf(date) : [];
+      const startCount = (time) =>
+        fixedWork.filter((f) => f.pat && f.pat.start === time).length + [...picks].filter(([p, pat]) => p.counted && pat.start === time).length;
+      const startsCovered = () => needStarts.filter((t) => startCount(t) > 0).length;
+      for (const time of needStarts) {
+        if (!storeStartable.has(time) || startCount(time) > 0) continue;
+        let best = null;
+        const before = startsCovered();
+        for (const p of picks.keys()) {
+          if (!p.counted) continue;
+          for (const pat of ctx.get(p).opts) {
+            if (pat.start !== time || pat === picks.get(p)) continue;
+            const r = tryPat(p, pat, () => ({ sh: shortage(), cov: startsCovered(), early: earlyCount() }));
+            if (r.sh > cur || r.cov <= before || (anyWorker && r.early === 0 && earlyCount() > 0)) continue;
+            const mine = slotCount.get(p.m.id) || { early: 0, late: 0 };
+            const score = [-repeatsIf(p, pat), -(r.sh - cur), -mine[slotOf(pat)]];
+            if (!best || better(score, best.score)) best = { p, pat, sh: r.sh, score };
+          }
+        }
+        if (best) {
+          picks.set(best.p, best.pat);
+          cur = best.sh;
+          if (repeatsIf(best.p, best.pat)) moved.set(best.p, `${U.formatTime(time)}に出勤する人を確保するため`);
+        } else {
+          const can = [...picks.keys()].some((p) => p.counted && ctx.get(p).opts.some((x) => x.start === time));
+          startMissing.push({
+            date,
+            time,
+            reason: can
+              ? 'その時刻に変えると、必要人数が足りなくなる・ほかの出勤時刻が0人になるため'
+              : 'その時刻に始まる勤務パターンを使える人が、この日は出勤できません（休み・希望休・有給・固定休・勤務曜日・いつもの勤務など）',
+          });
+        }
+      }
+      const startsBase = startsCovered();
       // ④ その日の早番・遅番の人数をそろえる（役割ごと。何も悪くならない入れ替えだけ）
       for (let guard = 0; guard < 40; guard++) {
         let done = false;
@@ -612,7 +694,7 @@
             if (!p.counted || p.part || p.role !== role || slotOf(picks.get(p)) !== from) continue;
             for (const pat of ctx.get(p).opts) {
               if (slotOf(pat) !== to || repeatsIf(p, pat)) continue;
-              const ok = tryPat(p, pat, () => shortage() <= cur && (earlyCount() > 0 || !anyWorker));
+              const ok = tryPat(p, pat, () => shortage() <= cur && (earlyCount() > 0 || !anyWorker) && startsCovered() >= startsBase);
               if (!ok) continue;
               // 早番が多い人を遅番に、遅番が多い人を早番に（回数の偏りが減る人を先に）
               const mine = slotCount.get(p.m.id) || { early: 0, late: 0 };
@@ -647,7 +729,7 @@
             const oldB = picks.get(b);
             picks.set(a, aPat);
             picks.set(b, bPat);
-            const ok = shortage() <= cur && (earlyCount() > 0 || !anyWorker);
+            const ok = shortage() <= cur && (earlyCount() > 0 || !anyWorker) && startsCovered() >= startsBase;
             picks.set(a, oldA);
             picks.set(b, oldB);
             if (!ok) continue;
@@ -683,17 +765,18 @@
     const patOf = new Map([...K.storage.getStaff({ storeId })].map((m) => [m.id, m]));
     const dayShortage = (date) => {
       const c = dayCtx.get(date);
-      if (!c) return { short: 0, early: 0, workers: 0 };
+      if (!c) return { short: 0, early: 0, workers: 0, starts: 0 };
       const cov = new Map();
       let early = 0;
       let workers = 0;
+      const startSet = new Set();
       const add = (role, pat) => {
         for (let t = Math.floor(toMin(pat.start) / SLOT) * SLOT; t + SLOT <= toMin(pat.end); t += SLOT) {
           if (!cov.has(t)) cov.set(t, { stylist: 0, assistant: 0 });
           cov.get(t)[role] += 1;
         }
       };
-      for (const f of c.fixedWork) if (f.pat) { add(f.p.role, f.pat); workers += 1; if (slotOf(f.pat) === 'early') early += 1; }
+      for (const f of c.fixedWork) if (f.pat) { add(f.p.role, f.pat); workers += 1; startSet.add(f.pat.start); if (slotOf(f.pat) === 'early') early += 1; }
       for (const p of people) {
         if (!p.counted) continue;
         const a = assignAt.get(`${p.m.id}|${date}`);
@@ -701,6 +784,7 @@
         const pat = K.storage.getPattern(a.patternId);
         add(p.role, pat);
         workers += 1;
+        startSet.add(pat.start);
         if (slotOf(pat) === 'early') early += 1;
       }
       let short = 0;
@@ -708,7 +792,7 @@
         const v = cov.get(t) || { stylist: 0, assistant: 0 };
         short += Math.max(0, r.stylist - v.stylist) + Math.max(0, r.assistant - v.assistant);
       }
-      return { short, early, workers };
+      return { short, early, workers, starts: startTimesOf(date).filter((t) => startSet.has(t)).length };
     };
     for (const p of people) {
       if (p.part || !patOf.has(p.m.id)) continue;
@@ -758,7 +842,7 @@
           const worse = run.some((d) => {
             const b = before.get(d);
             const n = dayShortage(d);
-            return n.short > b.short || (b.early > 0 && n.early === 0);
+            return n.short > b.short || (b.early > 0 && n.early === 0) || n.starts < b.starts;
           });
           if (worse) {
             for (const x of plan2) x.cur.patternId = x.old;
@@ -826,6 +910,9 @@
         notes.push(`連休の回数に差があります（${counts.map(([p, n]) => `${p.m.name}さん${n}回`).join('・')}）。人数に余裕のある平日が足りないため、そろえきれませんでした。`);
       }
     }
+    if (startMissing.length) {
+      notes.push(`出勤時刻をそろえられなかった日があります（無理に勤務を変えていません）：${startMissing.map((x) => `${md(x.date)}（${U.WEEKDAYS[K.calc.weekdayOf(x.date)]}）${U.formatTime(x.time)}に出勤する人がいません［${x.reason}］`).join('、')}`);
+    }
     if (earlyZeroDays.length) {
       notes.push(`早番が0人の日があります（無理に勤務を変えていません）：${earlyZeroDays.map((x) => `${md(x.date)}（${U.WEEKDAYS[K.calc.weekdayOf(x.date)]}）${x.reason}`).join('、')}`);
     }
@@ -881,7 +968,7 @@
       for (const date of dates) {
         const st = p.status.get(date);
         if (st === 'off' || st === 'paid') assignments.push({ staffId: p.m.id, date, kind: st, patternId: null });
-        else if (st === 'business') assignments.push({ staffId: p.m.id, date, kind: 'business', patternId: p.pats[0].id });
+        else if (st === 'business') assignments.push({ staffId: p.m.id, date, kind: 'business', patternId: p.bizPat.get(date) || p.pats[0].id });
       }
     }
     assignments.sort((a, b) => a.date.localeCompare(b.date));
@@ -894,7 +981,7 @@
       renkyu: weeklyRule(p) ? shiftRenkyu(p) : renkyuCount(p),
       part: p.part,
     }));
-    const problems = { earlyZero: earlyZeroDays, repeats: avoidRuns, constrained, shortDays, imbalance };
+    const problems = { earlyZero: earlyZeroDays, startMissing, repeats: avoidRuns, constrained, shortDays, imbalance };
     return { storeId, month, assignments, notes, problems, skipped: [...skipped, ...noWorkdays].map((m) => m.id), summary };
   }
 

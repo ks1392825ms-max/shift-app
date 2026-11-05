@@ -109,6 +109,26 @@
       value: member && Number.isInteger(member.monthlyOffDays) ? String(member.monthlyOffDays) : '',
     });
     const holidayOffInput = el('input', { id: 'staff-holiday-off', type: 'checkbox', checked: Boolean(member && member.fixedOff && member.fixedOff.holidays) });
+    // パートの「休みの日数を決めない」（11/5〜）
+    const offFlexInput = el('input', { id: 'staff-off-flex', type: 'checkbox', checked: Boolean(member && member.offFlex), onchange: () => updateOffFlex() });
+    const offFlexField = el(
+      'div',
+      { class: 'field off-flex-field' },
+      el('label', { class: 'check-line' }, offFlexInput, '休みの日数を決めない（人数が足りない日に入れる）'),
+      el(
+        'p',
+        { class: 'field__note' },
+        'パートの人だけ選べます。AIシフト作成では、ほかの人を入れたあと、必要人数が足りない日・時間帯にだけ入れ、入れない日は休みにします。働く曜日・固定休を登録していなくても対象になります。週休・月の休日数は使いません（休みの日数のチェックもしません）。固定休・希望休・有給は休みのままです。'
+      )
+    );
+    const offDayFields = [];
+    // パートで「決めない」を選んだときは、週休・月の休日数の欄を隠す
+    function updateOffFlex() {
+      const part = state.employment === 'part';
+      offFlexField.hidden = !part;
+      const flex = part && offFlexInput.checked;
+      for (const f of offDayFields) f.hidden = flex;
+    }
     const noteInput = el('textarea', { id: 'staff-note', class: 'field__input', rows: '2', maxlength: '100', placeholder: '例：日曜は店舗Bで勤務' }, member ? member.note || '' : '');
     const emailInput = el('input', {
       id: 'staff-email',
@@ -205,10 +225,19 @@
             },
             el('option', { value: '', selected: !current }, '設定なし'),
             el('option', { value: 'off', selected: current === 'off' }, '休（通常休）'),
-            chosen.map((p) => el('option', { value: p.id, selected: current === p.id }, `${p.label}（${U.formatTime(p.start)}〜${U.formatTime(p.end)}）`))
+            chosen.map((p) => el('option', { value: p.id, selected: current === p.id }, `${p.label}（${U.formatTime(p.start)}〜${U.formatTime(p.end)}）`)),
+            // 社用（終日・11/5〜）：その人の勤務パターンの時間で「社用」を入れる（店舗の人数には数えない）
+            chosen.length
+              ? el(
+                  'optgroup',
+                  { label: '社用（終日・人数に数えない）' },
+                  chosen.map((p) => el('option', { value: `business:${p.id}`, selected: current === `business:${p.id}` }, `社用（${p.label} ${U.formatTime(p.start)}〜${U.formatTime(p.end)}）`))
+                )
+              : null
           );
           // 選べなくなったパターンが設定されていたら外す
-          if (current && current !== 'off' && !chosen.some((p) => p.id === current)) delete state.weekly[String(w)];
+          const pid = K.storage.weeklyBusinessPattern(current) || current;
+          if (current && current !== 'off' && !chosen.some((p) => p.id === pid)) delete state.weekly[String(w)];
           return el('label', { class: `weekly-row${w === 0 ? ' is-sun' : w === 6 ? ' is-sat' : ''}` }, el('span', { class: 'weekly-row__day' }, U.WEEKDAYS[w]), select);
         })
       );
@@ -236,6 +265,7 @@
         isNew: isNewInput.checked,
         excludeFromCount: excludeInput.checked,
         weeklyOffDays: weeklyOffSelect.value,
+        offFlex: state.employment === 'part' && offFlexInput.checked,
         monthlyOffDays: monthlyOffInput.value.trim(),
         fixedOff: { weekdays: [...state.fixedOff], holidays: holidayOffInput.checked },
         workWeekdays: [...state.workWeekdays],
@@ -286,6 +316,8 @@
     renderPatterns();
     renderWeekly();
     setTimeout(() => nameInput.focus(), 0);
+    // フォームを作り終えてから、パートの「決めない」の表示を合わせる
+    queueMicrotask(updateOffFlex);
 
     return el(
       'form',
@@ -338,9 +370,13 @@
           label: '雇用形態',
           options: Object.entries(U.EMPLOYMENT_LABELS),
           value: state.employment,
-          onChange: (key) => (state.employment = key),
+          onChange: (key) => {
+            state.employment = key;
+            updateOffFlex();
+          },
         })
       ),
+      offFlexField,
       el(
         'div',
         { class: 'field' },
@@ -368,17 +404,17 @@
         el(
           'p',
           { class: 'field__note' },
-          'シフト表の「曜日の設定を反映」で、未入力の日にこの勤務を入れられます。入力シートでは「いつも」の印が付きます。'
+          'シフト表の「曜日の設定を反映」で、未入力の日にこの勤務を入れられます。入力シートでは「いつも」の印が付きます。「社用」を選ぶと、その曜日は社用（終日・店舗の人数に数えない）が入ります（AIシフト作成でも）。'
         )
       ),
-      el(
+      (offDayFields[0] = el(
         'div',
         { class: 'field' },
         el('label', { class: 'field__label', for: 'staff-weekly-off' }, '週休'),
         weeklyOffSelect,
         el('p', { class: 'field__note' }, '例：週2休の人は「週2日」。自動チェックで、月曜〜日曜の休みが足りない週を知らせます。AIシフト作成でも使います。')
-      ),
-      el(
+      )),
+      (offDayFields[1] = el(
         'div',
         { class: 'field' },
         el('label', { class: 'field__label', for: 'staff-monthly-off' }, '月の休日数'),
@@ -388,7 +424,7 @@
           { class: 'field__note' },
           '空欄なら、設定 > チェックの「月の休日数の目安」を使います。入れると、この人だけこの日数で確かめ、AIシフト作成もこの日数まで休みを入れます（定休日・固定休・希望休も1日として数えます。週休より優先）。'
         )
-      ),
+      )),
       el(
         'div',
         { class: 'field' },

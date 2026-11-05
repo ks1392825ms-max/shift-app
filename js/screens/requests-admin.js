@@ -291,6 +291,41 @@
   }
 
   // ---- 希望休の上限 ----
+  // 受付期間（翌月分を受け付ける期間）を選ぶ：開始日 1〜28日、終了日 開始日〜28日か「月末」。全店舗共通・オーナーだけ
+  function periodCard(settings) {
+    const days = (from) => Array.from({ length: 28 - from + 1 }, (_, i) => from + i);
+    const option = (value, label) => el('option', { value: String(value) }, label);
+    const closeSelect = el('select', { id: 'req-close-day', class: 'field__input field__input--short', 'aria-label': '受付の終了日' });
+    const fillClose = (openDay, closeDay) => {
+      closeSelect.replaceChildren(...days(openDay).map((d) => option(d, `${d}日`)), option(31, '月末'));
+      // 開始日より前の終了日は選べないので「月末」にする
+      closeSelect.value = closeDay >= 29 || closeDay < openDay ? '31' : String(closeDay);
+    };
+    const openSelect = el(
+      'select',
+      { id: 'req-open-day', class: 'field__input field__input--short', 'aria-label': '受付の開始日', onchange: () => fillClose(Number(openSelect.value), Number(closeSelect.value)) },
+      days(1).map((d) => option(d, `${d}日`))
+    );
+    openSelect.value = String(settings.openDay);
+    fillClose(settings.openDay, settings.closeDay);
+    return el(
+      'section',
+      { class: 'card req-period-card' },
+      el('h3', { class: 'card__title' }, '受付期間（翌月分）'),
+      el('div', { class: 'time-range req-period' }, openSelect, el('span', null, '〜'), closeSelect),
+      el(
+        'div',
+        { class: 'actions' },
+        el('button', { type: 'button', class: 'btn btn--primary btn--small', onclick: () => run(() => R().setRequestPeriod(openSelect.value, closeSelect.value, email()), `受付期間を毎月${R().periodLabel({ openDay: Number(openSelect.value), closeDay: Number(closeSelect.value) })}にしました。`) }, '保存')
+      ),
+      el(
+        'p',
+        { class: 'hint hint--left' },
+        `今の設定：毎月${R().periodLabel(settings)}に、翌月分の希望休・有給を受け付けます（全店舗共通）。この期間だけ、スタッフが申請・取り消しを、幹部が判断と自分の休み・社用の登録をできます。期間の外は、オーナーだけが判断・変更できます。`
+      )
+    );
+  }
+
   function limitView(store) {
     const settings = R().settingsOf(R().adminSettings());
     const defaultInput = el('input', { id: 'req-default-limit', type: 'number', min: '0', max: '31', class: 'field__input field__input--short', value: String(settings.defaultLimit) });
@@ -298,6 +333,7 @@
     return el(
       'div',
       null,
+      periodCard(settings),
       el(
         'section',
         { class: 'card' },
@@ -361,7 +397,7 @@
         ['paid', '有給申請一覧'],
         ['change', '変更申請'],
         ['log', '判断の履歴'],
-        ['limit', '希望休の上限'],
+        ['limit', '受付期間・上限'],
       ].map(([key, label]) =>
         el(
           'button',
@@ -400,7 +436,7 @@
         ),
         el('span', { class: 'store-tag', style: { '--store-color': store.color } }, store.name)
       ),
-      el('p', { class: 'hint' }, w.open ? `${R().monthLabel(w.month)}分の申請を受付中です（今月末まで）。` : `${R().monthLabel(w.month)}分の申請は、${Number(w.opensOn.slice(5, 7))}月25日から受け付けます。`),
+      el('p', { class: 'hint' }, w.open ? `${R().monthLabel(w.month)}分の申請を受付中です（${R().untilText(w)}）。受付期間：毎月${R().periodLabel()}` : `${R().closedText(w)}受付期間：毎月${R().periodLabel()}`),
       tabs,
       message ? el('p', { class: message.ok ? 'sync__result' : 'form-error', role: 'status' }, message.text) : null,
       tab === 'wish' ? wishView(store) : tab === 'days' ? daysView(store) : tab === 'paid' ? paidView(store) : tab === 'change' ? changeView(store) : tab === 'log' ? logView(store) : limitView(store),

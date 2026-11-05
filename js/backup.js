@@ -35,7 +35,7 @@
   const isPatternRange = (r) => r && U.isValidTime(r.start, 15) && U.isValidTime(r.end, 15) && r.start < r.end;
   // 曜日ごとのいつもの勤務：{ "0"〜"6": 勤務パターンID または "off" }
   const isWeekly = (w) =>
-    w === undefined || (w && typeof w === 'object' && !Array.isArray(w) && Object.entries(w).every(([k, v]) => /^[0-6]$/.test(k) && (v === 'off' || isId(v))));
+    w === undefined || (w && typeof w === 'object' && !Array.isArray(w) && Object.entries(w).every(([k, v]) => /^[0-6]$/.test(k) && (v === 'off' || isId(v) || (typeof v === 'string' && v.startsWith('business:') && isId(v.slice(9))))));
   const isOptDate = (v) => v === '' || v === undefined || U.isValidDate(v);
   const isCount = (v) => isInt(v, 0, 50);
   const isOptCount = (v) => v === null || v === undefined || isCount(v);
@@ -66,7 +66,7 @@
     staff: (r) =>
       isStr(r.name, 12) && r.name.trim() && isId(r.storeId) && ['stylist', 'assistant'].includes(r.role) && isStr(r.title || '', 10) &&
       Array.isArray(r.patternIds) && r.patternIds.every(isId) && typeof r.active === 'boolean' && Number.isFinite(r.order) &&
-      isWeekly(r.weeklyPatterns),
+      isWeekly(r.weeklyPatterns) && (r.offFlex === undefined || typeof r.offFlex === 'boolean'),
     shiftPatterns: (r) =>
       isPatternRange(r) && isInt(r.breakMinutes, 0, 24 * 60) && isStr(r.label, 12) && r.label.trim() && COLOR_RE.test(r.color) &&
       (r.storeId === undefined || r.storeId === null || isId(r.storeId)),
@@ -74,7 +74,9 @@
       isId(r.staffId) && U.isValidDate(r.date) && ['work', 'off', 'paid', 'business'].includes(r.kind) &&
       (r.patternId === null || r.patternId === undefined || isId(r.patternId)) &&
       (r.storeId === undefined || isId(r.storeId)) &&
-      (r.breaks === undefined || (Array.isArray(r.breaks) && r.breaks.every(isRange))),
+      (r.breaks === undefined || (Array.isArray(r.breaks) && r.breaks.every(isRange))) &&
+      // その日だけの勤務時間（11/5〜。ない記録もある）
+      ((r.start === undefined && r.end === undefined) || isPatternRange(r)),
     businessTimes: (r) =>
       isId(r.staffId) && isRange(r) && isStr(r.note || '', 50) &&
       ((r.type === 'date' && U.isValidDate(r.date)) || (r.type === 'weekly' && isInt(r.weekday, 0, 6) && isOptDate(r.validFrom) && isOptDate(r.validTo))),
