@@ -180,6 +180,17 @@
     }
     const margin = (p, date) => (p.counted ? avail.get(date)[p.role] - need(date)[p.role] : 0);
 
+    // 同じ日の休みを分ける（設定 > チェック「同じ日の休みは、なるべく1人まで」・11/8〜）：休みを入れる日は、休みの人が少ない日から
+    // この人が休み・社用の日は出勤（スタッフの設定・11/8〜）：相手が休み・社用の日には、休みを入れない（相手の休みを選ぶときも同じ）
+    const spread = checks.offSpread !== false;
+    const isAbsent = (st) => st === 'off' || st === 'offFixed' || st === 'paid' || st === 'business';
+    const othersOff = (p, date) => people.filter((q) => q !== p && q.counted && isAbsent(q.status.get(date))).length;
+    const coverBlocked = (p, date) => {
+      const target = p.m.coverFor ? people.find((q) => q.m.id === p.m.coverFor) : null;
+      if (target && isAbsent(target.status.get(date))) return true;
+      return people.some((q) => q.m.coverFor === p.m.id && isAbsent(q.status.get(date)));
+    };
+
     const isOff = (st) => st === 'off' || st === 'offFixed' || st === 'paid';
     const countsAsOff = (st) => isOff(st) || (st === 'closed' && checks.closedDayAsOff);
 
@@ -205,6 +216,7 @@
       let best = null;
       let bestScore = null;
       for (const date of candidates) {
+        if (coverBlocked(p, date)) continue;
         const weekday = info.get(date).dayType === 'weekday' ? 1 : 0;
         let score;
         if (wantRenkyu) {
@@ -212,14 +224,14 @@
           p.status.set(date, 'off');
           const makes = renkyuCount(p) > base ? 1 : 0;
           p.status.set(date, before);
-          score = [Math.min(margin(p, date), 1), makes, margin(p, date), weekday];
+          score = [Math.min(margin(p, date), 1), makes, spread ? -othersOff(p, date) : 0, margin(p, date), weekday];
         } else {
           let gap = 99;
           for (const [d, st] of p.status) {
             if (!countsAsOff(st)) continue;
             gap = Math.min(gap, Math.abs((new Date(d) - new Date(date)) / 86400000));
           }
-          score = [margin(p, date), Math.min(gap, 7), weekday];
+          score = [Math.min(margin(p, date), 1), spread ? -othersOff(p, date) : 0, margin(p, date), Math.min(gap, 7), weekday];
         }
         if (!bestScore || better(score, bestScore)) {
           best = date;
@@ -350,6 +362,7 @@
       let best = null;
       let bestScore = null;
       for (const date of candidates) {
+        if (coverBlocked(p, date)) continue;
         const before = p.status.get(date);
         p.status.set(date, 'off');
         const makes = wantRenkyu && shiftRenkyu(p) > base ? 1 : 0;
@@ -358,7 +371,8 @@
         let gap = 99;
         for (const d of dates) if (d !== date && shiftOff(p, d)) gap = Math.min(gap, Math.abs((new Date(d) - new Date(date)) / 86400000));
         // ① 人数に余裕がある ② 連勤の上限を超えない ③ 連休が足りない人は連休になる日 ④ 余裕の大きい日 ⑤ ほかの休みから離れた日
-        const score = [Math.min(margin(p, date), 1), streakOk, makes, margin(p, date), wantRenkyu ? 0 : Math.min(gap, 7)];
+        // ③' 連休の次に、同じ日の休みが少ない日（設定でオンのとき。連休・連勤の決まりを先に守る）
+        const score = [Math.min(margin(p, date), 1), streakOk, makes, spread ? -othersOff(p, date) : 0, margin(p, date), wantRenkyu ? 0 : Math.min(gap, 7)];
         if (!bestScore || better(score, bestScore)) {
           best = date;
           bestScore = score;
@@ -387,7 +401,7 @@
         let best = null;
         for (const w of weeks) {
           for (const from of w.inMonth.filter((d) => p.aiOff.has(d) && p.status.get(d) === 'off')) {
-            for (const to of w.inMonth.filter((d) => p.status.get(d) === 'cand' && isWeekdayPlain(d))) {
+            for (const to of w.inMonth.filter((d) => p.status.get(d) === 'cand' && isWeekdayPlain(d) && !coverBlocked(p, d) && (!spread || othersOff(p, d) <= othersOff(p, from)))) {
               p.status.set(from, 'cand');
               p.status.set(to, 'off');
               const gain = shiftRenkyu(p) - base;
@@ -981,7 +995,27 @@
       renkyu: weeklyRule(p) ? shiftRenkyu(p) : renkyuCount(p),
       part: p.part,
     }));
-    const problems = { earlyZero: earlyZeroDays, startMissing, repeats: avoidRuns, constrained, shortDays, imbalance };
+    // 同じ日に2人以上が休み・社用の日（設定でオンのとき。希望休・有給・固定休などが重なって避けられなかった日）
+    const sameDayOff = [];
+    if (spread) {
+      for (const date of dates) {
+        if (info.get(date).closed) continue;
+        const absent = people.filter((q) => q.counted && isAbsent(q.status.get(date)));
+        if (absent.length >= 2) sameDayOff.push({ date, names: absent.map((q) => q.m.name) });
+      }
+      if (sameDayOff.length) notes.push(`同じ日に2人以上が休み・社用の日があります（希望休・有給・固定休・定休日の前後などが重なったため。無理に変えていません）：${sameDayOff.map((x) => `${md(x.date)}（${U.WEEKDAYS[K.calc.weekdayOf(x.date)]}）${x.names.length}人`).join('、')}`);
+    }
+    // この人が休み・社用の日は出勤、が守れなかった日（希望休・有給・固定休が重なったとき）
+    const coverMissed = [];
+    for (const p of people) {
+      const target = p.m.coverFor ? people.find((q) => q.m.id === p.m.coverFor) : null;
+      if (!target) continue;
+      for (const date of dates) {
+        if (isAbsent(p.status.get(date)) && isAbsent(target.status.get(date))) coverMissed.push({ date, name: p.m.name, target: target.m.name });
+      }
+    }
+    if (coverMissed.length) notes.push(`「休み・社用の日は出勤」の組み合わせが、同じ日に休みになりました（希望休・有給・固定休が重なったため）：${coverMissed.map((x) => `${md(x.date)} ${x.target}さんと${x.name}さん`).join('、')}`);
+    const problems = { earlyZero: earlyZeroDays, startMissing, sameDayOff, coverMissed, repeats: avoidRuns, constrained, shortDays, imbalance };
     return { storeId, month, assignments, notes, problems, skipped: [...skipped, ...noWorkdays].map((m) => m.id), summary };
   }
 

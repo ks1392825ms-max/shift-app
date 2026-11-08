@@ -41,8 +41,25 @@
   }
 
   // スタッフが出す希望休（1日分）
+  // スタッフの希望休（1日分）：申請したらそのまま確定（11/8〜。だれの承認もいらない。役割は 'auto'）
+  // 受付期間の間は本人が取り消せる。オーナーはいつでも却下・取り消しができる
   function newWish({ staffId, storeId, date, email, now }) {
-    return { staffId, storeId, month: date.slice(0, 7), date, status: 'pending', createdAt: now, updatedAt: now, createdBy: email || '' };
+    return {
+      staffId,
+      storeId,
+      month: date.slice(0, 7),
+      date,
+      status: 'approved',
+      createdAt: now,
+      updatedAt: now,
+      createdBy: email || '',
+      reason: '',
+      decidedBy: '',
+      decidedRole: 'auto',
+      decidedAt: now,
+      lastActionBy: email || '',
+      lastActionAt: now,
+    };
   }
 
   // 幹部が自分で登録する休み（1日分）：承認なしで、その場で「承認済み」。判断した人は本人・役割は幹部
@@ -66,11 +83,19 @@
   const businessDayId = (staffId, date) => `${staffId}_${date}`;
 
   // 社用で不在の日（1日まるごと・その場で確定）
-  function newBusinessDay({ staffId, storeId, date, what, detail, email, now }) {
+  // start・end（"13:00" の形・30分ごと）を渡すと、その時間だけの社用。渡さなければ1日まるごと（11/8〜）
+  function newBusinessDay({ staffId, storeId, date, what, detail, email, now, start, end }) {
     if (!BUSINESS_WHATS.includes(what)) throw new Error('社用の内容を選んでください。');
     const d = String(detail || '').trim();
     if ([...d].length > MAX_BUSINESS_DETAIL) throw new Error(`詳細は${MAX_BUSINESS_DETAIL}文字以内で入れてください。`);
-    return { id: businessDayId(staffId, date), data: { staffId, storeId, month: date.slice(0, 7), date, what, detail: d, status: 'approved', createdAt: now, updatedAt: now, createdBy: email || '' } };
+    const data = { staffId, storeId, month: date.slice(0, 7), date, what, detail: d, status: 'approved', createdAt: now, updatedAt: now, createdBy: email || '' };
+    if (start || end) {
+      const ok = (t) => typeof t === 'string' && /^([01][0-9]|2[0-3]):(00|30)$/.test(t);
+      if (!ok(start) || !ok(end) || start >= end) throw new Error('社用の時間を正しく選んでください（終了は開始より後）。');
+      data.start = start;
+      data.end = end;
+    }
+    return { id: businessDayId(staffId, date), data };
   }
 
   // 希望休の日数。count を1つ増やす・減らすときは、増減した日を lastDate に入れる

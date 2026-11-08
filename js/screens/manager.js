@@ -26,7 +26,8 @@
       ctx: null, // { stores（担当店舗）, staff（担当店舗のスタッフ）, settings }
       storeId: null,
       month: R().requestWindow().month,
-      tab: 'wish', // wish / paid / log / roster
+      tab: 'paid', // paid / calendar / self / roster（11/8〜 幹部が承認するのは有給だけ。希望休は申請したらそのまま確定）
+      self: { mode: 'off', draft: [], bizDate: null, bizKind: 'day', start: '13:00', end: '15:00', what: '', detail: '' },
       data: null, // { wishRequests, wishCounts, paidRequests, quotas, logs }
       message: null,
       pub: null, // { loading, rosters, month, storeId, error }
@@ -110,16 +111,16 @@
         'button',
         {
           type: 'button',
-          class: `btn btn--small ${status === 'approved' ? 'btn--primary' : 'btn--ghost'}`,
+          class: `btn ${status === 'approved' ? 'btn--primary' : status === 'rejected' ? 'btn--ghost' : 'text-btn'} mgr-decide mgr-decide--${status}`,
           onclick: async () => {
             let reason = '';
             if (status === 'rejected') {
-              reason = window.prompt('却下の理由を入れてください（50文字以内・スタッフにも表示されます）', '');
+              reason = window.prompt('非承認の理由を入れてください（50文字以内・スタッフにも表示されます）', '');
               if (reason === null) return;
             }
             try {
               await R().decide(kind, r, { status, reason, email: view.email, role: 'manager' });
-              const done = { approved: '承認しました。', rejected: '却下しました。', pending: '申請中に戻しました。' }[status];
+              const done = { approved: '承認しました。', rejected: '非承認にしました。', pending: '申請中に戻しました。' }[status];
               await reload(`${staffName(r.staffId)}さんの${shortDate(r.date)}を${done}`);
             } catch (err) {
               show(false, err.code === 'permission-denied' ? 'この申請は変更できません（担当外・自分の申請・ほかの人の判断・受付期間外のいずれか）。画面を読み込み直してください。' : err.message);
@@ -130,8 +131,8 @@
       );
     return [
       r.status !== 'approved' ? act('approved', '承認') : null,
-      r.status !== 'rejected' ? act('rejected', '却下') : null,
-      r.status !== 'pending' ? act('pending', '申請中に戻す') : null,
+      r.status !== 'rejected' ? act('rejected', '非承認') : null,
+      r.status !== 'pending' ? act('pending', '判断を戻す') : null,
     ].filter(Boolean);
   }
 
@@ -194,18 +195,17 @@
   }
 
   function tabs() {
-    const pend = (list) => list.filter((r) => r.storeId === view.storeId && r.status === 'pending').length;
+    const pend = (list) => (list || []).filter((r) => r.status === 'pending').length;
+    const list = [
+      ['paid', '有給', pend(view.data.paidRequests) + pend(view.data.changeRequests)],
+      ['calendar', 'カレンダー', 0],
+      view.account ? ['self', '自分の休み・社用', 0] : null,
+      ['roster', '確定シフト', 0],
+    ].filter(Boolean);
     return el(
       'div',
       { class: 'segment segment--compact req-tabs mgr-tabs', role: 'tablist', 'aria-label': '幹部の画面の切り替え' },
-      [
-        ['wish', '希望休', pend(view.data.wishRequests)],
-        ['days', '日付ごと', 0],
-        ['paid', '有給', pend(view.data.paidRequests)],
-        ['change', '変更申請', pend(view.data.changeRequests || [])],
-        ['log', '履歴', 0],
-        ['roster', '確定シフト', 0],
-      ].map(([key, label, n]) =>
+      list.map(([key, label, n]) =>
         el(
           'button',
           {
@@ -275,13 +275,208 @@
   }
 
   // ---- 有給 ----
-  function paidView() {
-    const list = view.data.paidRequests.filter((r) => r.storeId === view.storeId).sort((a, b) => a.date.localeCompare(b.date));
-    if (!list.length) return el('p', { class: 'empty-row' }, `${R().monthLabel(view.month)}の有給申請はありません。`);
+
+  // 「？ 使い方」：押したときだけ、短い説明を出す
+  function help(text) {
+    return el('details', { class: 'mgr-help' }, el('summary', null, el('span', { class: 'mgr-help__q', 'aria-hidden': 'true' }, '？'), '使い方'), el('p', null, text));
+  }
+
+  // 有給のカード：名前・日付・状態・ボタン
+  function paidCard(kind, r) {
     return el(
-      'ul',
-      { class: 'req-log-list' },
-      list.map((r) => el('li', { class: 'req-log-item' }, el('strong', null, staffName(r.staffId)), el('ul', { class: 'req-holiday-list' }, decisionItem('paid', r))))
+      'li',
+      { class: `mgr-card mgr-card--${r.status}`, 'data-id': r.id },
+      el(
+        'div',
+        { class: 'mgr-card__main' },
+        el('span', { class: 'mgr-card__name' }, staffName(r.staffId)),
+        el('span', { class: 'mgr-card__date' }, kind === 'change' ? R().changeText(r) : shortDate(r.date)),
+        el('span', { class: `mgr-chip mgr-chip--${r.status}` }, r.status === 'rejected' ? '非承認' : R().statusText(r))
+      ),
+      r.note ? el('p', { class: 'mgr-card__note' }, `${kind === 'change' ? '理由' : '備考'}：${r.note}`) : null,
+      r.status === 'rejected' && r.reason ? el('p', { class: 'mgr-card__note' }, `非承認の理由：${r.reason}`) : null,
+      kind === 'change' && r.status === 'approved' ? el('p', { class: 'mgr-card__note' }, r.reflectedAt ? 'オーナーがシフト表に反映しました。' : 'オーナーの反映待ち') : null,
+      el('div', { class: 'mgr-card__actions' }, ...decideButtons(kind, r))
+    );
+  }
+
+  function paidView() {
+    const mine = (list) => (list || []).filter((r) => r.storeId === view.storeId).sort((a, b) => a.date.localeCompare(b.date));
+    const paid = mine(view.data.paidRequests);
+    const changes = mine(view.data.changeRequests);
+    const waiting = paid.filter((r) => r.status === 'pending');
+    const done = paid.filter((r) => r.status !== 'pending');
+    const waitingChanges = changes.filter((c) => c.status === 'pending');
+    return el(
+      'div',
+      { class: 'mgr-paid' },
+      el('h3', { class: 'mgr-sec' }, `判断待ち`, el('span', { class: 'mgr-sec__n' }, `${waiting.length}件`)),
+      waiting.length ? el('ul', { class: 'mgr-cards' }, waiting.map((r) => paidCard('paid', r))) : el('p', { class: 'mgr-empty' }, '✓ 判断待ちの有給はありません'),
+      changes.length
+        ? el('div', null, el('h3', { class: 'mgr-sec' }, '変更申請', el('span', { class: 'mgr-sec__n' }, `${waitingChanges.length}件 判断待ち`)), el('ul', { class: 'mgr-cards' }, changes.map((c) => paidCard('change', c))))
+        : null,
+      done.length ? el('div', null, el('h3', { class: 'mgr-sec mgr-sec--sub' }, '判断済み', el('span', { class: 'mgr-sec__n' }, `${done.length}件`)), el('ul', { class: 'mgr-cards' }, done.map((r) => paidCard('paid', r)))) : null,
+      el('details', { class: 'mgr-log' }, el('summary', null, '判断の履歴を見る'), logView()),
+      help('スタッフの有給を「承認」か「非承認」にします（非承認は理由が必要で、スタッフにも表示されます）。判断できるのは受付期間の間・翌月分だけです。期間の外の変更はオーナーだけです。希望休は、スタッフが申請したらそのまま確定するので、判断はいりません。')
+    );
+  }
+
+  // カレンダー：その月の休み・有給・社用（見るだけ）
+  function calendarView() {
+    const mine = (list) => (list || []).filter((r) => r.storeId === view.storeId && r.month === view.month);
+    return el(
+      'div',
+      null,
+      K.dayList.calendar({
+        month: view.month,
+        store: view.ctx.stores.find((s) => s.id === view.storeId),
+        staff: view.ctx.staff.filter((m) => m.storeId === view.storeId),
+        nameOf: staffName,
+        wishes: mine(view.data.wishRequests),
+        paid: mine(view.data.paidRequests),
+        bdays: mine(view.data.businessDays),
+      }),
+      help('その月に、だれが休み・有給・社用かをカレンダーで見られます（見るだけ）。日を押すと、その日の内容が下に出ます。')
+    );
+  }
+
+  // ---- 自分の休み・社用（幹部がスタッフとしても登録されているとき） ----
+  function selfMember() {
+    if (!view.account || !view.account.staffIds.length) return null;
+    return view.ctx.staff.find((m) => view.account.staffIds.includes(m.id)) || null;
+  }
+
+  function selfView() {
+    const me = selfMember();
+    const w = R().requestWindow();
+    if (!me) return el('p', { class: 'mgr-empty' }, 'スタッフとしての登録が見つかりません。オーナーに確認してください。');
+    const month = w.month;
+    if (view.month !== month) {
+      return el('div', { class: 'mgr-self' }, el('p', { class: 'mgr-empty' }, `自分の休み・社用は、受付中の月（${R().monthLabel(month)}）に入れます。`), el('button', { type: 'button', class: 'btn btn--primary btn--block', onclick: async () => { view.month = month; await reload(''); view.message = null; K.app.rerender(); } }, `${R().monthLabel(month)}に切り替える`));
+    }
+    const store = view.ctx.stores.find((s) => s.id === me.storeId) || view.ctx.stores[0];
+    const st = view.self;
+    const wishes = (view.data.wishRequests || []).filter((x) => x.staffId === me.id && x.month === month);
+    const bdays = (view.data.businessDays || []).filter((x) => x.staffId === me.id && x.month === month);
+    const paid = (view.data.paidRequests || []).filter((x) => x.staffId === me.id && x.month === month && x.status !== 'rejected');
+    const quota = (view.data.quotas || []).find((q) => q.staffId === me.id && q.month === month);
+    const limit = R().limitFor(view.ctx.settings, quota);
+    const used = wishes.length;
+    const left = Math.max(0, limit - used - st.draft.length);
+    const editable = w.open;
+    const say = (ok, text) => { view.message = { ok, text }; K.app.rerender(); };
+    const onDay = (date) => {
+      if (!editable) return say(false, `今は受付期間外です。${R().closedText(w)}`);
+      const err = R().checkDate(store, month, date);
+      if (err) return say(false, err);
+      if (wishes.some((x) => x.date === date)) return say(false, 'この日は休みを登録済みです（取り消すときは、下の一覧の「取り消す」）。');
+      if (bdays.some((x) => x.date === date)) return say(false, 'この日は社用を登録済みです（取り消すときは、下の一覧の「取り消す」）。');
+      if (paid.some((x) => x.date === date)) return say(false, 'この日は有給を申請しています。');
+      view.message = null;
+      if (st.mode === 'off') {
+        if (st.draft.includes(date)) st.draft = st.draft.filter((d) => d !== date);
+        else if (left <= 0) return say(false, R().limitMessage(limit));
+        else st.draft = [...st.draft, date].sort();
+      } else {
+        st.bizDate = st.bizDate === date ? null : date;
+      }
+      K.app.rerender();
+    };
+    // 自分のカレンダー
+    const dates = K.calc.monthDates(month);
+    const lead = K.calc.weekdayOf(dates[0]);
+    const cells = [];
+    for (let i = 0; i < lead; i++) cells.push(el('div', { class: 'cal__cell is-empty', 'aria-hidden': 'true' }));
+    for (const date of dates) {
+      const wd = K.calc.weekdayOf(date);
+      const closed = K.calc.isStoreClosed(store, date);
+      const b = bdays.find((x) => x.date === date);
+      const mark = wishes.some((x) => x.date === date)
+        ? ['off', '休み']
+        : b
+          ? ['biz', b.start ? `社 ${Number(b.start.slice(0, 2))}-${Number(b.end.slice(0, 2))}` : '社用']
+          : paid.some((x) => x.date === date)
+            ? ['paid', '有給']
+            : st.draft.includes(date)
+              ? ['draft', '選択']
+              : st.bizDate === date
+                ? ['draft', '社用?']
+                : null;
+      cells.push(
+        el(
+          'button',
+          { type: 'button', class: `cal__cell self-cell${wd === 6 ? ' is-sat' : ''}${wd === 0 || K.holidays.holidayName(date) ? ' is-sun' : ''}${closed ? ' is-closed' : ''}${mark ? ` has-${mark[0]}` : ''}${editable ? '' : ' is-locked'}`, 'data-date': date, onclick: () => onDay(date) },
+          el('span', { class: 'cal__day' }, String(Number(date.slice(8, 10)))),
+          closed ? el('span', { class: 'cal__closed' }, '定休') : mark ? el('span', { class: `self-mark self-mark--${mark[0]}` }, mark[1]) : null
+        )
+      );
+    }
+    const run = async (fn, done) => {
+      try {
+        await fn();
+        st.draft = [];
+        st.bizDate = null;
+        await reload(done);
+      } catch (err) {
+        say(false, err.message);
+      }
+    };
+    // 社用の入力（日を選んだとき）
+    let bizForm = null;
+    if (st.mode === 'biz' && st.bizDate) {
+      const whatSel = el('select', { class: 'field__input', id: 'self-what', onchange: (e) => (st.what = e.currentTarget.value) }, el('option', { value: '' }, '内容を選ぶ'), K.records.BUSINESS_WHATS.map((x) => el('option', { value: x, selected: st.what === x }, x)));
+      const detail = el('input', { class: 'field__input', id: 'self-detail', maxlength: '30', placeholder: '詳細（なくてもよい）', value: st.detail, oninput: (e) => (st.detail = e.currentTarget.value) });
+      const kind = el(
+        'div',
+        { class: 'segment segment--compact self-kind', role: 'group', 'aria-label': '社用の長さ' },
+        [['day', '1日まるごと'], ['time', '時間で入れる']].map(([k, t]) => el('button', { type: 'button', class: `segment__btn${st.bizKind === k ? ' is-selected' : ''}`, 'aria-pressed': String(st.bizKind === k), onclick: () => { st.bizKind = k; K.app.rerender(); } }, t))
+      );
+      bizForm = el(
+        'div',
+        { class: 'self-form' },
+        el('p', { class: 'self-form__head' }, `${shortDate(st.bizDate)}の社用`),
+        kind,
+        st.bizKind === 'time'
+          ? el('div', { class: 'self-times' }, K.wheel.button({ value: st.start, from: '06:00', to: '23:30', step: 30, label: '開始', onchange: (v) => (st.start = v) }), el('span', null, '〜'), K.wheel.button({ value: st.end, from: '06:30', to: '23:30', step: 30, label: '終了', onchange: (v) => (st.end = v) }))
+          : null,
+        whatSel,
+        detail,
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'btn btn--primary btn--block',
+            onclick: () => {
+              if (!st.what) return say(false, '社用の内容を選んでください。');
+              const timed = st.bizKind === 'time';
+              return run(() => R().registerBusinessDay({ staffId: me.id, storeId: me.storeId, date: st.bizDate, what: st.what, detail: st.detail, store, email: view.email, existing: bdays, wishes, paid, start: timed ? st.start : undefined, end: timed ? st.end : undefined }), `${shortDate(st.bizDate)}に社用を登録しました（確定）。`);
+            },
+          },
+          '社用を登録（その場で確定）'
+        )
+      );
+    }
+    // 登録済みの一覧（取り消せる）
+    const items = [
+      ...wishes.map((x) => ({ date: x.date, text: '休み', fn: () => R().removeSelfWish(x, { email: view.email }), can: R().isSelfWish(x, view.email) })),
+      ...bdays.map((x) => ({ date: x.date, text: `社用${x.start ? `（${U.formatTime(x.start)}〜${U.formatTime(x.end)}）` : '（1日）'} ${x.what}${x.detail ? ` ${x.detail}` : ''}`, fn: () => R().removeBusinessDay(x), can: true })),
+      ...paid.map((x) => ({ date: x.date, text: `有給（${R().statusText(x)}・オーナーが承認）`, fn: null, can: false })),
+    ].sort((a, b) => a.date.localeCompare(b.date));
+    return el(
+      'div',
+      { class: 'mgr-self' },
+      el('div', { class: 'segment self-mode', role: 'group', 'aria-label': '入れるもの' }, [['off', '休み'], ['biz', '社用']].map(([k, t]) => el('button', { type: 'button', class: `segment__btn${st.mode === k ? ' is-selected' : ''}`, 'aria-pressed': String(st.mode === k), onclick: () => { st.mode = k; st.draft = []; st.bizDate = null; view.message = null; K.app.rerender(); } }, t))),
+      el('p', { class: 'self-guide' }, editable ? (st.mode === 'off' ? `休みにする日を押す（あと${left}日）` : '社用の日を押す') : `受付期間外です（${R().closedText(w)}）`),
+      el('div', { class: `cal self-cal${editable ? '' : ' is-locked'}` }, ['日', '月', '火', '水', '木', '金', '土'].map((d, i) => el('div', { class: `cal__wd${i === 0 ? ' is-sun' : i === 6 ? ' is-sat' : ''}`, 'aria-hidden': 'true' }, d)), cells),
+      st.mode === 'off' && editable
+        ? el('button', { type: 'button', class: 'btn btn--primary btn--block self-send', disabled: !st.draft.length, onclick: () => run(() => R().saveSelfWishes({ staffId: me.id, storeId: me.storeId, month, draft: st.draft, saved: wishes, limit, store, email: view.email }), `休みを${st.draft.length}日登録しました（確定）。`) }, st.draft.length ? `休みを登録（${st.draft.length}日・その場で確定）` : '日を選んでください')
+        : null,
+      bizForm,
+      el('h3', { class: 'mgr-sec' }, `${R().monthLabel(month)}の自分の予定`),
+      items.length
+        ? el('ul', { class: 'mgr-cards' }, items.map((x) => el('li', { class: 'mgr-card' }, el('div', { class: 'mgr-card__main' }, el('span', { class: 'mgr-card__date' }, shortDate(x.date)), el('span', { class: 'mgr-card__name' }, x.text)), x.can && editable ? el('div', { class: 'mgr-card__actions' }, el('button', { type: 'button', class: 'text-btn', onclick: () => run(x.fn, `${shortDate(x.date)}を取り消しました。`) }, '取り消す')) : null)))
+        : el('p', { class: 'mgr-empty' }, 'まだ登録していません'),
+      help('「休み」は日を押して「休みを登録」。「社用」は日を押して、1日まるごとか時間（開始・終了を押すと、くるくる回して選べます）を選び、内容を選んで「社用を登録」。どちらも、入れるとその場で確定します。受付期間の間は「取り消す」で取り消せます。有給はオーナーが承認します。')
     );
   }
 
@@ -540,23 +735,18 @@
   function hero() {
     const w = R().requestWindow();
     const stores = view.ctx ? view.ctx.stores : [];
-    const n = pendingCount();
+    const pend = view.data ? (view.data.paidRequests || []).filter((r) => r.status === 'pending').length + (view.data.changeRequests || []).filter((r) => r.status === 'pending').length : 0;
+    let main;
+    if (!view.data) main = el('p', { class: 'mgr-todo__done' }, '読み込んでいます…');
+    else if (!w.open) main = el('div', { class: 'mgr-todo__closed' }, el('span', { class: 'mgr-todo__badge' }, '受付期間外'), el('span', { class: 'mgr-todo__big' }, `次の受付：${Number(w.opensOn.slice(5, 7))}月${Number(w.opensOn.slice(8, 10))}日から`), el('span', { class: 'mgr-todo__small' }, `${R().monthLabel(w.opensFor)}分`));
+    else if (pend) main = el('button', { type: 'button', class: 'mgr-todo__go', onclick: () => { view.tab = 'paid'; view.message = null; K.app.rerender(); } }, el('span', { class: 'mgr-todo__n' }, String(pend)), el('span', null, '件　判断待ち'), el('span', { class: 'mgr-todo__arrow', 'aria-hidden': 'true' }, '›'));
+    else main = el('p', { class: 'mgr-todo__done' }, '✓ 今やることはありません');
     return el(
       'section',
-      { class: 'req-hero mgr-hero' },
-      el('p', { class: 'req-hero__eyebrow' }, '幹部'),
-      el('h2', { class: 'req-hero__name' }, '幹部の画面'),
-      stores.length ? el('p', { class: 'req-hero__store' }, `担当：${stores.map((x) => x.name).join('・')}`) : null,
-      el(
-        'p',
-        { class: `req-hero__window${w.open ? ' is-open' : ''}` },
-        el('span', { class: 'req-hero__badge' }, w.open ? '受付中' : '受付期間外'),
-        el('span', null, w.open ? `${R().monthLabel(w.month)}分・${R().untilText(w)}判断できます` : `判断・変更はオーナーだけ（${R().monthLabel(w.opensFor)}分は${Number(w.opensOn.slice(5, 7))}月${Number(w.opensOn.slice(8, 10))}日から）`)
-      ),
-      view.data
-        ? el('p', { class: `mgr-hero__pending${n ? ' has-pending' : ''}` }, el('span', { class: 'mgr-hero__count' }, String(n)), el('span', null, n ? '件が判断待ち' : '件：判断待ちはありません'), el('span', { class: 'mgr-hero__month' }, `${R().monthLabel(view.month)}分`))
-        : null,
-      view.account ? el('button', { type: 'button', class: 'btn btn--ghost btn--small req-hero__back', onclick: () => K.app.navigate('request', { email: view.email, account: view.account, manager: view.manager }) }, '自分の休み・社用を入れる') : null
+      { class: 'mgr-todo' },
+      el('p', { class: 'mgr-todo__who' }, `幹部${stores.length ? `｜担当：${stores.map((x) => x.name).join('・')}` : ''}`),
+      main,
+      w.open && view.data ? el('p', { class: 'mgr-todo__small' }, `受付中：${R().monthLabel(w.month)}分・${R().untilText(w)}`) : null
     );
   }
 
@@ -589,23 +779,16 @@
       container.append(hero(), el('p', { class: 'form-error' }, (view.message && view.message.text) || '担当店舗が見つかりませんでした。オーナーに連絡してください。'), accountSection());
       return;
     }
-    const w = R().requestWindow();
+    if (view.tab === 'self' && !view.account) view.tab = 'paid';
     const parts = [hero(), tabs()];
-    if (view.tab !== 'roster') {
-      // 担当が2店舗以上の人だけ、店舗を選ぶ
+    if (view.tab === 'paid' || view.tab === 'calendar') {
+      // 担当が2店舗以上の人だけ、店舗を選ぶ。月の切り替え
       if (view.ctx.stores.length > 1) parts.push(el('div', { class: 'mgr-stores' }, storeChips()));
-      // 月の切り替えと、受付の説明を1か所に
-      parts.push(
-        el(
-          'div',
-          { class: 'mgr-bar' },
-          monthNav(),
-          el('p', { class: 'hint mgr-bar__hint' }, w.open ? (view.month === w.month ? `この月の分を判断できます（${R().untilText(w)}）。` : `判断できるのは${R().monthLabel(w.month)}分だけです（この月は見るだけ）。`) : `今は受付期間外です。判断・変更はオーナーだけができます（${R().monthLabel(w.opensFor)}分は${Number(w.opensOn.slice(5, 7))}月${Number(w.opensOn.slice(8, 10))}日から）。`)
-        )
-      );
+      parts.push(el('div', { class: 'mgr-bar mgr-bar--slim' }, monthNav()));
     }
     if (view.message && view.message.text) parts.push(el('p', { class: view.message.ok ? 'sync__result' : 'form-error', role: 'status' }, view.message.text));
-    parts.push(el('section', { class: 'card req-card mgr-body' }, view.tab === 'wish' ? wishView() : view.tab === 'days' ? daysView() : view.tab === 'paid' ? paidView() : view.tab === 'change' ? changeView() : view.tab === 'log' ? logView() : rosterView()));
+    const body = view.tab === 'paid' ? paidView() : view.tab === 'calendar' ? calendarView() : view.tab === 'self' ? selfView() : rosterView();
+    parts.push(el('section', { class: 'card req-card mgr-body' }, body));
     parts.push(accountSection());
     container.append(...parts.filter(Boolean));
   }

@@ -170,6 +170,13 @@
         skipped: bt.type === 'weekly' && K.storage.isBusinessTimeSkipped(bt.id, dateStr),
       });
     }
+    // 幹部が自分で入れた「時間の社用」（11/8〜。共有モードのとき）：その時間だけ人数に数えない
+    const req = K.storage.isCloud() && K.requests && K.requests.adminBusinessDay ? K.requests.adminBusinessDay(member.id, dateStr) : null;
+    if (req && req.start && req.end) {
+      const start = Math.max(U.toMinutes(req.start), day.start);
+      const end = Math.min(U.toMinutes(req.end), day.end);
+      if (start < end) day.business.push({ start, end, source: 'request', id: req.id || '', note: '', category: '', detail: `${req.what}${req.detail ? `（${req.detail}）` : ''}`, skipped: false });
+    }
     day.business.sort((a, b) => a.start - b.start);
     return day;
   }

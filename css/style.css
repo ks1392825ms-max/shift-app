@@ -6036,3 +6036,626 @@ body[data-role="staff"] .login-role {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
+
+/* ==== 幹部の画面の作り直し（11/8〜）：今やること・4つのタブ・有給のカード・カレンダー・自分の休み・社用・時刻のスクロール ==== */
+:root {
+  --ok: #17663a;
+  --ok-bg: #dcf5e3;
+  --pend: #7a5a00;
+  --pend-bg: #fff4c2;
+  --no: #6e6f73;
+  --no-bg: #ececea;
+  --paid: #1d4ed8;
+  --paid-bg: #dfeafe;
+  --biz: #6d28d9;
+  --biz-bg: #efe5fd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ok: #6ee7a0;
+    --ok-bg: #12321f;
+    --pend: #fcd34d;
+    --pend-bg: #3d3310;
+    --no: #9a9ba1;
+    --no-bg: #2a2b30;
+    --paid: #93b8fb;
+    --paid-bg: #172a4d;
+    --biz: #c4a5fb;
+    --biz-bg: #2c1d4a;
+  }
+}
+
+/* いちばん上：今やること */
+.mgr-todo {
+  margin: 4px 0 12px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: #111214;
+  color: #fff;
+}
+
+.mgr-todo__who {
+  margin: 0 0 8px;
+  color: #b9bac0;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.mgr-todo__go {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 64px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 14px;
+  background: #ffd43b;
+  color: #111214;
+  font: inherit;
+  font-size: 1.15rem;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mgr-todo__n {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.mgr-todo__arrow {
+  margin-left: auto;
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.mgr-todo__done {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+
+.mgr-todo__closed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.mgr-todo__badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #fff;
+  color: #111214;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.mgr-todo__big {
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.mgr-todo__small {
+  margin: 8px 0 0;
+  color: #d3d3d6;
+  font-size: 0.85rem;
+}
+
+.mgr-todo__closed .mgr-todo__small {
+  margin: 0;
+}
+
+.mgr-bar--slim {
+  padding: 6px 10px;
+}
+
+/* 見出し・空の表示・使い方 */
+.mgr-sec {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 4px 0 8px;
+  font-size: 1.05rem;
+}
+
+.mgr-sec--sub {
+  margin-top: 16px;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.mgr-sec__n {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.mgr-empty {
+  margin: 4px 0 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-weight: 700;
+  text-align: center;
+}
+
+.mgr-help {
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.mgr-help summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+
+.mgr-help summary::-webkit-details-marker {
+  display: none;
+}
+
+.mgr-help__q {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 900;
+}
+
+.mgr-help p {
+  margin: 6px 0 0;
+  line-height: 1.6;
+}
+
+.mgr-log {
+  margin-top: 14px;
+}
+
+.mgr-log summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+/* 有給のカード */
+.mgr-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.mgr-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.mgr-card--pending {
+  border-color: var(--pend);
+  box-shadow: inset 4px 0 0 var(--pend);
+}
+
+.mgr-card__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.mgr-card__name {
+  font-weight: 800;
+}
+
+.mgr-card__date {
+  font-weight: 700;
+}
+
+.mgr-card__note {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.mgr-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mgr-card__actions:empty {
+  display: none;
+}
+
+.mgr-card__actions .req-decision__by {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.mgr-decide--approved,
+.mgr-decide--rejected {
+  flex: 1 1 0;
+  min-height: 48px;
+  font-size: 1rem;
+}
+
+.mgr-chip {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.mgr-chip--pending { background: var(--pend-bg); color: var(--pend); }
+.mgr-chip--approved { background: var(--ok-bg); color: var(--ok); }
+.mgr-chip--rejected, .mgr-chip--cancelled { background: var(--no-bg); color: var(--no); }
+
+/* 色をアプリ全体でそろえる（休み・確定＝緑、申請中＝黄、非承認＝灰、有給＝青、社用＝紫） */
+.day-chip--wish-approved { background: var(--ok-bg); color: var(--ok); }
+.day-chip--wish-pending, .day-chip--paid-pending { background: var(--pend-bg); color: var(--pend); }
+.day-chip--wish-rejected, .day-chip--paid-rejected { background: var(--no-bg); color: var(--no); }
+.day-chip--paid-approved { background: var(--paid-bg); color: var(--paid); }
+.day-chip--business { background: var(--biz-bg); color: var(--biz); }
+
+/* カレンダー */
+.cal {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.cal__wd {
+  padding: 2px 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.cal__wd.is-sat { color: #2563eb; }
+.cal__wd.is-sun { color: #dc2626; }
+
+.cal__cell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  min-height: 72px;
+  padding: 4px 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cal__cell.is-empty {
+  border: 0;
+  background: none;
+  cursor: default;
+}
+
+.cal__cell.is-closed {
+  background: var(--surface-2);
+}
+
+.cal__cell.is-selected {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--text);
+}
+
+.cal__day {
+  font-size: 0.85rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal__cell.is-sat .cal__day { color: #2563eb; }
+.cal__cell.is-sun .cal__day { color: #dc2626; }
+
+.cal__closed {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.cal__names {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cal__name {
+  overflow: hidden;
+  padding: 0 3px;
+  border-radius: 5px;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.5;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.cal__more {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  font-weight: 800;
+}
+
+.cal-detail {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.cal-detail--hint {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.cal-detail__head {
+  margin: 0 0 8px;
+  font-weight: 800;
+}
+
+.cal-detail__head span {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+/* 自分の休み・社用 */
+.self-mode {
+  margin-bottom: 8px;
+}
+
+.self-mode .segment__btn {
+  min-height: 48px;
+  font-size: 1rem;
+}
+
+.self-guide {
+  margin: 0 0 8px;
+  font-weight: 800;
+}
+
+.self-cell {
+  min-height: 56px;
+  align-items: center;
+  text-align: center;
+}
+
+.self-cell.is-locked {
+  opacity: 0.55;
+}
+
+.self-mark {
+  padding: 1px 4px;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.self-mark--off { background: var(--ok-bg); color: var(--ok); }
+.self-mark--biz { background: var(--biz-bg); color: var(--biz); }
+.self-mark--paid { background: var(--paid-bg); color: var(--paid); }
+.self-mark--draft { background: var(--text); color: var(--surface); }
+.self-cell.has-draft { border-color: var(--text); }
+
+.self-send {
+  margin-top: 10px;
+}
+
+.self-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 2px solid var(--biz);
+  border-radius: 14px;
+}
+
+.self-form__head {
+  margin: 0;
+  font-weight: 800;
+}
+
+.self-times {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.self-times .wheel-btn {
+  flex: 1 1 0;
+}
+
+/* 時刻のボタンと、スクロールで選ぶ窓 */
+.wheel-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 60px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.wheel-btn__label {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.wheel-btn__value {
+  font-size: 1.35rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.wheel-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.wheel-layer__back {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.wheel-sheet {
+  position: relative;
+  max-width: 480px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 10px 16px calc(16px + env(safe-area-inset-bottom));
+  border-radius: 18px 18px 0 0;
+  background: var(--surface);
+}
+
+.wheel-sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+}
+
+.wheel-sheet__ok {
+  font-weight: 800;
+}
+
+.wheel {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 220px;
+}
+
+.wheel__col {
+  width: 84px;
+  height: 220px;
+}
+
+.wheel__list {
+  height: 220px;
+  overflow-y: scroll;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.wheel__list::-webkit-scrollbar {
+  display: none;
+}
+
+.wheel__pad {
+  height: 88px;
+}
+
+.wheel__item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  color: var(--text-muted);
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  scroll-snap-align: center;
+  cursor: pointer;
+}
+
+.wheel__item.is-selected {
+  color: var(--text);
+  font-size: 1.6rem;
+  font-weight: 900;
+}
+
+.wheel__sep {
+  font-weight: 800;
+}
+
+.wheel__band {
+  position: absolute;
+  top: 88px;
+  right: 0;
+  left: 0;
+  height: 44px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  pointer-events: none;
+}
+
+/* スタッフ：今月の申請の状況（黒い欄の中） */
+.req-sum {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+}
+
+.req-sum__label {
+  color: #d3d3d6;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.req-sum__chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.req-sum__chip--off { background: #dcf5e3; color: #17663a; }
+.req-sum__chip--pending { background: #fff4c2; color: #7a5a00; }
+.req-sum__chip--paid { background: #dfeafe; color: #1d4ed8; }
+.req-sum__chip--none { background: #2a2b30; color: #d3d3d6; }
+
+@media (max-width: 360px) {
+  .cal { gap: 2px; }
+  .cal__cell { min-height: 60px; padding: 3px 2px; }
+  .cal__name { font-size: 0.6rem; }
+}
+
+.wheel__list:focus {
+  outline: none;
+}

@@ -249,7 +249,7 @@
         show(false, `${shortDate(date)}は、自分で登録した休みです。取り消すときは、下の「申請の状況」の「取り消す」を押してください。`);
         return;
       }
-      if (saved && saved.status === 'approved') {
+      if (saved && saved.status === 'approved' && !R().isAutoWish(saved)) {
         show(false, `${shortDate(date)}の希望休は承認済みのため、ここでは外せません。変更が必要なときは、下の「希望休の状況」の「変更申請」から申請してください。`);
         return;
       }
@@ -266,7 +266,7 @@
       view.draft = result.dates;
       if (result.error) view.message = { ok: false, text: rejectedCount() ? `${R().limitMessage(limit)}（却下の日も、消すまでは日数に数えます）` : result.error };
       else if (result.dates.includes(date) && R().needsApproval(date)) {
-        view.message = { ok: true, text: `${shortDate(date)}は土日祝です。土日祝は原則出勤のため、休みは店長・幹部の承認が必要です（冠婚葬祭など、やむを得ない事情のとき）。承認されるまで休みは確定しません。年次有給休暇など、法令上の休暇の申出は、この限りではありません（有給は「有給希望」から申請してください）。` };
+        view.message = { ok: true, text: `${shortDate(date)}は土日祝です。土日祝は原則出勤なので、やむを得ないときだけ選んでください。` };
       }
     } else {
       const err = R().checkDate(store, R().requestWindow().month, date);
@@ -294,7 +294,7 @@
         email: view.email,
       });
       view.busy = false;
-      await reloadRequests(view.draft.length ? '希望休を送信しました。店長・幹部が承認すると休みになります。' : '希望休をなしにして送信しました。');
+      await reloadRequests(view.draft.length ? '希望休を送信しました。休みが確定しました。' : '希望休をなしにして送信しました。');
     } catch (err) {
       view.busy = false;
       show(false, err.message);
@@ -927,7 +927,7 @@
                     'li',
                     { class: 'detail-item' },
                     el('span', { class: 'detail-item__text' }, shortDate(wsh.date), wsh.status === 'rejected' && wsh.reason ? el('span', { class: 'req-reason' }, `却下の理由：${wsh.reason}`) : null),
-                    el('span', { class: `req-status req-status--${wsh.status}` }, R().isSelfWish(wsh, view.email) ? '確定（自分で登録）' : R().STATUS_LABELS[wsh.status] || wsh.status),
+                    el('span', { class: `req-status req-status--${wsh.status}` }, R().isSelfWish(wsh, view.email) ? '確定（自分で登録）' : R().statusText(wsh)),
                     wsh.status === 'rejected' && w.open ? el('button', { type: 'button', class: 'text-btn text-btn--small', onclick: () => removeRejected(wsh) }, '消す') : null,
                     R().isSelfWish(wsh, view.email) ? (w.open && wsh.month === w.month ? el('button', { type: 'button', class: 'text-btn text-btn--small', onclick: () => removeSelf(wsh) }, '取り消す') : null) : changeButton('wish', wsh)
                   )
@@ -983,6 +983,21 @@
   }
 
   // いちばん上の「あいさつ」：名前・店舗・受付の状況（幹部が自分の申請を出すときは、幹部の画面へ戻るボタンも）
+  // 「今月の申請の状況」：希望休・有給の日数と状態を1行で（11/8〜）
+  function heroSummary(w) {
+    const wishes = savedWishes().filter((x) => x.status === 'approved' || x.status === 'pending');
+    const paid = (view.data.paid || []).filter((x) => x.status !== 'rejected');
+    const paidPend = paid.filter((x) => x.status === 'pending').length;
+    const chip = (cls, text) => el('span', { class: `req-sum__chip req-sum__chip--${cls}` }, text);
+    return el(
+      'p',
+      { class: 'req-sum' },
+      el('span', { class: 'req-sum__label' }, `${R().monthLabel(w.month)}分`),
+      wishes.length ? chip('off', `休み ${wishes.length}日 確定`) : chip('none', '休み 0日'),
+      paid.length ? chip(paidPend ? 'pending' : 'paid', `有給 ${paid.length}日${paidPend ? ' 申請中' : ' 承認'}`) : null
+    );
+  }
+
   function hero(params) {
     const { member, store } = view.staffId ? current() : { member: null, store: null };
     const w = R().requestWindow();
@@ -996,8 +1011,9 @@
         'p',
         { class: `req-hero__window${w.open ? ' is-open' : ''}` },
         el('span', { class: 'req-hero__badge' }, w.open ? '受付中' : '受付期間外'),
-        el('span', null, w.open ? `${R().monthLabel(w.month)}分・${R().untilText(w)}` : `${R().monthLabel(w.opensFor)}分は${Number(w.opensOn.slice(5, 7))}月${Number(w.opensOn.slice(8, 10))}日から`)
+        el('span', null, w.open ? `${R().monthLabel(w.month)}分・${R().untilText(w)}` : `次の受付：${Number(w.opensOn.slice(5, 7))}月${Number(w.opensOn.slice(8, 10))}日から（${R().monthLabel(w.opensFor)}分）`)
       ),
+      member && view.data ? heroSummary(w) : null,
       // 幹部がスタッフも兼ねるときは、幹部の画面へ戻れる
       params.manager
         ? el(

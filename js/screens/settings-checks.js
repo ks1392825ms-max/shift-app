@@ -50,6 +50,7 @@
           closedDayAsOff: val('chk-closed').checked,
           weekdayShiftOff: val('chk-week-off').value,
           monthlyRenkyu: val('chk-renkyu').value,
+          offSpread: val('chk-spread').checked,
           startTimesWeekday: chosenTimes('chk-start-weekday'),
           startTimesHoliday: chosenTimes('chk-start-holiday'),
         });
@@ -90,6 +91,9 @@
         numberField('chk-renkyu', '月の連休', c.monthlyRenkyu, '回', {
           note: 'シフト休が2日以上続く所（定休日を含む・有給は含めない）を、月にこの回数作ります。月をまたぐ連休は、始まった日の月に数えます。',
         }),
+
+        el('h2', { class: 'card__title card__title--section' }, '同じ日の休み（AIシフト作成）'),
+        switchField('chk-spread', '同じ日の休みは、なるべく1人まで', c.offSpread !== false, 'AIシフト作成で休みを入れるとき、ほかに休みの人が少ない日を選びます。希望休・有給・固定休などが重なって2人以上になる日は、無理に変えず、結果のお知らせに出します。'),
 
         el('h2', { class: 'card__title card__title--section' }, '毎日そろえる出勤時刻（AIシフト作成）'),
         startTimesField('chk-start-weekday', '平日', c.startTimesWeekday || []),

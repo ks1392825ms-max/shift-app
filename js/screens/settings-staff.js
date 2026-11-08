@@ -109,6 +109,16 @@
       value: member && Number.isInteger(member.monthlyOffDays) ? String(member.monthlyOffDays) : '',
     });
     const holidayOffInput = el('input', { id: 'staff-holiday-off', type: 'checkbox', checked: Boolean(member && member.fixedOff && member.fixedOff.holidays) });
+    // この人が休み・社用の日は出勤する相手（11/8〜。同じ店舗のほかのスタッフから選ぶ）
+    const coverSelect = el(
+      'select',
+      { id: 'staff-cover-for', class: 'field__input' },
+      el('option', { value: '' }, 'なし'),
+      K.storage
+        .getStaff({ storeId: (member && member.storeId) || K.app.currentStore().id })
+        .filter((m) => !member || m.id !== member.id)
+        .map((m) => el('option', { value: m.id, selected: Boolean(member && member.coverFor === m.id) }, `${m.name}さん`))
+    );
     // パートの「休みの日数を決めない」（11/5〜）
     const offFlexInput = el('input', { id: 'staff-off-flex', type: 'checkbox', checked: Boolean(member && member.offFlex), onchange: () => updateOffFlex() });
     const offFlexField = el(
@@ -266,6 +276,7 @@
         excludeFromCount: excludeInput.checked,
         weeklyOffDays: weeklyOffSelect.value,
         offFlex: state.employment === 'part' && offFlexInput.checked,
+        coverFor: coverSelect.value,
         monthlyOffDays: monthlyOffInput.value.trim(),
         fixedOff: { weekdays: [...state.fixedOff], holidays: holidayOffInput.checked },
         workWeekdays: [...state.workWeekdays],
@@ -425,6 +436,13 @@
           '空欄なら、設定 > チェックの「月の休日数の目安」を使います。入れると、この人だけこの日数で確かめ、AIシフト作成もこの日数まで休みを入れます（定休日・固定休・希望休も1日として数えます。週休より優先）。'
         )
       )),
+      el(
+        'div',
+        { class: 'field' },
+        el('label', { class: 'field__label', for: 'staff-cover-for' }, 'この人が休み・社用の日は出勤する'),
+        coverSelect,
+        el('p', { class: 'field__note' }, '選んだ人が休み・社用の日には、AIシフト作成でこの人に休みを入れません（選んだ人の休みを決めるときも、この人の休みの日は避けます）。希望休・有給・固定休が重なったときは、結果のお知らせで知らせます。')
+      ),
       el(
         'div',
         { class: 'field' },

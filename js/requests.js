@@ -174,10 +174,11 @@
     requireOpen(month);
     const savedList = saved || [];
     const want = new Set(draft);
-    const missingApproved = savedList.filter((w) => w.status === 'approved' && !want.has(w.date));
+    const missingApproved = savedList.filter((w) => w.status === 'approved' && !isAutoWish(w) && !want.has(w.date));
     if (missingApproved.length) throw new Error(`承認済みの希望休（${missingApproved.map((w) => shortMd(w.date)).join('・')}）は、ここでは外せません。変更が必要なときは変更申請をしてください。`);
     const has = new Map(savedList.map((w) => [w.date, w]));
-    const toRemove = savedList.filter((w) => w.status === 'pending' && !want.has(w.date));
+    // 申請中（以前の分）と、そのまま確定した希望休は、受付期間の間は外せる
+    const toRemove = savedList.filter((w) => (w.status === 'pending' || isAutoWish(w)) && !want.has(w.date));
     const toAdd = [...want].filter((d) => !has.has(d)).sort();
     if (savedList.length - toRemove.length + toAdd.length > limit) throw new Error(limitMessage(limit));
     for (const d of toAdd) {
@@ -217,12 +218,23 @@
   }
 
   // 幹部が自分で登録した休みか（承認した人が本人・役割が幹部）
+  // スタッフが申請して、そのまま確定した希望休（11/8〜）
+  function isAutoWish(wish) {
+    return Boolean(wish) && wish.status === 'approved' && wish.decidedRole === 'auto';
+  }
+
+  // 画面に出す状態の名前（そのまま確定した希望休・幹部が自分で登録した休みは「確定」）
+  function statusText(r) {
+    if (r && r.status === 'approved' && (r.decidedRole === 'auto' || r.decidedRole === 'manager' && r.createdBy && r.decidedBy === r.createdBy)) return '確定';
+    return STATUS_LABELS[r && r.status] || (r && r.status) || '';
+  }
+
   function isSelfWish(wish, email) {
     return wish.status === 'approved' && wish.decidedRole === 'manager' && Boolean(email) && wish.decidedBy === email && wish.createdBy === email;
   }
 
   // 社用で不在の日：受付期間・翌月分・定休日は不可・休み（希望休・有給）と同じ日は不可
-  async function registerBusinessDay({ staffId, storeId, date, what, detail, store, email, existing, wishes, paid }) {
+  async function registerBusinessDay({ staffId, storeId, date, what, detail, store, email, existing, wishes, paid, start, end }) {
     const month = date.slice(0, 7);
     requireOpen(month);
     const err = checkDate(store, month, date);
@@ -230,7 +242,7 @@
     if ((existing || []).some((x) => x.date === date)) throw new Error('この日は、すでに社用で不在を登録しています。');
     if ((wishes || []).some((w) => w.date === date && (w.status === 'pending' || w.status === 'approved'))) throw new Error('この日は休み（希望休）にしています。');
     if ((paid || []).some((r) => r.date === date && r.status !== 'rejected')) throw new Error('この日は有給希望を出しています。');
-    const rec = K.records.newBusinessDay({ staffId, storeId, date, what, detail, email, now: new Date().toISOString() });
+    const rec = K.records.newBusinessDay({ staffId, storeId, date, what, detail, email, now: new Date().toISOString(), start, end });
     await requireBackend().addBusinessDay(rec);
     return rec;
   }
@@ -243,7 +255,7 @@
   // 申請中・却下の希望休を1日消す（却下のあと、ほかの日を出し直すため）。承認済みは消せない
   async function removeWish(wish, { email }) {
     requireOpen(wish.month);
-    if (wish.status === 'approved') throw new Error('承認済みの希望休は消せません。変更が必要なときは変更申請をしてください。');
+    if (wish.status === 'approved' && !isAutoWish(wish)) throw new Error('承認済みの希望休は消せません。変更が必要なときは変更申請をしてください。');
     await requireBackend().removeWishRequest({ staffId: wish.staffId, storeId: wish.storeId, date: wish.date, email });
   }
 
@@ -368,8 +380,9 @@
     return (admin.businessDays || []).filter((x) => (!month || x.month === month) && (!storeId || x.storeId === storeId)).sort(byDate);
   }
 
+  // 1日まるごとの社用の日（AIシフト作成で「社用」を入れる日）。時間の社用（start・end あり）は、その日は勤務（11/8〜）
   function adminBusinessDates(staffId, month) {
-    return (admin.businessDays || []).filter((x) => x.staffId === staffId && x.month === month && x.status === 'approved').map((x) => x.date);
+    return (admin.businessDays || []).filter((x) => x.staffId === staffId && x.month === month && x.status === 'approved' && !x.start).map((x) => x.date);
   }
 
   // 承認済みの有給の日付（AIシフト作成で「有給」を入れる日）
@@ -522,6 +535,8 @@
 
   K.requests = {
     STATUS_LABELS,
+    isAutoWish,
+    statusText,
     CHANGE_TYPE_LABELS,
     attach,
     setClock,

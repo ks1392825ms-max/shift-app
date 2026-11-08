@@ -66,7 +66,7 @@
     staff: (r) =>
       isStr(r.name, 12) && r.name.trim() && isId(r.storeId) && ['stylist', 'assistant'].includes(r.role) && isStr(r.title || '', 10) &&
       Array.isArray(r.patternIds) && r.patternIds.every(isId) && typeof r.active === 'boolean' && Number.isFinite(r.order) &&
-      isWeekly(r.weeklyPatterns) && (r.offFlex === undefined || typeof r.offFlex === 'boolean'),
+      isWeekly(r.weeklyPatterns) && (r.offFlex === undefined || typeof r.offFlex === 'boolean') && (r.coverFor === undefined || r.coverFor === null || isId(r.coverFor)),
     shiftPatterns: (r) =>
       isPatternRange(r) && isInt(r.breakMinutes, 0, 24 * 60) && isStr(r.label, 12) && r.label.trim() && COLOR_RE.test(r.color) &&
       (r.storeId === undefined || r.storeId === null || isId(r.storeId)),

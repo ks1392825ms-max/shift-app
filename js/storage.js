@@ -1006,6 +1006,8 @@
     if (!EMPLOYMENTS.includes(employment)) throw new Error('雇用形態を選んでください。');
     // パートの「休みの日数を決めない」（11/5〜）：AIシフト作成は、人数が足りない日にだけ入れる。週休・月の休日数は使わない
     const offFlex = employment === 'part' && Boolean(fields.offFlex);
+    // この人が休み・社用の日は出勤する相手（スタッフID・11/8〜）。空ならなし
+    const coverFor = typeof fields.coverFor === 'string' && fields.coverFor ? fields.coverFor : null;
 
     let weeklyOffDays = offFlex || fields.weeklyOffDays === '' || fields.weeklyOffDays === undefined ? null : fields.weeklyOffDays;
     if (weeklyOffDays !== null) {
@@ -1038,6 +1040,7 @@
     return {
       employment,
       offFlex,
+      coverFor,
       isNew: Boolean(fields.isNew),
       excludeFromCount: Boolean(fields.excludeFromCount),
       weeklyOffDays,
@@ -2004,6 +2007,8 @@
       // 平日の週のシフト休・月の連休（渡されなければ今の値のまま）
       weekdayShiftOff: intIn(fields.weekdayShiftOff ?? getChecks(storeId).weekdayShiftOff, '平日の週のシフト休', 0, 5),
       monthlyRenkyu: intIn(fields.monthlyRenkyu ?? getChecks(storeId).monthlyRenkyu, '月の連休の回数', 0, 10),
+      // 同じ日の休みは、なるべく1人まで（渡されなければ今の値のまま）
+      offSpread: fields.offSpread === undefined ? getChecks(storeId).offSpread !== false : Boolean(fields.offSpread),
       // 毎日そろえる出勤時刻（平日・土日祝。渡されなければ今の値のまま）
       startTimesWeekday: startTimesIn(fields.startTimesWeekday ?? getChecks(storeId).startTimesWeekday, '平日の出勤時刻'),
       startTimesHoliday: startTimesIn(fields.startTimesHoliday ?? getChecks(storeId).startTimesHoliday, '土日祝の出勤時刻'),

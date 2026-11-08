@@ -111,7 +111,9 @@
       c.label += wishStatus === 'pending' ? '（希望休：申請中）' : '（希望休：承認済み）';
     }
     // 社用で不在の日（幹部が自分で登録・その場で確定）：左下に「不在」の印。シフトのデータは変えない（AIシフト作成で「社用」を入れる）
-    const bday = K.storage.isCloud() && K.requests.adminBusinessDay ? K.requests.adminBusinessDay(member.id, date) : null;
+    let bday = K.storage.isCloud() && K.requests.adminBusinessDay ? K.requests.adminBusinessDay(member.id, date) : null;
+    // 時間の社用（11/8〜）は、勤務のマスの下に「社 13-15」と出る（K.calc.staffDay の社用として）。ここでは1日まるごとだけ
+    if (bday && bday.start) bday = null;
     if (bday) {
       c.cls += ' has-bday';
       c.label += `（社用で不在：${bday.what}${bday.detail ? ` ${bday.detail}` : ''}）`;
@@ -819,6 +821,8 @@
     if (!problems) return null;
     const rows = [
       ['早番不足（早番が0人の日）', problems.earlyZero.length ? `${problems.earlyZero.length}日：${problems.earlyZero.map((x) => `${shortDate(x.date)} ${x.reason}`).join('／')}` : null],
+      ['同じ日に2人以上の休み', problems.sameDayOff && problems.sameDayOff.length ? `${problems.sameDayOff.length}日：${problems.sameDayOff.map((x) => `${shortDate(x.date)} ${x.names.length}人`).join('／')}` : null],
+      ['休み・社用の日は出勤（組み合わせ）', problems.coverMissed && problems.coverMissed.length ? `${problems.coverMissed.length}日：${problems.coverMissed.map((x) => shortDate(x.date)).join('／')}` : null],
       ['出勤時刻（毎日そろえる時刻に出勤する人がいない日）', problems.startMissing && problems.startMissing.length ? `${problems.startMissing.length}か所：${problems.startMissing.map((x) => `${shortDate(x.date)} ${U.formatTime(x.time)}`).join('／')}` : null],
       ['連続勤務（早早・遅遅）', problems.repeats.length ? `${problems.repeats.length}か所：${problems.repeats.map((r) => `${r.name}さん ${shortDate(r.dates[0])}〜（${r.reason}）`).join('／')}` : null],
       ['必要人数不足', problems.shortDays.length ? `${problems.shortDays.length}日：${problems.shortDays.join('、')}` : null],

@@ -141,7 +141,7 @@
   // ---- 日付ごと（見るだけ）：縦に日付、横にスタッフ名と状態 ----
   function daysView(store) {
     const staff = K.storage.getStaff({ storeId: store.id });
-    return K.dayList.render({
+    return K.dayList.calendar({
       month,
       store,
       staff,
@@ -393,7 +393,7 @@
       { class: 'segment segment--compact req-tabs', role: 'tablist', 'aria-label': '申請の種類' },
       [
         ['wish', '希望休一覧'],
-        ['days', '日付ごと'],
+        ['days', 'カレンダー'],
         ['paid', '有給申請一覧'],
         ['change', '変更申請'],
         ['log', '判断の履歴'],
