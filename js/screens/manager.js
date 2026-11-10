@@ -199,6 +199,7 @@
     const list = [
       ['paid', '有給', pend(view.data.paidRequests) + pend(view.data.changeRequests)],
       ['calendar', 'カレンダー', 0],
+      ['attendance', '勤怠', 0],
       view.account ? ['self', '自分の休み・社用', 0] : null,
       ['roster', '確定シフト', 0],
     ].filter(Boolean);
@@ -731,6 +732,13 @@
     return pend(view.data.wishRequests) + pend(view.data.paidRequests) + pend(view.data.changeRequests);
   }
 
+  // 勤怠の締めのお知らせ（毎月最終日の20時から7日間）
+  function attendanceNotice() {
+    const n = K.attendance && K.attendance.closedNotice();
+    if (!n) return null;
+    return el('button', { type: 'button', class: 'mgr-todo__notice', onclick: () => { view.tab = 'attendance'; view.message = null; K.app.rerender(); } }, `🔔 ${Number(n.month.slice(5))}月の勤怠を締めました。集計表ができました`, el('span', { class: 'mgr-todo__arrow', 'aria-hidden': 'true' }, '›'));
+  }
+
   // いちばん上の「あいさつ」：幹部の画面・担当店舗・受付の状況・申請中の件数（スタッフも兼ねる人は「自分の申請へ」）
   function hero() {
     const w = R().requestWindow();
@@ -746,8 +754,35 @@
       { class: 'mgr-todo' },
       el('p', { class: 'mgr-todo__who' }, `幹部${stores.length ? `｜担当：${stores.map((x) => x.name).join('・')}` : ''}`),
       main,
-      w.open && view.data ? el('p', { class: 'mgr-todo__small' }, `受付中：${R().monthLabel(w.month)}分・${R().untilText(w)}`) : null
+      w.open && view.data ? el('p', { class: 'mgr-todo__small' }, `受付中：${R().monthLabel(w.month)}分・${R().untilText(w)}`) : null,
+      attendanceNotice()
     );
+  }
+
+  // ---- 勤怠（11/9〜）：担当店舗の今日・月の表・集計表（共通の画面 js/screens/attendance.js） ----
+  // 予定は、確定シフトの写し（担当店舗の分）と、承認済みの有給
+  async function managerPlan(storeId, month) {
+    const [rosters, req] = await Promise.all([backend().loadManagerPublishedRosters([storeId], [month]), backend().loadManagerRequests([storeId], month)]);
+    const roster = rosters.find((r) => r.storeId === storeId && r.month === month);
+    const days = new Map(((roster && roster.days) || []).map((d) => [d.date, d]));
+    const paid = new Set((req.paidRequests || []).filter((p) => p.status === 'approved').map((p) => `${p.staffId}|${p.date}`));
+    return (staffId, date) => {
+      const day = days.get(date);
+      const plan = day ? K.attendance.planFromCell((day.cells || {})[staffId]) : null;
+      if (plan && plan.kind === 'off' && paid.has(`${staffId}|${date}`)) return { kind: 'paid', t: '有給' };
+      return plan;
+    };
+  }
+
+  function attendanceView() {
+    return K.attendanceView.panel({
+      key: 'manager',
+      role: 'manager',
+      email: String(view.email || '').toLowerCase(),
+      stores: view.ctx.stores,
+      staffOf: (storeId) => view.ctx.staff.filter((m) => m.storeId === storeId).map((m) => ({ id: m.id, name: m.name })),
+      planSource: managerPlan,
+    });
   }
 
   // いちばん下の「アカウント・この端末の設定」（スタッフの画面と同じ形。ふだんは閉じておく）
@@ -756,7 +791,7 @@
     return el(
       'details',
       { class: 'req-account' },
-      el('summary', { class: 'req-account__summary' }, el('span', { class: 'req-account__title' }, 'アカウント・この端末の設定'), el('span', { class: 'req-account__hint' }, '簡単ログイン・パスワード・ログアウト')),
+      el('summary', { class: 'req-account__summary' }, el('span', { class: 'req-account__title' }, 'アカウント・この端末の設定'), el('span', { class: 'req-account__hint' }, '勤怠の番号・簡単ログイン・パスワード・ログアウト')),
       el(
         'div',
         { class: 'req-account__body' },
@@ -764,6 +799,8 @@
         // 簡単ログイン（この端末のロック）の設定
         K.quickLock && user ? K.quickLock.card(user, K.app.rerender) : null,
         K.loginUI && user ? K.loginUI.passwordCard(user) : null,
+        // 勤怠の番号（PIN）（11/9〜。スタッフとしても登録されている幹部だけ）
+        K.attendanceView && view.account ? K.attendanceView.pinCard(view.account.staffIds, view.email) : null,
         el('button', { type: 'button', class: 'btn btn--ghost btn--block', onclick: () => K.app.cloudActions.signOut() }, 'ログアウト')
       )
     );
@@ -787,7 +824,7 @@
       parts.push(el('div', { class: 'mgr-bar mgr-bar--slim' }, monthNav()));
     }
     if (view.message && view.message.text) parts.push(el('p', { class: view.message.ok ? 'sync__result' : 'form-error', role: 'status' }, view.message.text));
-    const body = view.tab === 'paid' ? paidView() : view.tab === 'calendar' ? calendarView() : view.tab === 'self' ? selfView() : rosterView();
+    const body = view.tab === 'paid' ? paidView() : view.tab === 'calendar' ? calendarView() : view.tab === 'self' ? selfView() : view.tab === 'attendance' ? attendanceView() : rosterView();
     parts.push(el('section', { class: 'card req-card mgr-body' }, body));
     parts.push(accountSection());
     container.append(...parts.filter(Boolean));

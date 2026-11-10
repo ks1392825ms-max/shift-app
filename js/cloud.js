@@ -21,6 +21,10 @@
 //   decideRequest / changePaidDateLogged                                                    判断（承認・却下・申請中に戻す）と有給の日付の変更（履歴と一緒に）
 //   subscribeRequests / adminSet / adminUpdate / adminDelete                                 管理者の申請の受け取り・変更
 //   publishRoster / unpublishRoster / loadPublishedRosters                                確定シフトの公開用の写し
+//   checkKiosk / loadKioskData / addPunch / verifyPassword                                 勤怠用 iPad（11/9〜）
+//   setAttendancePin / loadPinStatus / deleteAttendancePin                                 勤怠の番号（PIN）
+//   loadAttendance / saveAttendanceEdit / loadAttendanceSettings / saveAttendanceSettings   勤怠の表・修正・集計表のパスワード
+//   loadKiosks / saveKiosk / saveKioskDirectory                                             勤怠用 iPad の登録（管理者）
 //   subscribe(onData, onError)  共有データを受け取り続ける（変わるたびに onData）。戻り値で止められる
 //   write(changes)              記録をまとめて保存する：[{ collection, id, data }]
 //   isEmpty()                   共有の保存場所が空か（店舗が1つもないか）
@@ -572,6 +576,126 @@
     await fsMod.deleteDoc(fsMod.doc(db, 'businessDays', id));
   }
 
+  // ---- 勤怠（11/9〜） ----
+
+  // 勤怠用 iPad のアカウントか（kiosks/{メール}）。戻り値：{ storeId } か null
+  async function checkKiosk(email) {
+    const { fsMod, db } = await load();
+    try {
+      const snap = await fsMod.getDoc(fsMod.doc(db, 'kiosks', String(email || '').toLowerCase()));
+      if (!snap.exists()) return null;
+      const k = snap.data();
+      return k.deleted || !k.storeId ? null : { storeId: k.storeId };
+    } catch (err) {
+      if (err && err.code === 'permission-denied') return null;
+      throw err;
+    }
+  }
+
+  // 勤怠用 iPad：その店舗の名前・今月の確定シフトの写し・名前の一覧・今日の打刻
+  async function loadKioskData(storeId, date) {
+    const { fsMod, db } = await load();
+    const month = date.slice(0, 7);
+    const [store, roster, directory, punchSnap] = await Promise.all([
+      getData('stores', storeId),
+      getData('publishedRosters', `${storeId}_${month}`).catch((err) => (err && err.code === 'permission-denied' ? null : Promise.reject(err))),
+      getData('kioskDirectory', storeId).catch(() => null),
+      fsMod.getDocs(fsMod.query(fsMod.collection(db, 'punches'), fsMod.where('storeId', '==', storeId), fsMod.where('date', '==', date))),
+    ]);
+    return { store: store ? { ...store, id: storeId } : null, roster, directory, punches: punchSnap.docs.map((d) => ({ id: d.id, ...d.data() })) };
+  }
+
+  // 打刻：打刻の記録と、番号の確かめ用の記録を1回の書き込みで（番号が違えば、ルールが両方とも断る）
+  async function addPunch({ id, data, proof }) {
+    const { fsMod, db } = await load();
+    const batch = fsMod.writeBatch(db);
+    batch.set(fsMod.doc(db, 'punchProofs', id), proof);
+    batch.set(fsMod.doc(db, 'punches', id), data);
+    await batch.commit();
+  }
+
+  // ログイン中の人のパスワードを確かめる（勤怠用 iPad を閉じるとき）
+  async function verifyPassword(password) {
+    const { authMod, auth } = await load();
+    const user = auth.currentUser;
+    if (!user) throw new Error('ログインしていません。');
+    try {
+      await authMod.reauthenticateWithCredential(user, authMod.EmailAuthProvider.credential(user.email, password));
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  async function setAttendancePin(rec) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, 'attendancePins', rec.staffId), rec);
+  }
+
+  // 管理者：番号を決めた人（スタッフID の一覧）
+  async function loadPinStatus() {
+    const { fsMod, db } = await load();
+    const snap = await fsMod.getDocs(fsMod.collection(db, 'attendancePins'));
+    return snap.docs.map((d) => ({ staffId: d.id, updatedAt: d.data().updatedAt || '', updatedBy: d.data().updatedBy || '' }));
+  }
+
+  async function deleteAttendancePin(staffId) {
+    const { fsMod, db } = await load();
+    await fsMod.deleteDoc(fsMod.doc(db, 'attendancePins', staffId));
+  }
+
+  // 管理者・幹部：店舗・月の打刻・直したもの・修正の記録（幹部は担当店舗だけ。ルールで担当外は読めない）
+  async function loadAttendance(storeId, month) {
+    const { fsMod, db } = await load();
+    const read = async (col) => {
+      const snap = await fsMod.getDocs(fsMod.query(fsMod.collection(db, col), fsMod.where('storeId', '==', storeId), fsMod.where('month', '==', month)));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    };
+    const [punches, edits, logs] = await Promise.all([read('punches'), read('punchEdits'), read('attendanceLogs')]);
+    return { punches, edits, logs };
+  }
+
+  // 直す：直した1日分と、修正の記録を1回の書き込みで
+  async function saveAttendanceEdit({ id, data, logId, log }) {
+    const { fsMod, db } = await load();
+    const batch = fsMod.writeBatch(db);
+    batch.set(fsMod.doc(db, 'attendanceLogs', logId), log);
+    batch.set(fsMod.doc(db, 'punchEdits', id), data);
+    try {
+      await batch.commit();
+    } catch (err) {
+      if (err && err.code === 'permission-denied') throw new Error('保存できませんでした（締めたあと・担当外 など）。画面を読み込み直してください。');
+      throw err;
+    }
+  }
+
+  async function loadAttendanceSettings() {
+    return (await getData('settings', 'attendance').catch((err) => (err && err.code === 'permission-denied' ? null : Promise.reject(err)))) || {};
+  }
+
+  async function saveAttendanceSettings(data) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, 'settings', 'attendance'), data, { merge: true });
+  }
+
+  // 管理者：勤怠用 iPad のアカウントの一覧・登録・解除
+  async function loadKiosks() {
+    const { fsMod, db } = await load();
+    const snap = await fsMod.getDocs(fsMod.collection(db, 'kiosks'));
+    return snap.docs.map((d) => ({ email: d.id, ...d.data() }));
+  }
+
+  async function saveKiosk(email, data) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, 'kiosks', String(email).toLowerCase()), data);
+  }
+
+  // 管理者：iPad に出す名前の一覧（名前と ID だけ）
+  async function saveKioskDirectory(storeId, data) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, 'kioskDirectory', storeId), data);
+  }
+
   // スタッフ：「希望なし」を送る（日数は変えずに、送信した印だけを残す）
   async function submitNoWish({ staffId, storeId, month, email }) {
     const { fsMod, db } = await load();
@@ -763,5 +887,19 @@
     addChangeRequest,
     withdrawChangeRequest,
     reflectChangeRequest,
+    checkKiosk,
+    loadKioskData,
+    addPunch,
+    verifyPassword,
+    setAttendancePin,
+    loadPinStatus,
+    deleteAttendancePin,
+    loadAttendance,
+    saveAttendanceEdit,
+    loadAttendanceSettings,
+    saveAttendanceSettings,
+    loadKiosks,
+    saveKiosk,
+    saveKioskDirectory,
   };
 })();

@@ -12,6 +12,7 @@
     ['business', '毎週の社用'],
     ['staffing', '必要人数'],
     ['checks', 'チェック'],
+    ['attendance', '勤怠'],
     ['data', 'データ'],
   ];
 

@@ -4,10 +4,10 @@
   const K = window.ShiftApp;
   const U = K.utils;
 
-  const SCREEN_TITLES = { roster: 'シフト表', day: '1日の詳細', monthTimeline: '月のタイムライン', staff: 'スタッフ別', summary: '集計', settings: '設定', requests: '申請', login: '共有モード', request: '希望休・有給の申請', manager: '幹部の画面' };
+  const SCREEN_TITLES = { roster: 'シフト表', day: '1日の詳細', monthTimeline: '月のタイムライン', staff: 'スタッフ別', summary: '集計', settings: '設定', requests: '申請', login: '共有モード', request: '希望休・有給の申請', manager: '幹部の画面', kiosk: '勤怠', attendance: '勤怠' };
 
   // 下のタブで、どのタブを選択中にするか（1日の詳細はシフト表の中の画面）
-  const TAB_OF = { roster: 'roster', day: 'roster', monthTimeline: 'roster', staff: 'staff', summary: 'summary', settings: 'settings', requests: 'requests', login: null, request: null, manager: null };
+  const TAB_OF = { roster: 'roster', day: 'roster', monthTimeline: 'roster', staff: 'staff', summary: 'summary', settings: 'settings', requests: 'requests', attendance: 'attendance', login: null, request: null, manager: null, kiosk: null };
 
   // 表示中の店舗を、次に開いたときも同じにするための保存場所（シフトのデータとは別。消えても困らない）
   const UI_KEY = 'shift-app-ui';
@@ -131,7 +131,9 @@
 
     // 共有モードの入口（ログインなど）では、店舗の切り替えと下のタブを隠す
     // スタッフの申請画面（request）・幹部の画面（manager）も、店舗の切り替えと下のタブを出さない
-    const gate = state.screen === 'login' || state.screen === 'request' || state.screen === 'manager';
+    // 勤怠用 iPad の画面（kiosk）も同じ（11/9〜）
+    const gate = state.screen === 'login' || state.screen === 'request' || state.screen === 'manager' || state.screen === 'kiosk';
+    document.body.classList.toggle('is-kiosk', state.screen === 'kiosk');
     document.body.classList.toggle('is-gate', gate);
     renderModeBadge();
     renderRoleBadge();
@@ -190,11 +192,12 @@
 
   // 誰としてログインしているか：「SHIFT」の枠の色と名札（管理者＝オレンジ・幹部＝赤・スタッフ＝白）
   // ログインの前・「この端末だけ」モードでは出さない
-  const ROLE_LABELS = { admin: '管理者', manager: '幹部', 'manager-self': '幹部（自分の申請）', staff: 'スタッフ' };
+  const ROLE_LABELS = { admin: '管理者', manager: '幹部', 'manager-self': '幹部（自分の申請）', staff: 'スタッフ', kiosk: '勤怠用' };
 
   function currentRole() {
     if (!cloud.user) return null;
     if (state.screen === 'manager') return 'manager';
+    if (state.screen === 'kiosk') return 'kiosk';
     if (state.screen === 'request') return state.params && state.params.manager ? 'manager-self' : 'staff';
     if (state.screen !== 'login' && cloud.ready && K.storage.isCloud()) return 'admin';
     return null;
@@ -361,7 +364,16 @@
       // 幹部：担当店舗の申請の判断と、全店舗の確定シフトだけ。スタッフ：自分の情報と申請だけ
       let account = null;
       let manager = null;
+      let kiosk = null;
       try {
+        // 勤怠用 iPad のアカウント（11/9〜）：その店舗の打刻の画面だけ
+        kiosk = cloud.backend.checkKiosk ? await cloud.backend.checkKiosk(user.email) : null;
+        if (kiosk) {
+          state.screen = 'kiosk';
+          state.params = { email: user.email, kiosk };
+          render();
+          return;
+        }
         manager = cloud.backend.checkManager ? await cloud.backend.checkManager(user.email) : null;
         account = cloud.backend.checkStaff ? await cloud.backend.checkStaff(user.email) : null;
       } catch (err) {
@@ -509,6 +521,7 @@
     cloud.backend = backend;
     if (K.quickLock) K.quickLock.watchVisibility(() => cloud.user && cloud.user.uid);
     K.requests.attach(backend);
+    if (K.attendance) K.attendance.attach(backend);
     K.storage.onCloudError((err) => toast(`共有の保存場所に保存できませんでした（${err.code || err.message}）`));
     showGate('loading');
     try {

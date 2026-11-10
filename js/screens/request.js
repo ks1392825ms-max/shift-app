@@ -869,7 +869,23 @@
             'div',
             { class: 'actions' },
             el('button', { type: 'button', class: 'btn btn--primary btn--block req-send', disabled: !editable || !changed, onclick: sendWish }, changed ? '希望休を送信' : saved.length || (view.data && view.data.count) ? '送信済み' : '日を選んでください'),
-            changed && saved.length + view.draft.length ? el('span', { class: 'hint hint--inline' }, `まだ送信していません（${view.draft.length}日）`) : null
+            changed && saved.length + view.draft.length ? el('span', { class: 'hint hint--inline' }, `まだ送信していません（${view.draft.length}日）`) : null,
+            // 11/10〜「希望なし」：休みの希望がない人も、送ったことがわかるように（日を選んでいない・まだ送っていないときだけ）
+            editable && !view.draft.length && !saved.length && !(view.data && view.data.count)
+              ? el(
+                  'button',
+                  {
+                    type: 'button',
+                    class: 'btn btn--ghost btn--block req-nowish',
+                    onclick: () => {
+                      if (!confirm('今月は休みの希望なし（0日）で送信します。よろしいですか？（受付期間の間は、あとから日を選んで送り直せます）')) return;
+                      sendWish();
+                    },
+                  },
+                  '希望なしで送信'
+                )
+              : null,
+            !view.draft.length && !saved.length && view.data && view.data.count ? el('p', { class: 'req-nowish-done' }, '✓ 希望なしで送信済みです') : null
           )
         : view.paidDate
           ? el(
@@ -993,7 +1009,7 @@
       'p',
       { class: 'req-sum' },
       el('span', { class: 'req-sum__label' }, `${R().monthLabel(w.month)}分`),
-      wishes.length ? chip('off', `休み ${wishes.length}日 確定`) : chip('none', '休み 0日'),
+      wishes.length ? chip('off', `休み ${wishes.length}日 確定`) : view.data && view.data.count ? chip('none', '希望なし（送信済み）') : chip('none', '休み 0日'),
       paid.length ? chip(paidPend ? 'pending' : 'paid', `有給 ${paid.length}日${paidPend ? ' 申請中' : ' 承認'}`) : null
     );
   }
@@ -1039,7 +1055,7 @@
     return el(
       'details',
       { class: 'req-account' },
-      el('summary', { class: 'req-account__summary' }, el('span', { class: 'req-account__title' }, 'アカウント・この端末の設定'), el('span', { class: 'req-account__hint' }, '簡単ログイン・パスワード・ログアウト')),
+      el('summary', { class: 'req-account__summary' }, el('span', { class: 'req-account__title' }, 'アカウント・この端末の設定'), el('span', { class: 'req-account__hint' }, '勤怠の番号・簡単ログイン・パスワード・ログアウト')),
       el(
         'div',
         { class: 'req-account__body' },
@@ -1047,6 +1063,8 @@
         // 簡単ログイン（この端末のロック）の設定
         K.quickLock && user ? K.quickLock.card(user, K.app.rerender) : null,
         K.loginUI && user ? K.loginUI.passwordCard(user) : null,
+        // 勤怠の番号（PIN）（11/9〜）
+        K.attendanceView && view.account ? K.attendanceView.pinCard(view.account.staffIds, view.email) : null,
         el('button', { type: 'button', class: 'btn btn--ghost btn--block', onclick: () => K.app.cloudActions.signOut() }, 'ログアウト')
       )
     );

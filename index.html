@@ -6,7 +6,7 @@
   <!-- 安全装置（CSP）：プログラムはこのアプリ自身のファイルだけを読み込む。
        通信してよいのは、共有モードで使う Firebase（データの保存・メールリンクのログイン・ログイン状態の維持）だけ。
        「この端末だけで使う」モードのときは、Firebase の部品を読み込まないので、どこにも通信しない。 -->
-  <meta http-equiv="Content-Security-Policy" content="script-src 'self'; connect-src https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self'; connect-src https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.jma.go.jp; form-action 'none'">
   <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">
   <title>シフト管理</title>
@@ -45,6 +45,9 @@
       <button type="button" class="bottom-nav__btn" data-screen="summary">
         <span class="bottom-nav__icon" aria-hidden="true">▤</span>集計
       </button>
+      <button type="button" class="bottom-nav__btn" data-screen="attendance">
+        <span class="bottom-nav__icon" aria-hidden="true">◷</span>勤怠
+      </button>
       <button type="button" class="bottom-nav__btn" data-screen="requests">
         <span class="bottom-nav__icon" aria-hidden="true">✉</span>申請
       </button>
@@ -71,6 +74,9 @@
   <script src="js/autoshift.js" defer></script>
   <script src="js/published.js" defer></script>
   <script src="js/export.js" defer></script>
+  <script src="js/xlsx.js" defer></script>
+  <script src="js/attendance.js" defer></script>
+  <script src="js/weather.js" defer></script>
   <script src="js/quick-lock.js" defer></script>
   <script src="js/zoom.js" defer></script>
   <script src="js/wheel.js" defer></script>
@@ -86,12 +92,15 @@
   <script src="js/screens/settings-business.js" defer></script>
   <script src="js/screens/settings-staffing.js" defer></script>
   <script src="js/screens/settings-checks.js" defer></script>
+  <script src="js/screens/settings-attendance.js" defer></script>
   <script src="js/screens/settings-data.js" defer></script>
   <script src="js/screens/settings.js" defer></script>
   <script src="js/screens/login.js" defer></script>
   <script src="js/screens/day-list.js" defer></script>
   <script src="js/screens/request.js" defer></script>
   <script src="js/screens/requests-admin.js" defer></script>
+  <script src="js/screens/attendance.js" defer></script>
+  <script src="js/screens/kiosk.js" defer></script>
   <script src="js/screens/manager.js" defer></script>
   <script src="js/app.js" defer></script>
 </body>
