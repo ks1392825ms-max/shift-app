@@ -245,6 +245,76 @@ service cloud.firestore {
         && deciderOk('manager');
     }
 
+    // ---- 勤怠（11/9〜） ----
+    // 勤怠用 iPad のアカウント：kiosks/{メール}（管理者がアプリで登録）。その店舗の打刻だけができる
+    function kioskPath() {
+      return /databases/$(database)/documents/kiosks/$(myEmail());
+    }
+    function isKiosk() {
+      return signedIn() && exists(kioskPath()) && get(kioskPath()).data.deleted == false;
+    }
+    function isKioskOf(storeId) {
+      return isKiosk() && get(kioskPath()).data.storeId == storeId;
+    }
+    function pad2(n) {
+      return n < 10 ? '0' + string(n) : string(n);
+    }
+    // 日本時間の今日（"2026-12-03"）
+    function jstDay(t) {
+      return string(t.year()) + '-' + pad2(t.month()) + '-' + pad2(t.day());
+    }
+    function jstToday() {
+      return jstDay(request.time + duration.value(9, 'h'));
+    }
+    // その月の締め（最終日の20時・日本時間）より前か。締め＝翌月1日0時（UTC）の13時間前
+    function closeOf(y, m) {
+      return timestamp.date(m == 12 ? y + 1 : y, m == 12 ? 1 : m + 1, 1) - duration.value(13, 'h');
+    }
+    function attendanceOpen(month) {
+      return month is string && month.matches('[0-9]{4}-[0-9]{2}')
+        && request.time < closeOf(int(month[0:4]), int(month[5:7]));
+    }
+    function pinPath(staffId) {
+      return /databases/$(database)/documents/attendancePins/$(staffId);
+    }
+    // 打刻：店舗の iPad が、その店舗のスタッフの分を、今日の日付・今の時刻で出す（番号の確かめは punchProofs と一緒に）
+    function punchOk(id, d) {
+      return isKiosk()
+        && d.keys().hasOnly(['staffId', 'storeId', 'date', 'month', 'type', 'at', 'atMs', 'by', 'source'])
+        && d.keys().hasAll(['staffId', 'storeId', 'date', 'month', 'type', 'at', 'atMs', 'by', 'source'])
+        && d.storeId == get(kioskPath()).data.storeId
+        && d.type in ['in', 'out', 'bs', 'be']
+        && d.date == jstToday()
+        && d.month == d.date[0:7]
+        && d.atMs is int
+        && d.atMs > request.time.toMillis() - 300000
+        && d.atMs < request.time.toMillis() + 300000
+        && d.at is string
+        && d.by == myEmail()
+        && d.source == 'kiosk'
+        && id == d.staffId + '_' + d.date + '_' + string(d.atMs)
+        && staffInStore(d.staffId, d.storeId)
+        && attendanceOpen(d.month)
+        && existsAfter(/databases/$(database)/documents/punchProofs/$(id));
+    }
+    // 直した1日分：管理者はいつでも、幹部は担当店舗を締めの前まで
+    function editOk(id, d) {
+      return (isAdmin() || (manages(d.storeId) && attendanceOpen(d.month) && (resource == null || manages(resource.data.storeId))))
+        && d.keys().hasOnly(['staffId', 'storeId', 'date', 'month', 'in', 'out', 'breaks', 'reason', 'by', 'role', 'at', 'logId'])
+        && d.keys().hasAll(['staffId', 'storeId', 'date', 'month', 'in', 'out', 'breaks', 'reason', 'by', 'role', 'at', 'logId'])
+        && id == d.staffId + '_' + d.date
+        && d.date is string && d.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && d.month == d.date[0:7]
+        && d.in is string && d.out is string
+        && d.breaks is list && d.breaks.size() <= 6
+        && d.reason is string && d.reason.size() > 0 && d.reason.size() <= 50
+        && d.by == myEmail()
+        && d.role == (isAdmin() ? 'owner' : 'manager')
+        && isNowIso(d.at)
+        && staffInStore(d.staffId, d.storeId)
+        && getAfter(/databases/$(database)/documents/attendanceLogs/$(d.logId)).data.targetId == id;
+    }
+
     // ---- コレクションごと ----
     // オーナーの名簿：オーナーが読むだけ（書き換えは管理画面からだけ）
     match /access/{doc} {
@@ -263,7 +333,7 @@ service cloud.firestore {
     }
     // 店舗：スタッフは所属店舗、幹部は担当店舗を読める
     match /stores/{storeId} {
-      allow read: if isAdmin() || inMyStore(storeId) || manages(storeId);
+      allow read: if isAdmin() || inMyStore(storeId) || manages(storeId) || isKioskOf(storeId);
       allow write: if isAdmin();
     }
     // スタッフ：スタッフは自分の記録、幹部は担当店舗の記録を読める
@@ -273,7 +343,7 @@ service cloud.firestore {
     }
     // 設定：スタッフと幹部は希望休の設定（settings/requests）だけ読める。変えるのはオーナーだけ
     match /settings/{id} {
-      allow read: if isAdmin() || (id == 'requests' && (isStaff() || isManager()));
+      allow read: if isAdmin() || (id == 'requests' && (isStaff() || isManager())) || (id == 'attendance' && isManager());
       allow write: if isAdmin();
     }
     // 希望休の上限の変更（スタッフ別・月別）：本人と担当の幹部は読むだけ。変えるのはオーナーだけ
@@ -304,16 +374,22 @@ service cloud.firestore {
     // 希望休（1日ごと。名前は「スタッフID_日付」）
     match /wishRequests/{id} {
       allow read: if isAdmin() || ownsStaff(resource.data.staffId) || manages(resource.data.storeId);
-      // スタッフ：受付期間に「申請中」で出す。同じ書き込みで、日数（wishCounts）を1つ増やす（上限は wishCounts で確かめる）
-      // （「申請中」かどうかを先に見て、幹部が自分で登録する形のときは、すぐ次の決まりへ進む：ルールの計算の量を減らすため）
+      // スタッフ：受付期間に出すと、そのまま確定（11/8〜。status＝approved・役割＝'auto'・判断した人は空）。
+      // 同じ書き込みで、日数（wishCounts）を1つ増やす（上限は wishCounts で確かめる）
+      // （役割が 'auto' かどうかを先に見て、幹部が自分で登録する形のときは、すぐ次の決まりへ進む：ルールの計算の量を減らすため）
       allow create: if isAdmin() || (
-        request.resource.data.status == 'pending'
+        request.resource.data.get('decidedRole', '') == 'auto'
         && ownsStaff(request.resource.data.staffId)
         && inMyStore(request.resource.data.storeId)
         && staffInStore(request.resource.data.staffId, request.resource.data.storeId)
         && id == request.resource.data.staffId + '_' + request.resource.data.date
-        && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'date', 'status', 'createdAt', 'updatedAt', 'createdBy'])
-        && request.resource.data.status == 'pending'
+        && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'date', 'status', 'createdAt', 'updatedAt', 'createdBy', 'reason', 'decidedBy', 'decidedRole', 'decidedAt', 'lastActionBy', 'lastActionAt'])
+        && request.resource.data.status == 'approved'
+        && request.resource.data.reason == ''
+        && request.resource.data.decidedBy == ''
+        && request.resource.data.decidedAt == request.resource.data.createdAt
+        && request.resource.data.lastActionAt == request.resource.data.createdAt
+        && request.resource.data.lastActionBy == myEmail()
         && request.resource.data.date is string
         && dateInMonth(request.resource.data.date, request.resource.data.month)
         && isMe(request.resource.data.createdBy)
@@ -322,13 +398,13 @@ service cloud.firestore {
         && requestWindowOpen(request.resource.data.month)
         && countAfter(request.resource.data.staffId, request.resource.data.month) == countBefore(request.resource.data.staffId, request.resource.data.month) + 1
       ) || managerSelfWish(id);
-      // 判断：オーナーか、担当店舗の幹部（履歴は必須）
-      allow update: if ownerDecides('wish', id) || managerDecides('wish', id);
+      // 判断：オーナーだけ（11/8〜 幹部は希望休を判断しない。履歴は必須）
+      allow update: if ownerDecides('wish', id);
       // 削除：オーナーは申請中のものだけ（判断済みは、先に申請中に戻す＝履歴が残る）。
       //       スタッフは受付期間に、申請中・却下のものだけ（承認済みは変更申請）。同じ書き込みで日数を1つ減らす
       allow delete: if (isAdmin() && resource.data.status == 'pending') || (
         ownsStaff(resource.data.staffId)
-        && resource.data.status in ['pending', 'rejected']
+        && (resource.data.status in ['pending', 'rejected'] || (resource.data.status == 'approved' && resource.data.get('decidedRole', '') == 'auto'))
         && requestWindowOpen(resource.data.month)
         && countAfter(resource.data.staffId, resource.data.month) == countBefore(resource.data.staffId, resource.data.month) - 1
       ) || (
@@ -541,6 +617,13 @@ service cloud.firestore {
         && t.staffId == l.staffId
         && t.storeId == l.storeId;
     }
+    // 社用の時間（11/8〜）：start・end がなければ1日まるごと。あれば "13:00" の形（30分ごと）で、終了は開始より後
+    function businessTimeOk(d) {
+      return (!('start' in d) && !('end' in d))
+        || (d.start is string && d.end is string
+          && d.start.matches('([01][0-9]|2[0-3]):(00|30)') && d.end.matches('([01][0-9]|2[0-3]):(00|30)')
+          && d.start < d.end);
+    }
     // 社用で不在の日（名前は「スタッフID_日付」）：幹部が自分の分を、担当店舗・受付期間に登録する（その場で確定）。
     // 読めるのはオーナー・本人・担当店舗の幹部。取り消せるのは、オーナーと、受付期間の本人。書き換えはオーナーだけ
     match /businessDays/{id} {
@@ -551,7 +634,8 @@ service cloud.firestore {
         && manages(request.resource.data.storeId)
         && staffInStore(request.resource.data.staffId, request.resource.data.storeId)
         && id == request.resource.data.staffId + '_' + request.resource.data.date
-        && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'date', 'what', 'detail', 'status', 'createdAt', 'updatedAt', 'createdBy'])
+        && request.resource.data.keys().hasOnly(['staffId', 'storeId', 'month', 'date', 'what', 'detail', 'status', 'createdAt', 'updatedAt', 'createdBy', 'start', 'end'])
+        && businessTimeOk(request.resource.data)
         && request.resource.data.status == 'approved'
         && request.resource.data.what in ['外部講習', '店舗間の移動', '会議・ミーティング', '撮影・SNS業務', '買い出し', 'その他']
         && request.resource.data.detail is string
@@ -573,14 +657,78 @@ service cloud.firestore {
     }
     // 確定したシフトの公開用の写し：スタッフは所属店舗、幹部は担当店舗を読める。作るのはオーナーだけ
     match /publishedRosters/{id} {
-      allow read: if isAdmin() || inMyStore(resource.data.storeId) || manages(resource.data.storeId);
+      allow read: if isAdmin() || inMyStore(resource.data.storeId) || manages(resource.data.storeId) || isKioskOf(resource.data.storeId);
       allow write: if isAdmin();
+    }
+    // ---- 勤怠（11/9〜） ----
+    // 勤怠用 iPad のアカウント：本人は自分の分を読む。登録・解除は管理者（アプリ）だけ
+    match /kiosks/{email} {
+      allow read: if isAdmin() || (signedIn() && email == myEmail());
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly(['storeId', 'deleted', 'createdAt', 'createdBy'])
+        && request.resource.data.storeId is string
+        && request.resource.data.deleted is bool
+        && email == email.lower();
+    }
+    // iPad に出す名前の一覧（名前と ID だけ）：その店舗の iPad・担当の幹部が読む。作るのは管理者だけ
+    match /kioskDirectory/{storeId} {
+      allow read: if isAdmin() || isKioskOf(storeId) || manages(storeId);
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly(['storeId', 'staff', 'updatedAt'])
+        && request.resource.data.storeId == storeId
+        && request.resource.data.staff is list;
+    }
+    // 番号（PIN）：元に戻せない形だけ。本人と管理者が決める。消すのは管理者だけ
+    match /attendancePins/{staffId} {
+      allow read: if isAdmin() || ownsStaff(staffId);
+      allow create, update: if (isAdmin() || ownsStaff(staffId))
+        && request.resource.data.keys().hasOnly(['staffId', 'hash', 'updatedAt', 'updatedBy'])
+        && request.resource.data.staffId == staffId
+        && request.resource.data.hash is string
+        && request.resource.data.hash.matches('[0-9a-f]{64}')
+        && isMe(request.resource.data.updatedBy)
+        && isNowIso(request.resource.data.updatedAt);
+      allow delete: if isAdmin();
+    }
+    // 番号の確かめ用：打刻と一緒にだけ作れる。番号（の元に戻せない形）が本人のものと同じときだけ。誰も読めない・変えられない
+    match /punchProofs/{id} {
+      allow read: if false;
+      allow create: if isKiosk()
+        && request.resource.data.keys().hasOnly(['staffId', 'hash'])
+        && exists(pinPath(request.resource.data.staffId))
+        && request.resource.data.hash == get(pinPath(request.resource.data.staffId)).data.hash
+        && getAfter(/databases/$(database)/documents/punches/$(id)).data.staffId == request.resource.data.staffId;
+      allow update, delete: if false;
+    }
+    // 打刻：iPad が今日の分を出すだけ（追加するだけ。直すのは punchEdits）。iPad は今日の自分の店舗の分だけ読む
+    match /punches/{id} {
+      allow read: if isAdmin() || manages(resource.data.storeId) || (isKioskOf(resource.data.storeId) && resource.data.date == jstToday());
+      allow create: if punchOk(id, request.resource.data);
+      allow update, delete: if false;
+    }
+    // 直した1日分（打刻より優先）：修正の記録と一緒にだけ。元に戻す（消す）のは管理者だけ
+    match /punchEdits/{id} {
+      allow read: if isAdmin() || manages(resource.data.storeId);
+      allow create, update: if editOk(id, request.resource.data);
+      allow delete: if isAdmin();
+    }
+    // 修正の記録：追加するだけ（書き換え・削除はできない）
+    match /attendanceLogs/{id} {
+      allow read: if isAdmin() || manages(resource.data.storeId);
+      allow create: if (isAdmin() || (manages(request.resource.data.storeId) && attendanceOpen(request.resource.data.month)))
+        && request.resource.data.keys().hasOnly(['targetId', 'staffId', 'storeId', 'date', 'month', 'from', 'to', 'reason', 'by', 'role', 'at'])
+        && request.resource.data.by == myEmail()
+        && isNowIso(request.resource.data.at)
+        && id == 'att_' + request.resource.data.targetId + '_' + request.resource.data.at
+        && getAfter(/databases/$(database)/documents/punchEdits/$(request.resource.data.targetId)).data.logId == id;
+      allow update, delete: if false;
     }
     // そのほかのデータ（シフト・勤務パターン・必要人数・シフト確定・希望休の上限の設定など）：オーナーだけ
     // （上で個別に決めた名簿・申請・履歴は、ここでは許さない）
     match /{collection}/{id} {
       allow read, write: if isAdmin()
-        && !(collection in ['access', 'managers', 'wishRequests', 'paidRequests', 'changeRequests', 'decisionLogs', 'businessDays']);
+        && !(collection in ['access', 'managers', 'wishRequests', 'paidRequests', 'changeRequests', 'decisionLogs', 'businessDays',
+          'kiosks', 'kioskDirectory', 'attendancePins', 'punchProofs', 'punches', 'punchEdits', 'attendanceLogs']);
     }
   }
 }
