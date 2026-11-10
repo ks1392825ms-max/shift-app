@@ -852,6 +852,23 @@ button {
   line-height: 1;
 }
 
+/* 下のタブが6つになったので、せまい画面では文字を折り返さずに1行で（11/10〜） */
+.bottom-nav__btn {
+  white-space: nowrap;
+  min-width: 0;
+}
+@media (max-width: 420px) {
+  .bottom-nav__btn {
+    letter-spacing: 0;
+    font-size: 0.66rem;
+  }
+}
+@media (max-width: 340px) {
+  .bottom-nav__btn {
+    font-size: 0.6rem;
+  }
+}
+
 .bottom-nav__btn.is-active {
   color: var(--text);
 }
