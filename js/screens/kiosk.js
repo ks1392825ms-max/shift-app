@@ -283,7 +283,7 @@
     const w = view.weather;
     if (!w) return null;
     const box = (label, x, temp) =>
-      el('div', { class: 'kiosk-wx__box', 'aria-label': `${label} ${x.text}${x.pop != null ? ` 雨 ${x.pop}%` : ''}` },
+      el('div', { class: 'kiosk-wx__box', 'aria-label': `${label} ${x.text}${x.pop != null ? ` 降水 ${x.pop}%` : ''}` },
         el('b', null, label),
         (() => {
           const ic = el('span', { class: 'kiosk-wx__icon', 'aria-hidden': 'true' });
@@ -293,7 +293,7 @@
           return ic;
         })(),
         temp != null ? el('em', null, `${temp}°`) : null,
-        el('i', null, `${x.text}${x.pop != null ? `・雨 ${x.pop}%` : ''}`));
+        el('i', null, `${x.text}${x.pop != null ? `・降水 ${x.pop}%` : ''}`));
     return el('div', { class: 'kiosk-wx', title: `${w.place}の天気（気象庁）：${w.text}。気温は${w.tempPlace}` }, box('AM', w.am, w.min), box('PM', w.pm, w.max));
   }
 
