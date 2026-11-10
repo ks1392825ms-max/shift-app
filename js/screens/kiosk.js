@@ -169,6 +169,15 @@
     K.app.rerender();
   }
 
+  // 押しまちがい対策の確かめ（11/10〜）
+  const CONFIRM = { in: '出勤しますか？', out: '退勤しますか？', bs: '休憩に入りますか？', be: '休憩から戻りますか？' };
+  function askConfirm(type) {
+    const s = view.sheet;
+    if (!s || s.kind !== 'act' || view.busy) return;
+    view.sheet = { kind: 'confirm', staff: s.staff, code: s.code, type, msg: '' };
+    K.app.rerender();
+  }
+
   async function onAct(type, btn) {
     const s = view.sheet;
     if (!s || view.busy) return;
@@ -190,7 +199,7 @@
           t.n = 0;
           view.sheet = { kind: 'msg', staff: s.staff, msg: `番号を${MAX_TRIES}回まちがえたので、1分たってからもう一度押してください。` };
         } else view.sheet = { kind: 'pin', staff: s.staff, code: '', msg: err.message };
-      } else view.sheet = { ...s, msg: err.message };
+      } else view.sheet = { kind: 'act', staff: s.staff, code: s.code, msg: err.message };
       K.app.rerender();
     }
   }
@@ -246,17 +255,46 @@
     setTimeout(() => s.remove(), 600);
   }
 
-  // 午前・午後の天気（気象庁の予報。苫小牧＝胆振地方。気温は室蘭の最低・最高）
+  // 午前・午後の天気（気象庁の予報。苫小牧＝胆振地方。気温は室蘭の最低・最高）。11/10〜 見出しは AM・PM（画面の右端）
+  // 天気の絵（11/10〜 案3：黒い細い線＋ワンポイントの色。晴れ・くもり・雨・雪・晴れ時々くもり・雷）
+  const WX_CLOUD = 'M20 48H45a10 10 0 0 0 1-20 14 14 0 0 0-26.5-2A11 11 0 0 0 20 48z';
+  function wxRays(cx, cy, r1, r2) {
+    return Array.from({ length: 8 }, (_, i) => {
+      const a = (i * Math.PI) / 4;
+      return `M${(cx + Math.cos(a) * r1).toFixed(1)} ${(cy + Math.sin(a) * r1).toFixed(1)}L${(cx + Math.cos(a) * r2).toFixed(1)} ${(cy + Math.sin(a) * r2).toFixed(1)}`;
+    }).join('');
+  }
+  function wxSvg(kind) {
+    const sun = (x, y, r) => `<path d="${wxRays(x, y, r + 5, r + 9)}" stroke="#222" stroke-width="2.4" stroke-linecap="round"/><circle cx="${x}" cy="${y}" r="${r}" fill="#ffd25e" stroke="#222" stroke-width="2.4"/>`;
+    const cloud = (t) => `<path transform="${t}" d="${WX_CLOUD}" fill="#fff" stroke="#222" stroke-width="2.4" stroke-linejoin="round"/>`;
+    const up = cloud('translate(0,-10)');
+    const body = {
+      sun: sun(32, 32, 13),
+      cloud: cloud('translate(0,-4)'),
+      rain: up + [22, 32, 42].map((x, i) => `<path d="M${x} ${50 + (i % 2) * 3}q-3 5 0 7q3-2 0-7z" fill="#3d8bfd" stroke="#3d8bfd" stroke-linejoin="round"/>`).join(''),
+      snow: up + [22, 32, 42].map((x, i) => { const y = 52 + (i % 2) * 3; return `<path d="M${x} ${y}v6M${x - 3} ${y + 3}h6M${x - 2.2} ${y + 0.8}l4.4 4.4M${x + 2.2} ${y + 0.8}l-4.4 4.4" stroke="#3d8bfd" stroke-width="2" stroke-linecap="round"/>`; }).join(''),
+      thunder: up + '<path d="M35 44l-9 12h7l-4 10 12-15h-7l4-7z" fill="#ffd25e" stroke="#222" stroke-width="2" stroke-linejoin="round"/>',
+      suncloud: sun(22, 22, 10) + cloud('translate(7,4) scale(.9)'),
+    }[kind];
+    return body ? `<svg viewBox="0 0 64 68" aria-hidden="true" focusable="false">${body}</svg>` : '';
+  }
+
   function weatherView() {
     const w = view.weather;
     if (!w) return null;
     const box = (label, x, temp) =>
       el('div', { class: 'kiosk-wx__box', 'aria-label': `${label} ${x.text}${x.pop != null ? ` 雨 ${x.pop}%` : ''}` },
         el('b', null, label),
-        el('span', { class: 'kiosk-wx__icon', 'aria-hidden': 'true' }, x.icon || '・'),
+        (() => {
+          const ic = el('span', { class: 'kiosk-wx__icon', 'aria-hidden': 'true' });
+          const svg = wxSvg(x.kind);
+          if (svg) ic.innerHTML = svg; // 決まった形の絵だけ（外から来た文字は入れない）
+          else ic.textContent = x.icon || '・';
+          return ic;
+        })(),
         temp != null ? el('em', null, `${temp}°`) : null,
         el('i', null, `${x.text}${x.pop != null ? `・雨 ${x.pop}%` : ''}`));
-    return el('div', { class: 'kiosk-wx', title: `${w.place}の天気（気象庁）：${w.text}。気温は${w.tempPlace}` }, box('午前', w.am, w.min), box('午後', w.pm, w.max));
+    return el('div', { class: 'kiosk-wx', title: `${w.place}の天気（気象庁）：${w.text}。気温は${w.tempPlace}` }, box('AM', w.am, w.min), box('PM', w.pm, w.max));
   }
 
   function header() {
@@ -265,9 +303,10 @@
     return el(
       'div',
       { class: 'kiosk-top' },
-      el('div', null, el('p', { class: 'kiosk-store' }, store.name || ''), el('p', { class: 'kiosk-date' }, `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`, el('small', null, `（${U.WEEKDAYS[K.calc.weekdayOf(date)]}）`))),
-      weatherView(),
-      el('p', { class: 'kiosk-clock', id: 'kiosk-clock' }, A().shortTime(time))
+      // 11/10〜 左に店舗名と日付・真ん中に大きな時計・右端に天気
+      el('div', { class: 'kiosk-when' }, el('p', { class: 'kiosk-store' }, store.name || ''), el('p', { class: 'kiosk-date' }, `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`, el('small', null, `（${U.WEEKDAYS[K.calc.weekdayOf(date)]}）`))),
+      el('p', { class: 'kiosk-clock', id: 'kiosk-clock' }, A().shortTime(time)),
+      weatherView() || el('div', { class: 'kiosk-wx-none', 'aria-hidden': 'true' })
     );
   }
 
@@ -331,8 +370,22 @@
           'div',
           { class: 'kiosk-acts' },
           [['in', '出勤'], ['out', '退勤'], ['bs', '休憩開始'], ['be', '休憩戻り']].map(([k, t]) =>
-            el('button', { type: 'button', class: `kiosk-act a-${k}`, disabled: !ok.includes(k) || view.busy, onclick: (e) => onAct(k, e.currentTarget) }, t)
+            el('button', { type: 'button', class: `kiosk-act a-${k}`, disabled: !ok.includes(k) || view.busy, onclick: () => askConfirm(k) }, t)
           )
+        ),
+      ];
+    } else if (s.kind === 'confirm') {
+      // 11/10〜 押しまちがい対策：「出勤しますか？」→ はい／いいえ
+      panel = [
+        el('h3', null, `${s.staff.name} さん`),
+        el('p', { class: `kiosk-ask is-${s.type}` }, CONFIRM[s.type]),
+        el('p', null, `いまの時刻 ${A().shortTime(A().nowJst().time)}`),
+        s.msg ? el('p', { class: 'kiosk-err', role: 'alert' }, s.msg) : null,
+        el(
+          'div',
+          { class: 'kiosk-yesno' },
+          el('button', { type: 'button', class: 'kiosk-act kiosk-no', disabled: view.busy, onclick: () => { view.sheet = { kind: 'act', staff: s.staff, code: s.code, msg: '' }; K.app.rerender(); } }, 'いいえ'),
+          el('button', { type: 'button', class: `kiosk-act kiosk-yes a-${s.type}`, disabled: view.busy, onclick: (e) => onAct(s.type, e.currentTarget) }, 'はい')
         ),
       ];
     } else if (s.kind === 'extra') {

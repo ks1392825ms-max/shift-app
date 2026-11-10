@@ -7664,3 +7664,137 @@ body.is-kiosk {
   font-weight: 700;
   color: var(--ok);
 }
+
+/* ---- 勤怠用 iPad：最初の見本のデザイン（白い背景）のまま、時計を真ん中に大きく・天気は右端（AM/PM）・曜日は日付と同じ字（11/10 ユーザー） ---- */
+.kiosk-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 24px;
+}
+.kiosk-when {
+  min-width: 0;
+}
+.kiosk-date {
+  white-space: nowrap;
+}
+.kiosk-date small {
+  font-size: 1em;
+  color: inherit;
+  font-weight: inherit;
+  margin-left: 0.1em;
+}
+.kiosk-clock {
+  margin: 0;
+  justify-self: center;
+  font-size: clamp(56px, 9vw, 120px);
+}
+.kiosk-wx,
+.kiosk-wx-none {
+  justify-self: end;
+  margin-left: 0;
+}
+/* 天気は右の列の幅に収める（狭い画面でも時計に重ならない） */
+.kiosk-wx {
+  justify-self: stretch;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.kiosk-wx__box,
+.kiosk-wx__box:first-child {
+  flex: 0 1 150px;
+  min-width: 0;
+}
+.kiosk-wx__box i {
+  white-space: normal;
+}
+/* 日付は左の列に収まる大きさ（曜日も同じ字になって長くなったため） */
+.kiosk-date {
+  font-size: clamp(26px, 3.6vw, 44px);
+}
+@media (min-width: 900px) and (orientation: landscape) {
+  .kiosk-date {
+    font-size: clamp(34px, 3.4vw, 54px);
+  }
+  .kiosk-clock {
+    font-size: clamp(80px, 9.5vw, 150px);
+  }
+}
+/* スマホ（縦）：日付と時計を1行に、天気はその下に横いっぱい */
+@media (max-width: 600px) {
+  .kiosk-top {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+  .kiosk-clock {
+    justify-self: end;
+    font-size: 44px;
+  }
+  .kiosk-date {
+    font-size: 24px;
+  }
+  .kiosk-wx {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    width: auto;
+    order: 0;
+  }
+  .kiosk-wx-none {
+    display: none;
+  }
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  .kiosk-clock {
+    font-size: 40px;
+  }
+  .kiosk-date {
+    font-size: 22px;
+  }
+}
+
+/* 勤怠用 iPad：押しまちがい対策の「出勤しますか？ はい／いいえ」（11/10〜） */
+.kiosk-ask {
+  margin: 6px 0 4px !important;
+  font-size: clamp(30px, 4vw, 48px);
+  font-weight: 800;
+  color: var(--k-ink) !important;
+}
+.kiosk-ask.is-in { color: var(--k-in) !important; }
+.kiosk-ask.is-out { color: var(--k-out) !important; }
+.kiosk-ask.is-bs { color: #d48f00 !important; }
+.kiosk-ask.is-be { color: #7048e8 !important; }
+.kiosk-yesno {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 14px;
+  margin-top: 18px;
+}
+.kiosk-yesno .kiosk-act {
+  padding: clamp(26px, 5vh, 48px) 0;
+  font-size: clamp(26px, 3vw, 38px);
+}
+.kiosk-act.kiosk-no {
+  background: #ececea;
+  color: #3a3b3f;
+}
+
+/* 勤怠用 iPad の天気の絵（11/10〜 案3：細い線＋ワンポイントの色） */
+.kiosk-wx__icon svg {
+  display: inline-block;
+  width: 1.5em;
+  height: 1.5em;
+  vertical-align: middle;
+}
+/* AM・PM の文字は、天気の絵（細い黒い線）に合わせた細めのすっきりした字（11/10 ユーザー） */
+.kiosk-wx__box b {
+  font-family: "Avenir Next", "Helvetica Neue", "Hiragino Sans", sans-serif;
+  font-weight: 500;
+  color: #222;
+  letter-spacing: 0.12em;
+  font-size: 14px;
+}
+@media (min-width: 900px) and (orientation: landscape) {
+  .kiosk-wx__box b {
+    font-size: 16px;
+  }
+}

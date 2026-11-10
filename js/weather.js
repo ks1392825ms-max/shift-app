@@ -27,6 +27,12 @@
     return ['', t.split(/\s+/)[0] || ''];
   }
 
+  // 11/10〜 iPad に描く絵の種類（細い線＋ワンポイントの色の絵。kiosk.js が描く）
+  const KIND_OF = { '☀️': 'sun', '☁️': 'cloud', '🌤️': 'suncloud', '⛅': 'suncloud', '☔': 'rain', '🌦️': 'rain', '❄️': 'snow', '🌨️': 'snow', '⛈️': 'thunder', '🌫️': 'cloud' };
+  function kindOf(text) {
+    return KIND_OF[iconOf(text)[0]] || '';
+  }
+
   // その日の天気の文を、午前と午後に分ける
   // 「A　昼過ぎ　から　B」「A　夕方　から　B」「A　後　B」→ 午前 A・午後 B。「所により…」から後は、細かい但し書きなので使わない
   function splitDay(text) {
@@ -79,8 +85,8 @@
     return {
       place: PLACE.areaName,
       tempPlace: PLACE.tempName,
-      am: { icon: amIcon, text: amShort, pop: pop(6) },
-      pm: { icon: pmIcon, text: pmShort, pop: pop(12) },
+      am: { icon: amIcon, kind: kindOf(am), text: amShort, pop: pop(6) },
+      pm: { icon: pmIcon, kind: kindOf(pm), text: pmShort, pop: pop(12) },
       min: temps.length >= 2 ? Math.min(...temps) : null,
       max: temps.length ? Math.max(...temps) : null,
       text: String(wa.weathers[wi] || '').replace(/　/g, ' '),
@@ -102,5 +108,5 @@
     }
   }
 
-  K.weather = { today, parse, splitDay, iconOf, PLACE, reset: () => (cache = null) };
+  K.weather = { today, parse, splitDay, iconOf, kindOf, PLACE, reset: () => (cache = null) };
 })();
