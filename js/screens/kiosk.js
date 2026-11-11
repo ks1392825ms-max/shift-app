@@ -21,6 +21,9 @@
     view = {
       email: params.email,
       storeId: params.kiosk.storeId,
+      // 11/11〜 管理者の「タブレット」タブ：同じ画面を見本として動かす（打っても記録しない）
+      demo: Boolean(params.demo),
+      screen: params.demo ? 'kioskview' : 'kiosk',
       loading: true,
       error: '',
       data: null, // { store, roster, directory, punches }
@@ -61,20 +64,20 @@
       const data = await backend().loadKioskData(v.storeId, date);
       v.data = data;
       // 天気（気象庁。読めなくても打刻には関係しない）
-      if (K.weather) K.weather.today(date).then((w) => { if (view === v) { v.weather = w; if (!v.sheet && !v.busy && K.app.state.screen === 'kiosk') K.app.rerender(); } });
+      if (K.weather) K.weather.today(date).then((w) => { if (view === v) { v.weather = w; if (!v.sheet && !v.busy && K.app.state.screen === v.screen) K.app.rerender(); } });
       v.date = date;
       v.error = '';
     } catch (err) {
       v.error = `読み込めませんでした（${err.message}）。電波を確かめてください。`;
     }
     v.loading = false;
-    if (view === v && !v.sheet && !v.busy && K.app.state.screen === 'kiosk') K.app.rerender();
+    if (view === v && !v.sheet && !v.busy && K.app.state.screen === v.screen) K.app.rerender();
   }
 
   // 1分ごとに読み直す（ほかの iPad・直した分・日付が変わったとき）。何かを入れている途中は読み直さない
   function startTimers() {
     // ログアウトしたら止める
-    const alive = () => view && K.app.state.screen === 'kiosk';
+    const alive = () => view && K.app.state.screen === view.screen;
     if (!timer) timer = setInterval(() => (alive() ? !view.sheet && !view.busy && load() : stopTimers()), REFRESH_MS);
     if (!clockTimer)
       clockTimer = setInterval(() => {
@@ -184,7 +187,10 @@
     view.busy = true;
     const rect = btn.getBoundingClientRect();
     try {
-      const rec = await A().punch({ staffId: s.staff.id, storeId: view.storeId, type, pin: s.code, email: view.email, current: s.staff.punches });
+      // 見本（管理者の「タブレット」タブ）は記録しない。この画面の中だけで打った形にする
+      const rec = view.demo
+        ? { id: `demo_${Date.now()}`, staffId: s.staff.id, storeId: view.storeId, type, at: A().now().toISOString(), atMs: A().now().getTime(), demo: true }
+        : await A().punch({ staffId: s.staff.id, storeId: view.storeId, type, pin: s.code, email: view.email, current: s.staff.punches });
       view.tries[s.staff.id] = { n: 0, until: 0 };
       (view.data.punches = view.data.punches || []).push(rec);
       view.sheet = null;
@@ -336,7 +342,7 @@
         { class: 'kiosk-foot' },
         el('p', { class: 'kiosk-off' }, ps.off.length ? [el('b', null, '今日の休み'), ps.off.map((m) => m.name).join('・')] : ''),
         ps.extras.length ? el('button', { type: 'button', class: 'kiosk-ghost', onclick: () => openSheet({ kind: 'extra' }) }, '予定にない人') : null,
-        el('button', { type: 'button', class: 'kiosk-ghost kiosk-exit', onclick: () => openSheet({ kind: 'exit', msg: '' }) }, '管理者')
+        view.demo ? null : el('button', { type: 'button', class: 'kiosk-ghost kiosk-exit', onclick: () => openSheet({ kind: 'exit', msg: '' }) }, '管理者')
       ),
     ];
   }
@@ -428,7 +434,7 @@
   }
 
   function render(container, params) {
-    if (!view || view.email !== params.email) reset(params);
+    if (!view || view.email !== params.email || view.storeId !== params.kiosk.storeId || view.demo !== Boolean(params.demo)) reset(params);
     startTimers();
     const root = el('div', { class: 'kiosk', onpointerdown: ripple });
     if (view.loading) root.append(header(), el('p', { class: 'kiosk-empty' }, '読み込んでいます…'));
@@ -437,6 +443,60 @@
     container.append(root);
   }
 
+  // ---- 管理者の「タブレット」タブ（11/11〜）：お店のタブレットと同じ画面を、見本として見る（本番の記録は書かない） ----
+  // スマホを横向きにしたときは、画面の幅を iPad の横向きと同じ 1180 にして、iPad と同じ並び・字の大きさの割合で見せる
+  const TABLET_WIDTH = 1180;
+  let baseViewport = null;
+  let watching = false;
+
+  // 横向きかどうか：今の画面の幅と高さで決める（幅を 1180 にしたあとも、縦に戻すと高さのほうが大きくなる）
+  function landscape() {
+    return window.innerWidth > window.innerHeight;
+  }
+
+  function isPhone() {
+    return window.matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) <= 600;
+  }
+
+  // 画面に入る・出るとき（app.js の render から毎回）と、向きを変えたときに呼ぶ
+  function syncView(on) {
+    const meta = document.querySelector('meta[name="viewport"]');
+    if (meta && baseViewport === null) baseViewport = meta.getAttribute('content');
+    const full = Boolean(on && isPhone() && landscape());
+    const want = full ? `width=${TABLET_WIDTH}, viewport-fit=cover` : baseViewport;
+    if (meta && meta.getAttribute('content') !== want) meta.setAttribute('content', want);
+    document.body.classList.toggle('is-kv', Boolean(on));
+    document.body.classList.toggle('is-kv-full', full);
+    if (on && !watching) {
+      watching = true;
+      const again = () => syncView(K.app.state.screen === 'kioskview');
+      window.addEventListener('orientationchange', () => setTimeout(again, 120));
+      window.addEventListener('resize', again);
+    }
+  }
+
+  function renderView(container) {
+    const backendOk = K.storage.isCloud() && K.app.cloudBackend() && K.app.cloudBackend().loadKioskData;
+    if (!backendOk) {
+      container.append(el('section', { class: 'card' }, el('h2', { class: 'card__title' }, 'タブレットの画面'), el('p', { class: 'hint hint--left' }, '共有モード（ログインして使うとき）で、お店のタブレットと同じ打刻の画面を見られます。')));
+      return;
+    }
+    const store = K.app.currentStore();
+    const u = K.app.cloudUser();
+    container.append(
+      el(
+        'div',
+        { class: 'kv-bar', role: 'note' },
+        el('span', { class: 'kv-badge' }, '見本'),
+        el('span', { class: 'kv-text' }, `${store.name}のタブレットと同じ画面です。押しても記録されません。`),
+        el('span', { class: 'kv-rotate' }, 'スマホを横向きにすると、iPad と同じ画面で見られます'),
+        el('span', { class: 'kv-back' }, '縦向きに戻すと、管理者の画面に戻ります')
+      )
+    );
+    render(container, { email: `demo:${(u && u.email) || ''}`, kiosk: { storeId: store.id }, demo: true });
+  }
+
   K.screens = K.screens || {};
+  K.screens.kioskview = { render: renderView, sync: syncView, reset: () => { stopTimers(); view = null; } };
   K.screens.kiosk = { render, reset: () => { stopTimers(); view = null; }, shortNames, surname };
 })();

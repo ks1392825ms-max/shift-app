@@ -7798,3 +7798,88 @@ body.is-kiosk {
     font-size: 16px;
   }
 }
+
+/* ---- 管理者の「タブレット」タブ（11/11〜）：お店のタブレットと同じ画面の見本 ---- */
+.screen[data-screen="kioskview"] {
+  max-width: none;
+}
+.screen[data-screen="kioskview"] .kiosk {
+  min-height: 72vh;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+}
+.kv-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.kv-badge {
+  background: #111214;
+  color: #fff;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+}
+.kv-rotate,
+.kv-back {
+  display: none;
+  flex-basis: 100%;
+  font-weight: 700;
+  color: var(--text);
+}
+@media (max-width: 600px) and (orientation: portrait) {
+  .kv-rotate { display: block; }
+}
+/* スマホを横向きにしたとき：iPad と同じ幅で、画面いっぱいに（上の見出し・下のタブは隠す） */
+body.is-kv-full .app-header,
+body.is-kv-full .bottom-nav,
+body.is-kv-full #local-notice {
+  display: none;
+}
+body.is-kv-full .screen {
+  max-width: none;
+  padding: 0;
+}
+body.is-kv-full .screen[data-screen="kioskview"] .kiosk {
+  min-height: 100vh;
+  min-height: 100dvh;
+  border: 0;
+  border-radius: 0;
+}
+body.is-kv-full .kv-bar {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  margin: 0;
+  padding: 4px 6px 4px 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #e3e3df;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  font-size: 13px;
+}
+body.is-kv-full .kv-text,
+body.is-kv-full .kv-rotate {
+  display: none;
+}
+body.is-kv-full .kv-back {
+  display: inline;
+  flex-basis: auto;
+  font-weight: 500;
+  color: #6e6f73;
+}
+/* 下のタブが7つ（タブレットを追加）：小さいスマホでも1行に */
+@media (max-width: 360px) {
+  .bottom-nav__btn {
+    font-size: 0.58rem;
+  }
+}

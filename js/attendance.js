@@ -440,6 +440,7 @@
     LATE_MIN,
     attach,
     setClock,
+    now: () => clock(),
     nowJst,
     timeOf,
     toMin,

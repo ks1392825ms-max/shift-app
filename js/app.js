@@ -4,10 +4,10 @@
   const K = window.ShiftApp;
   const U = K.utils;
 
-  const SCREEN_TITLES = { roster: 'シフト表', day: '1日の詳細', monthTimeline: '月のタイムライン', staff: 'スタッフ別', summary: '集計', settings: '設定', requests: '申請', login: '共有モード', request: '希望休・有給の申請', manager: '幹部の画面', kiosk: '勤怠', attendance: '勤怠' };
+  const SCREEN_TITLES = { roster: 'シフト表', day: '1日の詳細', monthTimeline: '月のタイムライン', staff: 'スタッフ別', summary: '集計', settings: '設定', requests: '申請', login: '共有モード', request: '希望休・有給の申請', manager: '幹部の画面', kiosk: '勤怠', attendance: '勤怠', kioskview: 'タブレット' };
 
   // 下のタブで、どのタブを選択中にするか（1日の詳細はシフト表の中の画面）
-  const TAB_OF = { roster: 'roster', day: 'roster', monthTimeline: 'roster', staff: 'staff', summary: 'summary', settings: 'settings', requests: 'requests', attendance: 'attendance', login: null, request: null, manager: null, kiosk: null };
+  const TAB_OF = { roster: 'roster', day: 'roster', monthTimeline: 'roster', staff: 'staff', summary: 'summary', settings: 'settings', requests: 'requests', attendance: 'attendance', kioskview: 'kioskview', login: null, request: null, manager: null, kiosk: null };
 
   // 表示中の店舗を、次に開いたときも同じにするための保存場所（シフトのデータとは別。消えても困らない）
   const UI_KEY = 'shift-app-ui';
@@ -134,6 +134,8 @@
     // 勤怠用 iPad の画面（kiosk）も同じ（11/9〜）
     const gate = state.screen === 'login' || state.screen === 'request' || state.screen === 'manager' || state.screen === 'kiosk';
     document.body.classList.toggle('is-kiosk', state.screen === 'kiosk');
+    // 管理者の「タブレット」タブ（11/11〜）：スマホを横向きにしたら iPad と同じ幅で見せる
+    if (K.screens.kioskview) K.screens.kioskview.sync(state.screen === 'kioskview');
     document.body.classList.toggle('is-gate', gate);
     renderModeBadge();
     renderRoleBadge();
