@@ -1036,6 +1036,9 @@
 
     const note = cleanText(fields.note, { label: '備考', max: MAX_STAFF_NOTE, required: false });
     const email = cleanEmail(fields.email);
+    // 勤怠の集計表の上の欄（11/12〜）：従業員番号・氏名（空なら表示名を使う）
+    const employeeNo = cleanText(fields.employeeNo, { label: '従業員番号', max: 20, required: false });
+    const fullName = cleanText(fields.fullName, { label: '氏名', max: 30, required: false });
 
     return {
       employment,
@@ -1049,6 +1052,8 @@
       workWeekdays,
       note,
       email,
+      employeeNo,
+      fullName,
       personId: fields.personId || null,
     };
   }

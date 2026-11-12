@@ -209,6 +209,15 @@
     const role = currentRole();
     if (role) document.body.dataset.role = role === 'manager-self' ? 'manager' : role;
     else delete document.body.dataset.role;
+    // 起動のアニメーション（11/13〜）：次に開いたときの名札の色のために、この端末の役割を覚える。勤怠用 iPad では、すぐ閉じる
+    if (role) {
+      try {
+        localStorage.setItem('shift-last-role', role === 'manager-self' ? 'manager' : role);
+      } catch (err) {
+        // 保存できない端末（プライベートブラウズなど）は、色なしで出すだけ
+      }
+    }
+    if (role === 'kiosk' && K.splash) K.splash.close();
     const title = document.querySelector('.app-title');
     if (!title) return;
     let badge = document.getElementById('role-badge');

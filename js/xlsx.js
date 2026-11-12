@@ -1,6 +1,6 @@
 // Excel のファイル（.xlsx）を作る（11/9〜 勤怠の集計表の出力）
 // インターネットには通信しない。外の部品も使わない（ZIP は圧縮しない形で、その場で組み立てる）。
-// K.xlsx.build([{ name: 'シート名', rows: [['A1', 'B1'], ['A2']] }]) → Blob
+// K.xlsx.build([{ name: 'シート名', rows: [['A1', 'B1'], ['A2']] }]) → Blob（11/12〜 罫線などの見た目・セルの結合・A4 の印刷の設定もつけられる）
 (function () {
   'use strict';
   const K = window.ShiftApp;
@@ -85,27 +85,66 @@
     return s;
   }
 
-  function sheetXml(rows) {
+  // 見た目（11/12〜 勤怠集計表）：セルを { v: 値, s: '見た目の名前' } にすると、罫線・太字・色・小数第1位の形をつける
+  const STYLE_IDS = { title: 1, label: 2, cell: 3, head: 4, num1: 5, time: 6, total: 7, small: 8, sun: 9, sat: 10, totalNum: 11 };
+  const STYLES_XML =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0"/></numFmts>' +
+    '<fonts count="7">' +
+    ['<sz val="11"/>', '<b/><sz val="11"/>', '<b/><sz val="14"/>', '<sz val="9"/><color rgb="FF666666"/>', '<sz val="11"/><color rgb="FFCC0000"/>', '<sz val="11"/><color rgb="FF0055CC"/>', '<b/><sz val="12"/>'].map((f) => `<font>${f}<name val="Yu Gothic"/><family val="3"/><charset val="128"/></font>`).join('') +
+    '</fonts>' +
+    '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEEEEEE"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+    '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>' +
+    '<border><left style="thin"><color rgb="FF333333"/></left><right style="thin"><color rgb="FF333333"/></right><top style="thin"><color rgb="FF333333"/></top><bottom style="thin"><color rgb="FF333333"/></bottom><diagonal/></border></borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="12">' +
+    [
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>',
+      '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center"/></xf>',
+      '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>',
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>',
+      '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>',
+      '<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right"/></xf>',
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="right"/></xf>',
+      '<xf numFmtId="0" fontId="6" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>',
+      '<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>',
+      '<xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>',
+      '<xf numFmtId="0" fontId="5" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>',
+      '<xf numFmtId="164" fontId="6" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>',
+    ].join('') +
+    '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+
+  // sheet：{ rows, cols（列の幅・なければ中身から決める）, merges（['A1:G1']）, page（{ portrait, fit }：A4・1ページに収める） }
+  function sheetXml(rows, { cols: widths, merges, page } = {}) {
     const width = Math.max(1, ...rows.map((r) => r.length));
+    const valueOf = (x) => (x && typeof x === 'object' ? x.v : x);
     const cols = Array.from({ length: width }, (_, i) => {
-      const w = Math.min(40, Math.max(8, ...rows.map((r) => String(r[i] == null ? '' : r[i]).length * 2 + 2)));
+      const w = widths && widths[i] ? widths[i] : Math.min(40, Math.max(8, ...rows.map((r) => String(valueOf(r[i]) == null ? '' : valueOf(r[i])).length * 2 + 2)));
       return `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`;
     }).join('');
     const body = rows
       .map((r, ri) => {
         const cells = r
-          .map((v, ci) => {
-            if (v == null || v === '') return '';
+          .map((x, ci) => {
+            const v = valueOf(x);
+            const sid = x && typeof x === 'object' && STYLE_IDS[x.s] ? ` s="${STYLE_IDS[x.s]}"` : '';
             const ref = `${colName(ci)}${ri + 1}`;
+            if (v == null || v === '') return sid ? `<c r="${ref}"${sid}/>` : '';
             // 数字だけの値は数として入れる（Excel で足し算できるように）
-            if (typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(String(v))) return `<c r="${ref}"><v>${Number(v)}</v></c>`;
-            return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
+            // { str: true } は文字のまま（従業員番号「0012」の 0 を消さない）
+            if (!(x && typeof x === 'object' && x.str) && (typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(String(v)))) return `<c r="${ref}"${sid}><v>${Number(v)}</v></c>`;
+            return `<c r="${ref}"${sid} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
           })
           .join('');
         return `<row r="${ri + 1}">${cells}</row>`;
       })
       .join('');
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${cols}</cols><sheetData>${body}</sheetData></worksheet>`;
+    const pr = page && page.fit ? '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>' : '';
+    const mc = merges && merges.length ? `<mergeCells count="${merges.length}">${merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : '';
+    const ps = page
+      ? `<pageMargins left="0.47" right="0.47" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${page.portrait ? 'portrait' : 'landscape'}"${page.fit ? ' fitToWidth="1" fitToHeight="1"' : ''}/>`
+      : '';
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${pr}<cols>${cols}</cols><sheetData>${body}</sheetData>${mc}${ps}</worksheet>`;
   }
 
   function build(sheets) {
@@ -114,7 +153,7 @@
       {
         name: '[Content_Types].xml',
         data:
-          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
           list.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('') +
           '</Types>',
       },
@@ -134,9 +173,11 @@
         data:
           '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
           list.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('') +
+          `<Relationship Id="rId${list.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
           '</Relationships>',
       },
-      ...list.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: sheetXml(s.rows || []) })),
+      { name: 'xl/styles.xml', data: STYLES_XML },
+      ...list.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: sheetXml(s.rows || [], s) })),
     ];
     return zip(files);
   }

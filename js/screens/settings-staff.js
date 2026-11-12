@@ -86,6 +86,9 @@
       placeholder: '例：代表、チーフ（なければ空欄）',
       value: member ? member.title : '',
     });
+    // 勤怠の集計表の上の欄（11/12〜）
+    const employeeNoInput = el('input', { id: 'staff-employee-no', class: 'field__input', type: 'text', maxlength: '20', autocomplete: 'off', placeholder: '例：0012（なければ空欄）', value: member ? member.employeeNo || '' : '' });
+    const fullNameInput = el('input', { id: 'staff-full-name', class: 'field__input', type: 'text', maxlength: '30', autocomplete: 'off', placeholder: '例：山田 太郎（空欄なら表示名）', value: member ? member.fullName || '' : '' });
     const activeInput = el('input', { id: 'staff-active', type: 'checkbox', checked: member ? member.active : true });
     const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
 
@@ -282,6 +285,8 @@
         workWeekdays: [...state.workWeekdays],
         note: noteInput.value,
         email: emailInput.value,
+        employeeNo: employeeNoInput.value,
+        fullName: fullNameInput.value,
       };
       try {
         let id;
@@ -304,6 +309,8 @@
             K.app.toast(`保存しました。ただし「ほかの店舗の同じ人」は変えられませんでした（${err.message}）`);
           }
         }
+        // 共有モード：iPad の名前の一覧・勤怠の集計表用の名簿も新しくする（11/12〜）
+        if (K.storage.isCloud() && K.attendanceView && K.attendance && K.attendance.backend()) K.attendanceView.syncDirectories({ force: true });
         closeForm();
       } catch (err) {
         errorBox.textContent = err.message;
@@ -373,6 +380,15 @@
         el('p', { class: 'field__note' }, 'シフト表の人数は、スタイリスト・ジュニアスタイリストを St、ジュニアスタイリスト兼アシスタント・アシスタントを As として数えます。')
       ),
       el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'staff-title' }, '肩書き（任意）'), titleInput),
+      el(
+        'div',
+        { class: 'field' },
+        el('label', { class: 'field__label', for: 'staff-employee-no' }, '従業員番号（任意）'),
+        employeeNoInput,
+        el('label', { class: 'field__label', for: 'staff-full-name' }, '氏名（任意）'),
+        fullNameInput,
+        el('p', { class: 'field__note' }, '勤怠の集計表のいちばん上に出します。氏名が空欄のときは表示名を出します。')
+      ),
       el(
         'div',
         { class: 'field' },

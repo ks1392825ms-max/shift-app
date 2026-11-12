@@ -9,7 +9,9 @@
 //   attendancePins/{スタッフID}  { staffId, hash, updatedAt, updatedBy }  番号（PIN）は元に戻せない形（SHA-256）だけ
 //   punches/{スタッフID_日付_ミリ秒} { staffId, storeId, date, month, type（in/out/bs/be）, at, atMs, by, source }  打刻（追加するだけ）
 //   punchProofs/{打刻と同じID}   { staffId, hash }  番号の確かめ用（ルールが PIN と比べる。誰も読めない）
-//   punchEdits/{スタッフID_日付}  { staffId, storeId, date, month, in, out, breaks, reason, by, role, at, logId }  直した1日分（打刻より優先）
+//   punchEdits/{スタッフID_日付}  { staffId, storeId, date, month, in, out, breaks, outs（外出・11/12〜）, reason, by, role, at, logId }  直した1日分（打刻より優先）
+//   attendanceDirectory/{店舗ID} { storeId, storeName, order, staff: [{ id, name, fullName, employeeNo, position }], patterns: [{ start, end, breakMinutes }], paid: ['スタッフID|日付'], updatedAt }
+//                                集計表用の名簿（11/12〜。管理者が作り、管理者と幹部が読む。幹部は3店舗とも見る・出力だけ）
 //   attendanceLogs/{…}           修正の記録（追加するだけ）
 //   settings/attendance          { summaryHash（集計表のパスワード）, updatedAt, updatedBy }
 // 読み書きの決まりは Firestore のルールでも強制している。
@@ -110,40 +112,117 @@
     return { in: 'in', be: 'in', bs: 'br', out: 'out' }[last.type] || 'wait';
   }
 
-  // 1日分の出勤・退勤・休憩（直したものがあれば、そちらを使う）
-  // 戻り値：{ in, out, breaks: [{ s, e }], openBreak, edited, breakMin, workMin, short, missingOut }
+  // 日をまたぐ勤務（11/12〜）：出勤中の人の、翌朝5時までの打刻は、出勤した日の勤務として「25:30」のように数える
+  const CARRY_MIN = 5 * 60;
+
+  // 「25:30」のような翌日の時刻（24〜29時）も読む。おかしな値は null
+  function toMinX(hhmm) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
+    if (!m) return null;
+    const h = Number(m[1]);
+    const mi = Number(m[2]);
+    return h > 29 || mi > 59 ? null : h * 60 + mi;
+  }
+  // 分 → 「09:05」「25:30」
+  function fromMin(min) {
+    return `${pad(Math.floor(min / 60))}:${pad(min % 60)}`;
+  }
+  function addDays(date, n) {
+    const d = new Date(`${date}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  }
+  // その日の0時（日本時間）からの分（翌日の1:30 は 1530）
+  function minFrom(iso, date) {
+    return Math.floor((Date.parse(iso) - Date.parse(`${date}T00:00:00+09:00`)) / 60000);
+  }
+  const atOf = (p) => (Number.isFinite(p.atMs) ? p.atMs : Date.parse(p.at));
+
+  // 打刻を「勤務した日」に分ける：{ 'スタッフID|日付' → [打刻] }
+  // 出勤中（退勤していない）の人の、次の日の5時までの打刻は、出勤した日に入れる
+  function assignPunches(punches) {
+    const byStaff = new Map();
+    for (const p of punches || []) {
+      if (!p || !p.date || !p.staffId) continue;
+      if (!byStaff.has(p.staffId)) byStaff.set(p.staffId, []);
+      byStaff.get(p.staffId).push(p);
+    }
+    const out = new Map();
+    for (const [staffId, list] of byStaff) {
+      list.sort((a, b) => atOf(a) - atOf(b));
+      let open = null; // 出勤中の勤務の日
+      for (const p of list) {
+        let day = p.date;
+        if (p.type === 'in') open = p.date;
+        else if (open && open !== p.date && p.date === addDays(open, 1) && minFrom(p.at, p.date) < CARRY_MIN) day = open;
+        const key = `${staffId}|${day}`;
+        if (!out.has(key)) out.set(key, []);
+        out.get(key).push(p);
+        if (p.type === 'out' || (p.type !== 'in' && day !== open)) open = null;
+      }
+    }
+    return out;
+  }
+
+  // iPad の今の打刻：0時〜5時は、前の日に出勤したまま（または5時までに退勤した）人の分を、前の日の勤務として続ける
+  function currentPunches(punches, today) {
+    const yday = addDays(today, -1);
+    const a = assignPunches(punches);
+    const list = [];
+    for (const id of new Set((punches || []).map((p) => p.staffId))) {
+      const y = a.get(`${id}|${yday}`) || [];
+      const t = a.get(`${id}|${today}`) || [];
+      const carried = y.some((p) => p.date === today) || ['in', 'br'].includes(stateOf(y));
+      list.push(...(carried && !t.length ? y : t));
+    }
+    return list;
+  }
+
+  // 1日分の出勤・退勤・休憩・外出（直したものがあれば、そちらを使う）
+  // 戻り値：{ in, out, breaks: [{ s, e }], outs: [{ s, e }], openBreak, edited, breakMin, outMin, workMin, short, missingOut }
+  // 労働（workMin）＝ 退勤 − 出勤 − 休憩 − 外出（11/12 ユーザー：外出は私用の外出として労働から引く）
   function dayOf(punches, edit, { today, date } = {}) {
     let inT = '';
     let outT = '';
     let breaks = [];
+    let outs = [];
     let openBreak = '';
     let edited = false;
+    const pairs = (list) => (Array.isArray(list) ? list : []).filter((b) => b && b.s && b.e).map((b) => ({ s: b.s, e: b.e }));
     if (edit) {
       inT = edit.in || '';
       outT = edit.out || '';
-      breaks = (edit.breaks || []).filter((b) => b && b.s && b.e);
+      breaks = pairs(edit.breaks);
+      outs = pairs(edit.outs);
       edited = true;
     } else {
-      const sorted = (punches || []).slice().sort((a, b) => String(a.at).localeCompare(String(b.at)));
+      const sorted = (punches || []).slice().sort((a, b) => atOf(a) - atOf(b));
+      const first = sorted.find((p) => p.type === 'in') || sorted[0];
+      const base = date || (first && first.date) || '';
+      const t = (p) => {
+        const m = base ? minFrom(p.at, base) : null;
+        return m != null && m >= 0 && m < 30 * 60 ? fromMin(m) : timeOf(p.at);
+      };
       for (const p of sorted) {
-        const t = timeOf(p.at);
-        if (p.type === 'in' && !inT) inT = t;
-        else if (p.type === 'out') outT = t;
-        else if (p.type === 'bs') openBreak = t;
+        if (p.type === 'in' && !inT) inT = t(p);
+        else if (p.type === 'out') outT = t(p);
+        else if (p.type === 'bs') openBreak = t(p);
         else if (p.type === 'be' && openBreak) {
-          breaks.push({ s: openBreak, e: t });
+          breaks.push({ s: openBreak, e: t(p) });
           openBreak = '';
         }
       }
     }
-    const breakMin = breaks.reduce((sum, b) => sum + Math.max(0, (toMin(b.e) || 0) - (toMin(b.s) || 0)), 0);
-    const a = toMin(inT);
-    const z = toMin(outT);
-    const workMin = a != null && z != null && z > a ? z - a - breakMin : null;
+    const len = (list) => list.reduce((sum, b) => sum + Math.max(0, (toMinX(b.e) || 0) - (toMinX(b.s) || 0)), 0);
+    const breakMin = len(breaks);
+    const outMin = len(outs);
+    const a = toMinX(inT);
+    const z = toMinX(outT);
+    const workMin = a != null && z != null && z > a ? Math.max(0, z - a - breakMin - outMin) : null;
     // 休憩の決まり：6時間をこえる日は45分以上、8時間をこえる日は60分以上
     const short = workMin != null && ((workMin > 480 && breakMin < 60) || (workMin > 360 && breakMin < 45));
     const missingOut = Boolean(inT) && !outT && Boolean(today && date && date < today);
-    return { in: inT, out: outT, breaks, openBreak, edited, breakMin, workMin, short, missingOut };
+    return { in: inT, out: outT, breaks, outs, openBreak, edited, breakMin, outMin, workMin, short, missingOut };
   }
 
   // 予定から10分すぎても出勤していないか（予定：{ kind: 'work', start: '09:00' }）
@@ -174,38 +253,80 @@
     return '休み';
   }
 
+  // ---- 予定の労働・残業（11/12〜） ----
+  // 予定の労働 ＝ 予定の時間 − 勤務パターンの休憩。パターンと合わない日（時刻を動かした日など）は、法定の休憩（6時間こえ45分・8時間こえ60分）
+  function legalBreak(len) {
+    return len > 480 ? 60 : len > 360 ? 45 : 0;
+  }
+  // 予定に、勤務パターンの休憩（同じ開始・終了のパターン）をつける。patterns：[{ start, end, breakMinutes }]
+  function withBreak(plan, patterns) {
+    if (!plan || plan.breakMin != null || !plan.start || !plan.end) return plan;
+    const p = (patterns || []).find((x) => x && x.start === plan.start && x.end === plan.end && Number.isInteger(x.breakMinutes));
+    return p ? { ...plan, breakMin: p.breakMinutes } : plan;
+  }
+  function isWorkPlan(plan) {
+    return Boolean(plan && (plan.kind === 'work' || plan.kind === 'business') && toMin(plan.start) != null && toMin(plan.end) != null && toMin(plan.end) > toMin(plan.start));
+  }
+  function planWorkMin(plan) {
+    if (!isWorkPlan(plan)) return null;
+    const len = toMin(plan.end) - toMin(plan.start);
+    const br = Number.isInteger(plan.breakMin) ? plan.breakMin : legalBreak(len);
+    return Math.max(0, len - br);
+  }
+  // 1日分に、予定との比べ（残業・遅刻・早退・早出）を足す
+  // 残業 ＝ 労働 − 予定の労働（早出も含め、遅刻した分は差し引き。マイナスは0）。予定がない日は残業なし（11/12 ユーザー）
+  function compare(day) {
+    const planMin = planWorkMin(day.plan);
+    const overMin = planMin != null && day.workMin != null ? Math.max(0, day.workMin - planMin) : 0;
+    const a = toMinX(day.in);
+    const z = toMinX(day.out);
+    const work = isWorkPlan(day.plan);
+    const ps = work ? toMin(day.plan.start) : null;
+    const pe = work ? toMin(day.plan.end) : null;
+    return {
+      ...day,
+      planMin,
+      overMin,
+      late: work && a != null && a > ps,
+      cameEarly: work && a != null && a < ps,
+      leftEarly: work && z != null && z < pe,
+      paid: Boolean(day.plan && day.plan.kind === 'paid'),
+    };
+  }
+
   // ---- 集計 ----
 
-  // 1人分の月の集計
+  // 1人分の月の集計（日ごとの記録から数える。同じ日は1回だけ）
   function summarize(days) {
-    const r = { workDays: 0, workMin: 0, breakMin: 0, shortDays: 0, missingOut: 0, edited: 0, paidDays: 0 };
+    const r = { workDays: 0, workMin: 0, breakMin: 0, outMin: 0, overMin: 0, shortDays: 0, missingOut: 0, edited: 0, paidDays: 0, late: 0, leftEarly: 0, cameEarly: 0 };
     for (const d of days) {
       if (d.plan && d.plan.kind === 'paid') r.paidDays += 1;
       if (d.in) r.workDays += 1;
       if (d.workMin != null) r.workMin += d.workMin;
       r.breakMin += d.breakMin || 0;
+      r.outMin += d.outMin || 0;
+      r.overMin += d.overMin || 0;
       if (d.short) r.shortDays += 1;
       if (d.missingOut) r.missingOut += 1;
       if (d.edited) r.edited += 1;
+      if (d.late) r.late += 1;
+      if (d.leftEarly) r.leftEarly += 1;
+      if (d.cameEarly) r.cameEarly += 1;
     }
     return r;
   }
 
-  // 店舗・月の表：staff（[{ id, name }]）・planOf(staffId, date)・データ（打刻・直したもの）から、1人ずつ日ごとの行と集計を作る
-  function monthTable({ month, staff, planOf, punches, edits }) {
+  // 店舗・月の表：staff（[{ id, name, … }]）・planOf(staffId, date)・データ（打刻・直したもの）・勤務パターンの休憩から、1人ずつ日ごとの行と集計を作る
+  // 打刻は、前の月の最終日・次の月の1日の分も渡してよい（日をまたぐ勤務を正しく分けるため。表に出すのはその月の日だけ）
+  function monthTable({ month, staff, planOf, punches, edits, patterns }) {
     const today = nowJst().date;
-    const byKey = new Map();
-    for (const p of punches || []) {
-      const k = `${p.staffId}|${p.date}`;
-      if (!byKey.has(k)) byKey.set(k, []);
-      byKey.get(k).push(p);
-    }
+    const byKey = assignPunches(punches);
     const editOf = new Map((edits || []).map((e) => [`${e.staffId}|${e.date}`, e]));
     return staff.map((m) => {
       const days = K.calc.monthDates(month).map((date) => {
         const edit = editOf.get(`${m.id}|${date}`) || null;
         const d = dayOf(byKey.get(`${m.id}|${date}`), edit, { today, date });
-        return { date, plan: planOf ? planOf(m.id, date) : null, ...d };
+        return compare({ date, plan: withBreak(planOf ? planOf(m.id, date) : null, patterns), ...d });
       });
       return { staff: m, days, total: summarize(days) };
     });
@@ -271,42 +392,61 @@
     return `${staffId}_${date}`;
   }
 
-  function checkEdit({ in: inT, out, breaks, reason }) {
+  // 直す画面の時刻：出勤より前で、5時までの時刻は翌日（「1:30」→「25:30」）。日をまたぐ勤務のため（11/12〜）
+  function nextDayTime(t, inT) {
+    const m = toMin(t);
+    const a = toMin(inT);
+    if (m == null || a == null) return t;
+    return m < a && m <= CARRY_MIN ? fromMin(m + 24 * 60) : t;
+  }
+  function normalizeEditTimes({ in: inT, out, breaks, outs }) {
+    const fix = (t) => (t ? nextDayTime(t, inT) : t || '');
+    const pairs = (list) => (list || []).map((b) => ({ s: fix(b && b.s), e: fix(b && b.e) }));
+    return { in: inT || '', out: fix(out), breaks: pairs(breaks), outs: pairs(outs) };
+  }
+
+  function checkEdit({ in: inT, out, breaks, outs, reason }) {
     const r = String(reason || '').trim();
     if (!r) return '直す理由を入れてください。';
     if (r.length > MAX_REASON) return `理由は${MAX_REASON}文字以内にしてください。`;
-    for (const t of [inT, out]) if (t && toMin(t) == null) return '時刻の形が正しくありません。';
+    if (inT && toMin(inT) == null) return '時刻の形が正しくありません。';
+    if (out && toMinX(out) == null) return '時刻の形が正しくありません。';
     if (out && !inT) return '退勤だけは入れられません。出勤も入れてください。';
-    if (inT && out && toMin(out) <= toMin(inT)) return '退勤は出勤より後の時刻にしてください。';
-    for (const b of breaks || []) {
-      if (!b.s && !b.e) continue;
-      if (toMin(b.s) == null || toMin(b.e) == null) return '休憩は、開始と戻りの両方を入れてください。';
-      if (toMin(b.e) <= toMin(b.s)) return '休憩の戻りは、開始より後の時刻にしてください。';
-      if (inT && toMin(b.s) < toMin(inT)) return '休憩は出勤のあとにしてください。';
-      if (out && toMin(b.e) > toMin(out)) return '休憩は退勤の前にしてください。';
+    if (inT && out && toMinX(out) <= toMin(inT)) return '退勤は出勤より後の時刻にしてください（0時を過ぎたときは、翌朝5時まで）。';
+    for (const [list, name, a, b] of [[breaks, '休憩', '開始', '戻り'], [outs, '外出', '出', '戻り']]) {
+      for (const x of list || []) {
+        if (!x.s && !x.e) continue;
+        if (toMinX(x.s) == null || toMinX(x.e) == null) return `${name}は、${a}と${b}の両方を入れてください。`;
+        if (toMinX(x.e) <= toMinX(x.s)) return `${name}の${b}は、${a}より後の時刻にしてください。`;
+        if (inT && toMinX(x.s) < toMin(inT)) return `${name}は出勤のあとにしてください。`;
+        if (out && toMinX(x.e) > toMinX(out)) return `${name}は退勤の前にしてください。`;
+      }
     }
     return null;
   }
 
-  async function saveEdit({ staffId, storeId, date, in: inT, out, breaks, reason, email, role, before }) {
+  async function saveEdit({ staffId, storeId, date, in: inT, out, breaks, outs, reason, email, role, before }) {
     const month = date.slice(0, 7);
-    const err = checkEdit({ in: inT, out, breaks, reason });
+    const t = normalizeEditTimes({ in: inT, out, breaks, outs });
+    const err = checkEdit({ ...t, reason });
     if (err) throw new Error(err);
     if (role !== 'owner' && isClosed(month)) throw new Error(`${Number(month.slice(5))}月の勤怠は締めました。直せるのは管理者だけです。`);
     const now = clock().toISOString();
     const by = String(email || '').toLowerCase();
     const id = editId(staffId, date);
     const logId = `att_${id}_${now}`;
-    const cleanBreaks = (breaks || []).filter((b) => b && b.s && b.e).map((b) => ({ s: b.s, e: b.e }));
-    const data = { staffId, storeId, date, month, in: inT || '', out: out || '', breaks: cleanBreaks, reason: String(reason).trim(), by, role, at: now, logId };
+    const clean = (list) => list.filter((b) => b && b.s && b.e).map((b) => ({ s: b.s, e: b.e }));
+    const cleanBreaks = clean(t.breaks);
+    const cleanOuts = clean(t.outs);
+    const data = { staffId, storeId, date, month, in: t.in, out: t.out, breaks: cleanBreaks, outs: cleanOuts, reason: String(reason).trim(), by, role, at: now, logId };
     const log = {
       targetId: id,
       staffId,
       storeId,
       date,
       month,
-      from: before ? { in: before.in || '', out: before.out || '', breaks: (before.breaks || []).map((b) => ({ s: b.s, e: b.e })) } : null,
-      to: { in: data.in, out: data.out, breaks: cleanBreaks },
+      from: before ? { in: before.in || '', out: before.out || '', breaks: (before.breaks || []).map((b) => ({ s: b.s, e: b.e })), outs: (before.outs || []).map((b) => ({ s: b.s, e: b.e })) } : null,
+      to: { in: data.in, out: data.out, breaks: cleanBreaks, outs: cleanOuts },
       reason: data.reason,
       by,
       role,
@@ -338,7 +478,11 @@
     summaryUnlocked = false;
   }
 
-  // ---- 出力（Excel・PDF） ----
+  // ---- 出力（Excel・PDF）：会社の勤怠集計表の形（11/12〜 1人1枚・A4 縦） ----
+  //   上：従業員番号・担当・氏名・対象期間
+  //   日ごと：日付・開始・終了・休憩・外出・労働・残業（1日〜末日の全部の行。打刻のない日は空欄）
+  //   下：出勤日数・実働合計・残業合計・外出合計（と、有給・遅刻・早退などの回数）
+  // 時間は小数第1位（四捨五入）。月の合計は、分のまま足してから四捨五入（11/12 ユーザー）
 
   function dayLabel(date) {
     return `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
@@ -346,48 +490,116 @@
   function wdLabel(date) {
     return U.WEEKDAYS[K.calc.weekdayOf(date)];
   }
-  function noteOf(d) {
-    const n = [];
-    if (d.edited) n.push('修正');
-    if (d.short) n.push('休憩不足');
-    if (d.missingOut) n.push('退勤なし');
-    return n.join('・');
+  // 分 → 小数第1位の時間「7.3」
+  function hours(min) {
+    return (Math.round((min || 0) / 6) / 10).toFixed(1);
   }
-  function breakText(d) {
-    return d.breaks.map((b) => `${shortTime(b.s)}-${shortTime(b.e)}`).join(' ');
+  const MARKS = [['late', '遅刻'], ['leftEarly', '早退'], ['cameEarly', '早出'], ['paid', '有給'], ['short', '休憩不足'], ['missingOut', '退勤なし'], ['edited', '修正']];
+  function marksOf(d) {
+    return MARKS.filter(([k]) => d[k]).map(([, t]) => t);
+  }
+  function noteOf(d) {
+    return marksOf(d).join('・');
   }
 
-  // 集計表の行（Excel・PDF・画面で共通）
-  const SUMMARY_HEAD = ['名前', '出勤日数', '勤務時間', '休憩', '有給', '休憩不足', '退勤なし', '修正'];
+  const SHEET_HEAD = ['日付', '開始', '終了', '休憩', '外出', '労働', '残業'];
+  // 日ごとの1行：[日付, 開始, 終了, 休憩, 外出, 労働, 残業]（時間は「1.0」の文字。0 の欄は空欄）
+  function sheetDayRow(d) {
+    const worked = Boolean(d.in || d.out);
+    return [`${dayLabel(d.date)}（${wdLabel(d.date)}）`, shortTime(d.in), shortTime(d.out), worked && d.breakMin ? hours(d.breakMin) : '', worked && d.outMin ? hours(d.outMin) : '', d.workMin != null ? hours(d.workMin) : '', d.overMin ? hours(d.overMin) : ''];
+  }
+  function monthEnd(month) {
+    const [y, m] = month.split('-').map(Number);
+    return new Date(Date.UTC(y, m, 0)).getUTCDate();
+  }
+  // 上の欄：従業員番号・担当（店舗・職種）・氏名（空なら表示名）・対象期間
+  function sheetInfo(row, { store, month }) {
+    const m = row.staff;
+    const [y, mo] = month.split('-').map(Number);
+    return {
+      employeeNo: m.employeeNo || '',
+      tanto: [store && store.name, U.POSITION_LABELS[m.position] || ''].filter(Boolean).join('・'),
+      name: m.fullName || m.name,
+      period: `${y}年${mo}月1日 〜 ${y}年${mo}月${monthEnd(month)}日`,
+    };
+  }
+  const TOTAL_HEAD = ['出勤日数', '実働合計（時）', '残業合計（時）', '外出合計（時）'];
+  function sheetTotals(t) {
+    return [`${t.workDays}日`, hours(t.workMin), hours(t.overMin), hours(t.outMin)];
+  }
+  function sheetExtra(t) {
+    return `有給 ${t.paidDays}日　遅刻 ${t.late}回　早退 ${t.leftEarly}回　早出 ${t.cameEarly}回　休憩不足 ${t.shortDays}日　退勤なし ${t.missingOut}日　修正 ${t.edited}件`;
+  }
+
+  // 画面の集計表（全員）の行
+  const SUMMARY_HEAD = ['名前', '出勤日数', '実働（時）', '残業（時）', '外出（時）', '有給', '遅刻', '早退', '休憩不足', '退勤なし', '修正'];
+  function sumCells(name, t) {
+    return [name, `${t.workDays}日`, hours(t.workMin), hours(t.overMin), hours(t.outMin), `${t.paidDays}日`, `${t.late}回`, `${t.leftEarly}回`, `${t.shortDays}日`, `${t.missingOut}日`, `${t.edited}件`];
+  }
   function summaryRow(row) {
-    const t = row.total;
-    return [row.staff.name, `${t.workDays}日`, hm(t.workMin), hm(t.breakMin), `${t.paidDays}日`, `${t.shortDays}日`, `${t.missingOut}日`, `${t.edited}件`];
+    return sumCells(row.staff.name, row.total);
   }
   function totalRow(rows) {
+    // 合計は、1人ずつの分を足す（同じ人・同じ日を2回数えない）
     const s = summarize(rows.flatMap((r) => r.days));
-    return ['合計', `${s.workDays}日`, hm(s.workMin), hm(s.breakMin), `${s.paidDays}日`, `${s.shortDays}日`, `${s.missingOut}日`, `${s.edited}件`];
-  }
-  const DETAIL_HEAD = ['日付', '曜日', '予定', '出勤', '退勤', '休憩', '休憩(分)', '勤務時間', 'メモ'];
-  function detailRow(d) {
-    return [dayLabel(d.date), wdLabel(d.date), planLabel(d.plan), shortTime(d.in), shortTime(d.out), breakText(d), d.breakMin ? String(d.breakMin) : '', d.workMin != null ? hm(d.workMin) : '', noteOf(d)];
+    return sumCells('合計', s);
   }
 
-  // Excel（.xlsx）：1枚目に集計、2枚目から1人ずつの日ごとの表
+  // Excel（.xlsx）：1人1シート（A4 縦・1ページに収まる設定）。2人以上のときは、1枚目に全員の集計
+  function sheetOf(row, args) {
+    const info = sheetInfo(row, args);
+    const c = (v, s) => ({ v, s });
+    const numOr = (v) => (v === '' ? c('', 'cell') : c(v, 'num1'));
+    const rows = [
+      [c('勤怠集計表', 'title')],
+      [],
+      [c('従業員番号', 'label'), { v: info.employeeNo, s: 'cell', str: true }, c('', 'cell'), c('担当', 'label'), c(info.tanto, 'cell'), c('', 'cell'), c('', 'cell')],
+      [c('氏名', 'label'), { v: info.name, s: 'cell', str: true }, c('', 'cell'), c('対象期間', 'label'), c(info.period, 'cell'), c('', 'cell'), c('', 'cell')],
+      [],
+      SHEET_HEAD.map((h) => c(h, 'head')),
+      ...row.days.map((d) => {
+        const r = sheetDayRow(d);
+        const wd = K.calc.weekdayOf(d.date);
+        const marks = marksOf(d);
+        return [c(marks.length ? `${r[0]} ${marks.join('・')}` : r[0], wd === 0 ? 'sun' : wd === 6 ? 'sat' : 'cell'), c(r[1], 'time'), c(r[2], 'time'), numOr(r[3]), numOr(r[4]), numOr(r[5]), numOr(r[6])];
+      }),
+      [],
+      [c(TOTAL_HEAD[0], 'head'), c('', 'head'), c(TOTAL_HEAD[1], 'head'), c('', 'head'), c(TOTAL_HEAD[2], 'head'), c(TOTAL_HEAD[3], 'head'), c('', 'head')],
+      (() => {
+        const t = sheetTotals(row.total);
+        return [c(t[0], 'total'), c('', 'total'), c(t[1], 'totalNum'), c('', 'total'), c(t[2], 'totalNum'), c(t[3], 'totalNum'), c('', 'total')];
+      })(),
+      [c(sheetExtra(row.total), 'small')],
+    ];
+    const n = row.days.length;
+    const tot = 6 + n + 2; // 合計の見出しの行（0始まり）
+    return {
+      rows,
+      cols: [16, 9, 9, 9, 9, 9, 9],
+      merges: ['A1:G1', 'B3:C3', 'E3:G3', 'B4:C4', 'E4:G4', `A${tot + 1}:B${tot + 1}`, `C${tot + 1}:D${tot + 1}`, `F${tot + 1}:G${tot + 1}`, `A${tot + 2}:B${tot + 2}`, `C${tot + 2}:D${tot + 2}`, `F${tot + 2}:G${tot + 2}`, `A${tot + 3}:G${tot + 3}`],
+      page: { portrait: true, fit: true },
+    };
+  }
   function xlsxBlob({ store, month, rows }) {
     const title = `${store.name} ${K.requests.monthLabel(month)} 勤怠`;
-    const sheets = [{ name: '集計', rows: [[title], [], SUMMARY_HEAD, ...rows.map(summaryRow), totalRow(rows)] }];
-    const used = new Set(['集計']);
+    const sheets = [];
+    const used = new Set();
+    if (rows.length > 1) {
+      sheets.push({ name: '集計', rows: [[title], [], SUMMARY_HEAD, ...rows.map(summaryRow), totalRow(rows)] });
+      used.add('集計');
+    }
     for (const r of rows) {
       let name = String(r.staff.name).replace(/[\\/?*[\]:]/g, '').slice(0, 28) || 'スタッフ';
       while (used.has(name)) name += '_';
       used.add(name);
-      sheets.push({ name, rows: [[`${r.staff.name}　${title}`], [], DETAIL_HEAD, ...r.days.map(detailRow), [], ['合計', '', '', '', '', '', String(r.total.breakMin), hm(r.total.workMin), `出勤${r.total.workDays}日`]] });
+      sheets.push({ name, ...sheetOf(r, { store, month }) });
     }
     return K.xlsx.build(sheets);
   }
 
-  function fileBase({ store, month }) {
-    return `勤怠_${store.name}_${month}`.replace(/[\\/:*?"<>|\s]/g, '_');
+  function fileBase({ store, month, rows }) {
+    const who = rows && rows.length === 1 ? `_${rows[0].staff.name}` : '';
+    return `勤怠_${store.name}_${month}${who}`.replace(/[\\/:*?"<>|\s]/g, '_');
   }
 
   async function saveExcel(args) {
@@ -395,30 +607,59 @@
     return K.exporter.saveFiles([{ name: `${fileBase(args)}.xlsx`, blob }]);
   }
 
-  // PDF：印刷の画面を開く（「PDFとして保存」を選ぶ）。1ページ目に集計、そのあと1人1ページ
-  function printSummary({ store, month, rows }, { onNotOpened } = {}) {
+  // 1人分の紙（PDF・印刷）
+  function sheetPage(row, args) {
     const el = U.el;
-    const title = `${store.name}　${K.requests.monthLabel(month)}　勤怠`;
-    const table = (head, body, cls) =>
-      el('table', { class: `kp-table ${cls || ''}` }, el('thead', null, el('tr', null, head.map((h) => el('th', null, h)))), el('tbody', null, body.map((r, i) => el('tr', { class: r.cls || '' }, (r.cells || r).map((c) => el('td', null, c))))));
-    const pages = [
-      el('section', { class: 'kp-page' }, el('h1', { class: 'kp-title' }, `${title}　集計`), el('p', { class: 'kp-sub' }, `締め：${dayLabel(closeAt(month).toISOString().slice(0, 10))} 20:00　／　出力：${nowJst().date.replace(/-/g, '/')} ${nowJst().time}`), table(SUMMARY_HEAD, [...rows.map(summaryRow), { cells: totalRow(rows), cls: 'kp-total' }])),
-      ...rows.map((r) =>
+    const info = sheetInfo(row, args);
+    const t = sheetTotals(row.total);
+    return el(
+      'section',
+      { class: 'kp-page ks-page' },
+      el('h1', { class: 'ks-title' }, '勤怠集計表'),
+      el(
+        'table',
+        { class: 'ks-info' },
+        el('tbody', null, el('tr', null, el('th', null, '従業員番号'), el('td', null, info.employeeNo), el('th', null, '担当'), el('td', null, info.tanto)), el('tr', null, el('th', null, '氏名'), el('td', null, info.name), el('th', null, '対象期間'), el('td', null, info.period)))
+      ),
+      el(
+        'table',
+        { class: 'ks-main' },
+        el('colgroup', null, el('col', { class: 'ks-col-date' }), SHEET_HEAD.slice(1).map(() => el('col'))),
+        el('thead', null, el('tr', null, SHEET_HEAD.map((h) => el('th', null, h)))),
         el(
-          'section',
-          { class: 'kp-page' },
-          el('h1', { class: 'kp-title' }, `${r.staff.name}　${title}`),
-          el('p', { class: 'kp-sub' }, `出勤 ${r.total.workDays}日　勤務 ${hm(r.total.workMin)}　休憩 ${hm(r.total.breakMin)}　有給 ${r.total.paidDays}日　休憩不足 ${r.total.shortDays}日　修正 ${r.total.edited}件`),
-          table(DETAIL_HEAD, r.days.map((d) => ({ cells: detailRow(d), cls: [K.calc.weekdayOf(d.date) === 0 ? 'is-sun' : '', K.calc.weekdayOf(d.date) === 6 ? 'is-sat' : '', d.short || d.missingOut ? 'is-warn' : ''].join(' ') })), 'kp-detail')
+          'tbody',
+          null,
+          row.days.map((d) => {
+            const r = sheetDayRow(d);
+            const wd = K.calc.weekdayOf(d.date);
+            const marks = marksOf(d);
+            return el(
+              'tr',
+              { class: wd === 0 ? 'is-sun' : wd === 6 ? 'is-sat' : '' },
+              el('td', { class: 'ks-date' }, el('span', null, r[0]), marks.length ? el('small', { class: 'ks-marks' }, marks.join('・')) : null),
+              r.slice(1).map((v) => el('td', null, v))
+            );
+          })
         )
       ),
-    ];
+      el('table', { class: 'ks-total' }, el('tbody', null, el('tr', null, TOTAL_HEAD.map((h) => el('th', null, h))), el('tr', null, t.map((v) => el('td', null, v))))),
+      el('p', { class: 'ks-extra' }, sheetExtra(row.total))
+    );
+  }
+
+  // PDF：印刷の画面を開く（「PDFとして保存」を選ぶ）。1人1ページ（A4 縦）
+  function printSummary({ store, month, rows }, { onNotOpened } = {}) {
+    const el = U.el;
     const old = document.getElementById('print-root');
     if (old) old.remove();
-    const root = el('div', { id: 'print-root', class: 'kp-root' }, pages);
+    const root = el('div', { id: 'print-root', class: 'kp-root' }, rows.map((r) => sheetPage(r, { store, month })));
+    // 集計表だけ A4 縦（シフト表の印刷は A4 横のまま）
+    const pageStyle = el('style', { id: 'kp-page-style' }, '@media print { @page { size: A4 portrait; margin: 10mm 12mm; } }');
+    document.head.append(pageStyle);
     document.body.append(root);
     const cleanup = () => {
       root.remove();
+      pageStyle.remove();
       window.removeEventListener('afterprint', cleanup);
     };
     window.addEventListener('afterprint', cleanup);
@@ -444,7 +685,20 @@
     nowJst,
     timeOf,
     toMin,
+    toMinX,
+    fromMin,
     hm,
+    hours,
+    CARRY_MIN,
+    assignPunches,
+    currentPunches,
+    addDays,
+    withBreak,
+    planWorkMin,
+    legalBreak,
+    marksOf,
+    nextDayTime,
+    normalizeEditTimes,
     shortTime,
     closeAt,
     isClosed,
@@ -470,10 +724,13 @@
     isSummaryUnlocked,
     lockSummary,
     SUMMARY_HEAD,
-    DETAIL_HEAD,
+    SHEET_HEAD,
+    TOTAL_HEAD,
     summaryRow,
     totalRow,
-    detailRow,
+    sheetDayRow,
+    sheetInfo,
+    sheetTotals,
     xlsxBlob,
     saveExcel,
     printSummary,

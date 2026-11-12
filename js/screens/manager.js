@@ -31,6 +31,7 @@
       data: null, // { wishRequests, wishCounts, paidRequests, quotas, logs }
       message: null,
       pub: null, // { loading, rosters, month, storeId, error }
+      att: null, // 11/12〜 集計表用の名簿 { loading, list, error }
     };
     load();
   }
@@ -759,13 +760,21 @@
     );
   }
 
-  // ---- 勤怠（11/9〜）：担当店舗の今日・月の表・集計表（共通の画面 js/screens/attendance.js） ----
-  // 予定は、確定シフトの写し（担当店舗の分）と、承認済みの有給
+  // ---- 勤怠（11/9〜）：今日・月の表・集計表（共通の画面 js/screens/attendance.js） ----
+  // 11/12〜 3店舗とも見る・出力できる（集計表用の名簿 attendanceDirectory から）。直せるのは担当店舗だけ
+  // 予定は、確定シフトの写しと、承認済みの有給。担当店舗は写しと申請から、ほかの店舗は名簿（確定した月の予定・有給の日）から
+  // （幹部が読める確定シフトの写しは担当店舗だけ、の決まりは変えない）
   async function managerPlan(storeId, month) {
-    const [rosters, req] = await Promise.all([backend().loadManagerPublishedRosters([storeId], [month]), backend().loadManagerRequests([storeId], month)]);
+    const mine = view.ctx.stores.some((s) => s.id === storeId);
+    const dir = attDir(storeId);
+    const [rosters, req] = mine
+      ? await Promise.all([backend().loadManagerPublishedRosters([storeId], [month]), backend().loadManagerRequests([storeId], month)])
+      : [((dir && dir.rosters) || []).filter((r) => r.month === month).map((r) => ({ ...r, storeId })), null];
     const roster = rosters.find((r) => r.storeId === storeId && r.month === month);
     const days = new Map(((roster && roster.days) || []).map((d) => [d.date, d]));
-    const paid = new Set((req.paidRequests || []).filter((p) => p.status === 'approved').map((p) => `${p.staffId}|${p.date}`));
+    const paid = mine
+      ? new Set(((req && req.paidRequests) || []).filter((p) => p.status === 'approved').map((p) => `${p.staffId}|${p.date}`))
+      : new Set((dir && dir.paid) || []);
     return (staffId, date) => {
       const day = days.get(date);
       const plan = day ? K.attendance.planFromCell((day.cells || {})[staffId]) : null;
@@ -774,13 +783,45 @@
     };
   }
 
+  // 集計表用の名簿（管理者が作る）。読めないとき（ルールの公開前など）は、担当店舗だけ
+  function attDir(storeId) {
+    return ((view.att && view.att.list) || []).find((d) => d.storeId === storeId) || null;
+  }
+  function loadAttDir() {
+    if (view.att) return;
+    view.att = { loading: true, list: [] };
+    const v = view;
+    backend()
+      .loadAttendanceDirectory()
+      .then((list) => {
+        if (view !== v) return;
+        view.att = { loading: false, list: list || [] };
+        K.app.rerender();
+      })
+      .catch((err) => {
+        if (view !== v) return;
+        view.att = { loading: false, list: [], error: err && err.message };
+        K.app.rerender();
+      });
+  }
+
   function attendanceView() {
+    if (backend().loadAttendanceDirectory) loadAttDir();
+    const mine = new Set(view.ctx.stores.map((s) => s.id));
+    const others = ((view.att && view.att.list) || [])
+      .filter((d) => d.storeId && !mine.has(d.storeId))
+      .sort((a, b) => (a.order || 0) - (b.order || 0))
+      .map((d) => ({ id: d.storeId, name: d.storeName || '店舗' }));
+    const info = K.attendanceView.staffInfo;
     return K.attendanceView.panel({
       key: 'manager',
       role: 'manager',
       email: String(view.email || '').toLowerCase(),
-      stores: view.ctx.stores,
-      staffOf: (storeId) => view.ctx.staff.filter((m) => m.storeId === storeId).map((m) => ({ id: m.id, name: m.name })),
+      stores: [...view.ctx.stores, ...others],
+      // 担当店舗は、スタッフの記録（最新）から。ほかの店舗は名簿から
+      staffOf: (storeId) => (mine.has(storeId) ? view.ctx.staff.filter((m) => m.storeId === storeId).map(info) : ((attDir(storeId) || {}).staff || []).map(info)),
+      patternsOf: (storeId) => (attDir(storeId) || {}).patterns || [],
+      canEditStore: (storeId) => mine.has(storeId),
       planSource: managerPlan,
     });
   }

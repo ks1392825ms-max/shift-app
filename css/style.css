@@ -7883,3 +7883,114 @@ body.is-kv-full .kv-back {
     font-size: 0.58rem;
   }
 }
+
+/* ---- 勤怠集計表（11/12〜 会社の集計表の形・1人1枚・A4 縦）：#print-root の中だけ ---- */
+.ks-page { box-sizing: border-box; width: 184mm; max-width: 100%; padding: 0; font-size: 9.5pt; color: #111; }
+.ks-title { margin: 0 0 3mm; font-size: 15pt; text-align: center; letter-spacing: 0.3em; }
+.ks-info, .ks-main, .ks-total { width: 100%; border-collapse: collapse; }
+.ks-info { margin-bottom: 3mm; }
+.ks-info th, .ks-info td, .ks-main th, .ks-main td, .ks-total th, .ks-total td { border: 0.25mm solid #333; }
+.ks-info th, .ks-main th, .ks-total th { background: #eee; font-weight: 600; }
+.ks-info { table-layout: fixed; }
+.ks-info th { width: 24mm; padding: 1.2mm 2.5mm; text-align: left; white-space: nowrap; }
+.ks-info td { padding: 1.2mm 2.5mm; text-align: left; }
+.ks-main { table-layout: fixed; }
+.ks-main col.ks-col-date { width: 50mm; }
+.ks-main th { padding: 0.8mm 2mm; text-align: center; }
+.ks-main td { padding: 0.55mm 2mm; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ks-main td.ks-date { text-align: left; overflow: hidden; }
+.ks-main tr.is-sun td.ks-date span { color: #c00; }
+.ks-main tr.is-sat td.ks-date span { color: #05c; }
+.ks-marks { margin-left: 1.5mm; font-size: 6.5pt; color: #b45309; }
+.ks-total { margin-top: 3mm; }
+.ks-total th, .ks-total td { padding: 1.4mm 2.5mm; text-align: center; }
+.ks-total td { font-size: 12pt; font-weight: 600; }
+.ks-extra { margin: 2mm 0 0; font-size: 8pt; color: #555; }
+
+/* 月の表：日付の横の小さな印（遅刻・早退・早出・休憩不足・退勤なし）と、幹部の「見るだけ」の店舗 */
+.att-marks { display: block; font-size: 10px; font-weight: 600; color: #b45309; }
+.att-viewonly { margin-left: 4px; font-size: 10px; opacity: 0.7; }
+.att-out-who { margin-top: 12px; }
+
+/* ---- 起動のアニメーション（11/13〜 js/splash.js）：ロゴのマス → SHIFT → RENASCOR. → 名札の線 → 画面が上へ抜ける ---- */
+.splash {
+  --splash-accent: #ffffff;
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #111214;
+  animation: splash-lift 0.7s cubic-bezier(0.7, 0, 0.2, 1) 2.15s forwards;
+}
+.splash::after {
+  content: "";
+  position: absolute;
+  width: 140vmax;
+  height: 140vmax;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.07), transparent 55%);
+  animation: splash-glow 2.2s ease-out both;
+}
+.splash__mark { position: relative; z-index: 1; display: grid; justify-items: center; }
+.splash__grid { display: grid; grid-template-columns: repeat(4, 46px); gap: 8px; }
+.splash__grid i {
+  height: 25px;
+  border-radius: 7px;
+  background: #e6e6e3;
+  opacity: 0;
+  transform: translateY(26px) scale(0.9);
+  filter: blur(6px);
+  animation: splash-rise 0.62s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  animation-delay: calc(0.08s + var(--d) * 55ms);
+}
+.splash__grid i.is-dark {
+  background: #55565a;
+  animation: splash-rise 0.62s cubic-bezier(0.2, 0.8, 0.2, 1) forwards, splash-shift 0.5s cubic-bezier(0.6, 0, 0.2, 1) both;
+  animation-delay: calc(0.08s + var(--d) * 55ms), 0.95s;
+}
+.splash__word { margin-top: 18px; display: flex; gap: 0.26em; font-size: 50px; font-weight: 800; letter-spacing: 0.02em; line-height: 1.1; }
+.splash__word span {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(0.7em);
+  filter: blur(8px);
+  background: linear-gradient(100deg, #cfcfcc 0 40%, #ffffff 50%, #cfcfcc 60% 100%) no-repeat;
+  background-size: 400% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: splash-rise 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards, splash-shine 0.8s ease-in-out forwards;
+  animation-delay: calc(0.75s + var(--i) * 70ms), calc(1.4s + var(--i) * 60ms);
+}
+.splash__brand {
+  margin-top: 8px;
+  padding-left: 0.9em;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.9em;
+  color: #9c9da1;
+  opacity: 0;
+  animation: splash-brand 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) 1.25s forwards;
+}
+.splash__brand b { color: #f5f5f3; font-weight: 800; }
+.splash__line { margin-top: 16px; width: 0; height: 2px; border-radius: 2px; background: var(--splash-accent); animation: splash-line 0.6s cubic-bezier(0.6, 0, 0.2, 1) 1.45s forwards; }
+.splash__role { margin-top: 10px; font-size: 11px; letter-spacing: 0.4em; color: #8d8e92; opacity: 0; animation: splash-fadein 0.5s ease 1.65s forwards; }
+@keyframes splash-rise { to { opacity: 1; transform: none; filter: blur(0); } }
+@keyframes splash-shift { from { translate: var(--from) 0; } to { translate: 0 0; } }
+@keyframes splash-shine { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes splash-brand { from { opacity: 0; letter-spacing: 0.2em; filter: blur(4px); } to { opacity: 1; letter-spacing: 0.55em; filter: blur(0); } }
+@keyframes splash-line { to { width: 54px; } }
+@keyframes splash-fadein { to { opacity: 1; } }
+@keyframes splash-glow { from { transform: scale(0.4); opacity: 0; } 60% { opacity: 1; } to { transform: scale(1); opacity: 1; } }
+@keyframes splash-lift { to { transform: translateY(-100%); } }
+@keyframes splash-fade { to { opacity: 0; visibility: hidden; } }
+/* 「視差効果を減らす」の人は、動かさずに、ふわっと消えるだけ */
+@media (prefers-reduced-motion: reduce) {
+  .splash *, .splash::after { animation-duration: 0.01s !important; animation-delay: 0s !important; }
+  .splash { animation: splash-fade 0.4s ease 0.8s forwards; }
+}
+/* 印刷のときは出さない */
+@media print { .splash { display: none !important; } }

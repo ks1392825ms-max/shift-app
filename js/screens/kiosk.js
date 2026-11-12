@@ -60,8 +60,11 @@
     const v = view;
     if (!v) return;
     try {
-      const { date } = A().nowJst();
-      const data = await backend().loadKioskData(v.storeId, date);
+      const { date, min } = A().nowJst();
+      // 0時〜5時は、前の日に出勤したままの人の分も読む（日をまたぐ勤務・11/12〜）
+      const early = min < A().CARRY_MIN;
+      const data = await backend().loadKioskData(v.storeId, date, early ? { prevDate: A().addDays(date, -1) } : {});
+      if (early) data.punches = A().currentPunches(data.punches || [], date);
       v.data = data;
       // 天気（気象庁。読めなくても打刻には関係しない）
       if (K.weather) K.weather.today(date).then((w) => { if (view === v) { v.weather = w; if (!v.sheet && !v.busy && K.app.state.screen === v.screen) K.app.rerender(); } });

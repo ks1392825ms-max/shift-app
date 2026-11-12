@@ -24,6 +24,7 @@
 //   checkKiosk / loadKioskData / addPunch / verifyPassword                                 勤怠用 iPad（11/9〜）
 //   setAttendancePin / loadPinStatus / deleteAttendancePin                                 勤怠の番号（PIN）
 //   loadAttendance / saveAttendanceEdit / loadAttendanceSettings / saveAttendanceSettings   勤怠の表・修正・集計表のパスワード
+//   loadAttendanceDirectory / saveAttendanceDirectory                                     集計表用の名簿（11/12〜）
 //   loadKiosks / saveKiosk / saveKioskDirectory                                             勤怠用 iPad の登録（管理者）
 //   subscribe(onData, onError)  共有データを受け取り続ける（変わるたびに onData）。戻り値で止められる
 //   write(changes)              記録をまとめて保存する：[{ collection, id, data }]
@@ -593,16 +594,20 @@
   }
 
   // 勤怠用 iPad：その店舗の名前・今月の確定シフトの写し・名前の一覧・今日の打刻
-  async function loadKioskData(storeId, date) {
+  // prevDate（11/12〜 0時〜5時だけ）：前の日の打刻も読む（日をまたぐ勤務の人が、退勤を押せるように）
+  async function loadKioskData(storeId, date, { prevDate } = {}) {
     const { fsMod, db } = await load();
     const month = date.slice(0, 7);
-    const [store, roster, directory, punchSnap] = await Promise.all([
+    const punchesOf = (d) => fsMod.getDocs(fsMod.query(fsMod.collection(db, 'punches'), fsMod.where('storeId', '==', storeId), fsMod.where('date', '==', d)));
+    const [store, roster, directory, punchSnap, prevSnap] = await Promise.all([
       getData('stores', storeId),
       getData('publishedRosters', `${storeId}_${month}`).catch((err) => (err && err.code === 'permission-denied' ? null : Promise.reject(err))),
       getData('kioskDirectory', storeId).catch(() => null),
-      fsMod.getDocs(fsMod.query(fsMod.collection(db, 'punches'), fsMod.where('storeId', '==', storeId), fsMod.where('date', '==', date))),
+      punchesOf(date),
+      prevDate ? punchesOf(prevDate) : Promise.resolve(null),
     ]);
-    return { store: store ? { ...store, id: storeId } : null, roster, directory, punches: punchSnap.docs.map((d) => ({ id: d.id, ...d.data() })) };
+    const docs = [...(prevSnap ? prevSnap.docs : []), ...punchSnap.docs];
+    return { store: store ? { ...store, id: storeId } : null, roster, directory, punches: docs.map((d) => ({ id: d.id, ...d.data() })) };
   }
 
   // 打刻：打刻の記録と、番号の確かめ用の記録を1回の書き込みで（番号が違えば、ルールが両方とも断る）
@@ -644,15 +649,30 @@
     await fsMod.deleteDoc(fsMod.doc(db, 'attendancePins', staffId));
   }
 
-  // 管理者・幹部：店舗・月の打刻・直したもの・修正の記録（幹部は担当店舗だけ。ルールで担当外は読めない）
+  // 管理者・幹部：店舗・月の打刻・直したもの・修正の記録（11/12〜 幹部は3店舗とも読める。直せるのは担当店舗だけ）
+  // 打刻は、前の月の最終日と次の月の1日の分も読む（日をまたぐ勤務を、正しい日に分けるため）
   async function loadAttendance(storeId, month) {
     const { fsMod, db } = await load();
-    const read = async (col) => {
-      const snap = await fsMod.getDocs(fsMod.query(fsMod.collection(db, col), fsMod.where('storeId', '==', storeId), fsMod.where('month', '==', month)));
-      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    };
-    const [punches, edits, logs] = await Promise.all([read('punches'), read('punchEdits'), read('attendanceLogs')]);
-    return { punches, edits, logs };
+    const docs = (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const read = async (col) => docs(await fsMod.getDocs(fsMod.query(fsMod.collection(db, col), fsMod.where('storeId', '==', storeId), fsMod.where('month', '==', month))));
+    const onDay = async (date) => docs(await fsMod.getDocs(fsMod.query(fsMod.collection(db, 'punches'), fsMod.where('storeId', '==', storeId), fsMod.where('date', '==', date))));
+    const [y, m] = month.split('-').map(Number);
+    const prevLast = new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10);
+    const nextFirst = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+    const [punches, edits, logs, before, after] = await Promise.all([read('punches'), read('punchEdits'), read('attendanceLogs'), onDay(prevLast), onDay(nextFirst)]);
+    return { punches: [...before, ...punches, ...after], edits, logs };
+  }
+
+  // 集計表用の名簿（11/12〜）：店舗ごとの名前・従業員番号・氏名・職種・勤務パターンの休憩・有給の日。管理者が作り、管理者と幹部が読む
+  async function loadAttendanceDirectory() {
+    const { fsMod, db } = await load();
+    const snap = await fsMod.getDocs(fsMod.collection(db, 'attendanceDirectory'));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
+
+  async function saveAttendanceDirectory(storeId, data) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, 'attendanceDirectory', storeId), data);
   }
 
   // 直す：直した1日分と、修正の記録を1回の書き込みで
@@ -895,6 +915,8 @@
     loadPinStatus,
     deleteAttendancePin,
     loadAttendance,
+    loadAttendanceDirectory,
+    saveAttendanceDirectory,
     saveAttendanceEdit,
     loadAttendanceSettings,
     saveAttendanceSettings,

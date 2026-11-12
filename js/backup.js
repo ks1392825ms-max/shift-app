@@ -147,6 +147,8 @@
       if (m.fixedOff !== undefined && !(m.fixedOff && isWeekdays(m.fixedOff.weekdays) && typeof m.fixedOff.holidays === 'boolean')) delete m.fixedOff;
       if (m.workWeekdays !== undefined && !isWeekdays(m.workWeekdays)) delete m.workWeekdays;
       if (m.note !== undefined && !isStr(m.note, 100)) delete m.note;
+      if (m.employeeNo !== undefined && !isStr(m.employeeNo, 20)) delete m.employeeNo;
+      if (m.fullName !== undefined && !isStr(m.fullName, 30)) delete m.fullName;
       if (m.email !== undefined && !(m.email === '' || (isStr(m.email, 254) && /^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(m.email)))) delete m.email;
       if (m.personId !== undefined && m.personId !== null && !isId(m.personId)) delete m.personId;
     }
