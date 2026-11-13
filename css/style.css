@@ -3828,6 +3828,11 @@ body[data-role="staff"] .brand-mark i.is-dark {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--role-color, #999) 22%, transparent);
 }
 
+/* 名札は、ログインの前・「この端末だけ」では出さない（display を指定しているので hidden を強く効かせる） */
+.login-role[hidden] {
+  display: none;
+}
+
 body[data-role="staff"] .login-role::before {
   background: #ffffff;
   box-shadow: 0 0 0 1px #9a9a96, 0 0 0 3px rgba(154, 154, 150, 0.2);
@@ -8127,4 +8132,163 @@ body.is-kv-full .kv-back {
   .mgr-todo::after {
     display: none;
   }
+}
+
+/* ==== 勤怠の集計表：全体／個人（11/13〜） ==== */
+.att-sumtabs {
+  margin: 4px 0 10px;
+}
+
+.att-sum-name {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.att-person__nav {
+  display: grid;
+  grid-template-columns: 48px 1fr 48px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.att-person__arrow {
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.att-person__arrow:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.att-person__who {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  margin: 0;
+}
+
+.att-person__who b {
+  font-size: 1.05rem;
+}
+
+.att-person__who span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* 画面で見る勤怠集計表（紙と同じ形。白い紙の上に出す） */
+.att-paper {
+  overflow-x: auto;
+  padding: 16px 14px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #ffffff;
+  color: #111214;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+}
+
+.att-paper .ks-page {
+  width: 100%;
+  min-width: 300px;
+  font-size: 12px;
+}
+
+.att-paper .ks-title {
+  font-size: 1.1rem;
+}
+
+.att-paper .ks-info th {
+  width: 5.6em;
+  padding: 4px 6px;
+}
+
+.att-paper .ks-info td {
+  padding: 4px 6px;
+}
+
+.att-paper .ks-main col.ks-col-date {
+  width: 27%;
+}
+
+.att-paper .ks-main th {
+  padding: 3px 2px;
+}
+
+.att-paper .ks-main td {
+  padding: 3px 2px;
+  text-align: center;
+}
+
+@media (max-width: 420px) {
+  .att-paper {
+    padding: 12px 8px;
+  }
+
+  .att-paper .ks-page {
+    font-size: 11px;
+  }
+}
+
+.att-paper .ks-main td.ks-date {
+  white-space: normal;
+}
+
+.att-paper .ks-marks {
+  display: block;
+  margin: 0;
+  font-size: 9px;
+}
+
+.att-paper .ks-total th,
+.att-paper .ks-total td {
+  padding: 4px;
+}
+
+.att-paper .ks-total td {
+  font-size: 1rem;
+}
+
+/* PDF の1ページ目：全体の集計表 */
+.ks-sum {
+  table-layout: auto;
+}
+
+.ks-sum th {
+  font-size: 8pt;
+  white-space: nowrap;
+}
+
+.ks-sum td {
+  padding: 1.2mm 1.5mm;
+  font-size: 8.5pt;
+}
+
+.ks-sum td.ks-no {
+  text-align: center;
+}
+
+.ks-sum td.ks-name {
+  text-align: left;
+}
+
+.ks-sum tfoot td {
+  background: #f4f4f2;
+  font-weight: 700;
 }

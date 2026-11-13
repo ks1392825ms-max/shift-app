@@ -647,12 +647,45 @@
     );
   }
 
-  // PDF：印刷の画面を開く（「PDFとして保存」を選ぶ）。1人1ページ（A4 縦）
+  // 全体の集計表の紙（11/13〜 PDF の1ページ目）：全員の従業員番号・氏名と、月の合計
+  const OVERALL_HEAD = ['従業員番号', '氏名', ...SUMMARY_HEAD.slice(1)];
+  function overallPage({ store, month, rows }) {
+    const el = U.el;
+    const [y, mo] = month.split('-').map(Number);
+    const total = totalRow(rows);
+    return el(
+      'section',
+      { class: 'kp-page ks-page ks-overall' },
+      el('h1', { class: 'ks-title' }, '勤怠集計表（全体）'),
+      el(
+        'table',
+        { class: 'ks-info' },
+        el('tbody', null, el('tr', null, el('th', null, '店舗'), el('td', null, store ? store.name : ''), el('th', null, '対象期間'), el('td', null, `${y}年${mo}月1日 〜 ${y}年${mo}月${monthEnd(month)}日`)))
+      ),
+      el(
+        'table',
+        { class: 'ks-main ks-sum' },
+        el('thead', null, el('tr', null, OVERALL_HEAD.map((h) => el('th', null, h)))),
+        el(
+          'tbody',
+          null,
+          rows.map((r) => {
+            const info = sheetInfo(r, { store, month });
+            return el('tr', null, el('td', { class: 'ks-no' }, info.employeeNo), el('td', { class: 'ks-name' }, info.name), summaryRow(r).slice(1).map((v) => el('td', null, v)));
+          })
+        ),
+        el('tfoot', null, el('tr', null, el('td', { class: 'ks-no' }, ''), el('td', { class: 'ks-name' }, `合計（${rows.length}人）`), total.slice(1).map((v) => el('td', null, v))))
+      ),
+      el('p', { class: 'ks-extra' }, '時間は小数第1位（四捨五入）。月の合計は、分のまま足してから四捨五入しています。2ページ目から1人1枚です。')
+    );
+  }
+
+  // PDF：印刷の画面を開く（「PDFとして保存」を選ぶ）。2人以上のときは1ページ目に全体の集計表、そのあと1人1ページ（A4 縦）
   function printSummary({ store, month, rows }, { onNotOpened } = {}) {
     const el = U.el;
     const old = document.getElementById('print-root');
     if (old) old.remove();
-    const root = el('div', { id: 'print-root', class: 'kp-root' }, rows.map((r) => sheetPage(r, { store, month })));
+    const root = el('div', { id: 'print-root', class: 'kp-root' }, rows.length > 1 ? overallPage({ store, month, rows }) : null, rows.map((r) => sheetPage(r, { store, month })));
     // 集計表だけ A4 縦（シフト表の印刷は A4 横のまま）
     const pageStyle = el('style', { id: 'kp-page-style' }, '@media print { @page { size: A4 portrait; margin: 10mm 12mm; } }');
     document.head.append(pageStyle);
@@ -697,6 +730,9 @@
     planWorkMin,
     legalBreak,
     marksOf,
+    sheetPage,
+    overallPage,
+    OVERALL_HEAD,
     nextDayTime,
     normalizeEditTimes,
     shortTime,

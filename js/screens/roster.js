@@ -1016,7 +1016,7 @@
     return el(
       'div',
       { class: 'publish-banner', role: 'status' },
-      el('span', { class: 'publish-banner__text' }, `✓ 確定済み（${when}・${pub.confirmedBy || ''}）`),
+      el('span', { class: 'publish-banner__text' }, `✓ 確定済み（${when}）`),
       el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: unconfirmShift }, '確定を取り消す')
     );
   }

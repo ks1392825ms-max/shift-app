@@ -1,7 +1,8 @@
 // 勤怠の画面（11/9〜）：管理者（下のタブ「勤怠」）と幹部（幹部の画面のタブ「勤怠」）で共通
 //   今日：今日の予定の人の様子（出勤中・休憩中・未出勤（予定から10分すぎ）・退勤）と、今日の休みの人
 //   月の表：1人ずつ、日ごとの予定と実際（出勤・退勤・休憩・外出・労働・残業）。日を押すと「直す」（理由は必須・修正の記録を残す）
-//   集計表：パスワードで開く。全員の集計と、会社の勤怠集計表の形（1人1枚・A4 縦）の PDF（印刷）・Excel。1人だけでも全員でも出せる
+//   集計表：パスワードで開く。「全体」（全員の集計。名前を押すと個人へ）と「個人」（会社の勤怠集計表の形。‹ › でほかの人へ）。
+//           PDF（印刷）・Excel は、全員なら1枚目に全体の集計表、そのあと1人1枚（A4 縦）。1人だけでも出せる
 // 幹部（11/12〜）：3店舗とも見る・出力できる。直せるのは担当店舗だけ。毎月最終日の20時に締めたあとは、幹部は見るだけ（直せるのは管理者）。
 (function () {
   'use strict';
@@ -15,7 +16,7 @@
   function stateFor(key, ctx) {
     if (!states[key] || states[key].email !== ctx.email) {
       const { month } = A().nowJst();
-      states[key] = { email: ctx.email, sub: 'today', storeId: null, month, data: null, plan: null, loading: false, error: '', staffId: null, editing: null, msg: null, settings: null, pass: '' };
+      states[key] = { email: ctx.email, sub: 'today', storeId: null, month, data: null, plan: null, loading: false, error: '', staffId: null, editing: null, msg: null, settings: null, pass: '', sumView: 'all', personId: null };
     }
     const st = states[key];
     if (!st.storeId || !ctx.stores.some((s) => s.id === st.storeId)) st.storeId = ctx.stores.length ? ctx.stores[0].id : null;
@@ -304,21 +305,59 @@
         rows.map((r) => el('option', { value: r.staff.id, selected: st.outStaff === r.staff.id }, r.staff.name))
       )
     );
-    return el(
+    // 見かた（11/13〜）：全体（全員の集計）か、個人（会社の勤怠集計表の形。‹ › でほかの人へ）
+    const view = st.sumView === 'person' && rows.length ? 'person' : 'all';
+    const openPerson = (id) => {
+      st.sumView = 'person';
+      st.personId = id;
+      K.app.rerender();
+    };
+    const tabs = el(
       'div',
-      { class: 'att-summary' },
-      el('p', { class: 'att-note' }, closed ? `締め済み（${Number(st.month.slice(5))}月の最終日 20:00）` : `締めの前です（${Number(st.month.slice(5))}月の最終日 20:00 に締めます）。数字は今の時点のものです。`),
-      el(
+      { class: 'segment att-sumtabs', role: 'tablist', 'aria-label': '集計表の見かた' },
+      [['all', '全体'], ['person', '個人']].map(([k, t]) => el('button', { type: 'button', role: 'tab', class: `segment__btn${view === k ? ' is-selected' : ''}`, 'aria-selected': String(view === k), disabled: k === 'person' && !rows.length, onclick: () => { st.sumView = k; K.app.rerender(); } }, t))
+    );
+    let body;
+    if (view === 'all') {
+      body = el(
         'div',
         { class: 'att-scroll' },
         el(
           'table',
           { class: 'att-table att-table--sum' },
           el('thead', null, el('tr', null, A().SUMMARY_HEAD.map((h) => el('th', null, h)))),
-          el('tbody', null, rows.map((r) => el('tr', null, A().summaryRow(r).map((c, i) => (i ? el('td', { class: (i === 8 && r.total.shortDays) || (i === 9 && r.total.missingOut) ? 'att-bad' : '' }, c) : el('th', { scope: 'row' }, c)))))),
+          el('tbody', null, rows.map((r) => el('tr', null, A().summaryRow(r).map((c, i) => (i ? el('td', { class: (i === 8 && r.total.shortDays) || (i === 9 && r.total.missingOut) ? 'att-bad' : '' }, c) : el('th', { scope: 'row' }, el('button', { type: 'button', class: 'att-sum-name', title: `${c}の勤怠集計表を見る`, onclick: () => openPerson(r.staff.id) }, c))))))),
           el('tfoot', null, el('tr', null, A().totalRow(rows).map((c, i) => (i ? el('td', null, c) : el('th', { scope: 'row' }, c)))))
         )
-      ),
+      );
+    } else {
+      if (!st.personId || !rows.some((r) => r.staff.id === st.personId)) st.personId = rows[0].staff.id;
+      const i = rows.findIndex((r) => r.staff.id === st.personId);
+      const go = (n) => {
+        st.personId = rows[(i + n + rows.length) % rows.length].staff.id;
+        K.app.rerender();
+      };
+      const one = rows.length < 2;
+      body = el(
+        'div',
+        { class: 'att-person' },
+        el(
+          'div',
+          { class: 'att-person__nav' },
+          el('button', { type: 'button', class: 'att-person__arrow', 'aria-label': '前の人', disabled: one, onclick: () => go(-1) }, '‹'),
+          el('p', { class: 'att-person__who', 'aria-live': 'polite' }, el('b', null, rows[i].staff.name), el('span', null, `${i + 1} / ${rows.length}`)),
+          el('button', { type: 'button', class: 'att-person__arrow', 'aria-label': '次の人', disabled: one, onclick: () => go(1) }, '›')
+        ),
+        el('div', { class: 'att-paper' }, A().sheetPage(rows[i], { store, month: st.month }))
+      );
+    }
+    return el(
+      'div',
+      { class: 'att-summary' },
+      el('p', { class: 'att-note' }, closed ? `締め済み（${Number(st.month.slice(5))}月の最終日 20:00）` : `締めの前です（${Number(st.month.slice(5))}月の最終日 20:00 に締めます）。数字は今の時点のものです。`),
+      tabs,
+      view === 'all' ? el('p', { class: 'att-note' }, '名前を押すと、その人の勤怠集計表を見られます。') : null,
+      body,
       who,
       el(
         'div',
@@ -327,7 +366,7 @@
         el('button', { type: 'button', class: 'btn btn--primary', onclick: async () => { const r = await A().saveExcel(args); if (r === 'downloaded') K.app.toast('Excel のファイルを保存しました'); } }, 'Excel'),
         el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => { A().lockSummary(); K.app.rerender(); } }, '閉じる（鍵をかける）')
       ),
-      el('p', { class: 'att-note' }, 'PDF・Excel は、会社の勤怠集計表の形（1人1枚・A4 縦）です。PDF は、印刷の画面で「PDFとして保存」を選びます。全員の Excel は、1枚目に全員の集計、2枚目から1人1シートです。'),
+      el('p', { class: 'att-note' }, 'PDF・Excel は、会社の勤怠集計表の形（1人1枚・A4 縦）です。全員のときは、1枚目が全体の集計表、2枚目から1人1枚です。PDF は、印刷の画面で「PDFとして保存」を選びます。'),
       el('p', { class: 'att-note' }, '時間は小数第1位（四捨五入）。月の合計は、分のまま足してから四捨五入します。')
     );
   }

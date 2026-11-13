@@ -510,7 +510,7 @@
   // スタッフのログインの案内（共有モードで、ログイン用メールを保存済みのときだけ）
   // ・ログイン用のURL：開くとすぐにログイン画面になる（LINE などでスタッフに送る）
   // ・パスワード設定用のメールを送る：保存済みのメールアドレスに、Firebase からパスワード再設定メールを送る（開くと、新しいパスワードを決める画面）
-  //   まだ一度もログインしたことがない人には届かないので、そのときは、ログイン用のURLから「初めての方・パスワードを忘れた方」で始めてもらう
+  //   11/13〜 まだ一度もログインしたことがない人は、先にログイン用のアカウントを作ってから送る（cloud.js の inviteStaff）
   function loginBox(member, emailInput) {
     const backend = K.storage.isCloud() && K.app.cloudBackend ? K.app.cloudBackend() : null;
     if (!backend || !member || !member.email || member.active === false) return null;
@@ -537,8 +537,10 @@
       btn.disabled = true;
       status.textContent = '送っています…';
       try {
-        await (backend.sendPasswordReset ? backend.sendPasswordReset(member.email) : backend.sendStaffLoginLink(member.email));
-        status.textContent = 'パスワード設定用のメールを送りました。届かないときは、迷惑メールのフォルダーも見てもらってください（まだ一度もログインしたことがない人には届きません。その場合は、ログイン用のURLを送り、「初めての方・パスワードを忘れた方」から始めてもらってください）。';
+        // 11/13〜 まだアカウントがない人は、先にアカウントを作ってから送る（パスワード再設定メールは、アカウントがないと届かないため）
+        if (backend.inviteStaff) await backend.inviteStaff(member.email);
+        else await (backend.sendPasswordReset ? backend.sendPasswordReset(member.email) : backend.sendStaffLoginLink(member.email));
+        status.textContent = 'パスワード設定用のメールを送りました。スタッフがメールのリンクを開いてパスワードを決めると、ログインできるようになります。届かないときは、迷惑メールのフォルダーも見てもらってください。';
       } catch (err) {
         status.textContent = `送れませんでした（${err.message}）。少し待ってから、もう一度試してください。`;
       } finally {

@@ -10,6 +10,7 @@
 //   sendLoginLink(email)        ログイン用のメールを送る
 //   sendStaffLoginLink(email)   オーナーが、登録したスタッフのメールにログイン用のメールを送る（この端末には覚えない）
 //   sendPasswordReset(email)    パスワード再設定メールを送る（パスワードを決める・決め直す。1日に送れる数が多い）
+//   inviteStaff(email)          管理者が、スタッフにパスワード設定のメールを送る（ログイン用のアカウントがまだなければ先に作る。11/13〜）
 //   completeLogin(email)        メールのリンクでログインを完了する（戻り値：ログインした人の uid）。使えないリンクは code='link-invalid'
 //   clearLoginLink()            アドレスバーから、ログイン用のリンクの文字を消す
 //   signInWithPassword(email, password)  メールアドレスとパスワードでログインする
@@ -141,6 +142,39 @@
       if (err && err.code === 'auth/user-not-found') return; // 登録の有無は知らせない
       throw mailError(err);
     }
+  }
+
+  // 管理者が、スタッフにパスワード設定のメールを送る（11/13〜）。
+  // パスワード再設定メールは、ログイン用のアカウントがまだない人には届かない（エラーも出ない）ので、
+  // アカウントがなければ、先に作ってから送る。作るときのパスワードは、ここで作る長い乱数（保存も表示もしない。本人がメールで決め直す）。
+  // 作るのは別のアプリの入れ物（この端末に保存しない）で行い、管理者のログインはそのまま。
+  // 作ったアカウントは、メールの確認が済むまで（＝本人がメールのリンクでパスワードを決めるまで）アプリに入れない（app.js）
+  function randomPassword() {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('') + 'Aa1!';
+  }
+
+  async function inviteStaff(email) {
+    const { appMod, authMod } = await load();
+    let created = false;
+    const helper = appMod.initializeApp(K.firebaseConfig, `invite-${Date.now()}`);
+    try {
+      const helperAuth = authMod.initializeAuth(helper, { persistence: authMod.inMemoryPersistence });
+      try {
+        await authMod.createUserWithEmailAndPassword(helperAuth, email, randomPassword());
+        created = true;
+        await authMod.signOut(helperAuth);
+      } catch (err) {
+        // すでにアカウントがある人は、そのままメールを送る
+        if (err && /admin-restricted-operation|operation-not-allowed/.test(err.code || '')) throw new Error('Firebase の設定で、新しいアカウントを作れないようになっています。');
+        if (!err || err.code !== 'auth/email-already-in-use') throw mailError(err);
+      }
+    } finally {
+      await appMod.deleteApp(helper).catch(() => {});
+    }
+    await sendPasswordReset(email);
+    return { created };
   }
 
   // アドレスバーから、ログイン用のリンクの文字を消す
@@ -867,6 +901,7 @@
     sendLoginLink,
     sendStaffLoginLink,
     sendPasswordReset,
+    inviteStaff,
     mailError, // テスト用（エラーの文）
     completeLogin,
     clearLoginLink,
