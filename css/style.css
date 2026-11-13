@@ -7987,6 +7987,10 @@ body.is-kv-full .kv-back {
 @keyframes splash-glow { from { transform: scale(0.4); opacity: 0; } 60% { opacity: 1; } to { transform: scale(1); opacity: 1; } }
 @keyframes splash-lift { to { transform: translateY(-100%); } }
 @keyframes splash-fade { to { opacity: 0; visibility: hidden; } }
+/* 11/13 修正：読み込みが終わるまで（is-play がつくまで）は、最初の形（黒い画面）で止めておく */
+.splash:not(.is-play),
+.splash:not(.is-play)::after,
+.splash:not(.is-play) * { animation-play-state: paused; }
 /* 「視差効果を減らす」の人は、動かさずに、ふわっと消えるだけ */
 @media (prefers-reduced-motion: reduce) {
   .splash *, .splash::after { animation-duration: 0.01s !important; animation-delay: 0s !important; }

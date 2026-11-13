@@ -266,6 +266,10 @@ service cloud.firestore {
     function jstToday() {
       return jstDay(request.time + duration.value(9, 'h'));
     }
+    // 11/12〜 日をまたぐ勤務：iPad が前の日の打刻も読む
+    function jstYesterday() {
+      return jstDay(request.time + duration.value(9, 'h') - duration.value(1, 'd'));
+    }
     // その月の締め（最終日の20時・日本時間）より前か。締め＝翌月1日0時（UTC）の13時間前
     function closeOf(y, m) {
       return timestamp.date(m == 12 ? y + 1 : y, m == 12 ? 1 : m + 1, 1) - duration.value(13, 'h');
@@ -300,13 +304,14 @@ service cloud.firestore {
     // 直した1日分：管理者はいつでも、幹部は担当店舗を締めの前まで
     function editOk(id, d) {
       return (isAdmin() || (manages(d.storeId) && attendanceOpen(d.month) && (resource == null || manages(resource.data.storeId))))
-        && d.keys().hasOnly(['staffId', 'storeId', 'date', 'month', 'in', 'out', 'breaks', 'reason', 'by', 'role', 'at', 'logId'])
+        && d.keys().hasOnly(['staffId', 'storeId', 'date', 'month', 'in', 'out', 'breaks', 'outs', 'reason', 'by', 'role', 'at', 'logId'])
         && d.keys().hasAll(['staffId', 'storeId', 'date', 'month', 'in', 'out', 'breaks', 'reason', 'by', 'role', 'at', 'logId'])
         && id == d.staffId + '_' + d.date
         && d.date is string && d.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
         && d.month == d.date[0:7]
         && d.in is string && d.out is string
         && d.breaks is list && d.breaks.size() <= 6
+        && (!('outs' in d) || (d.outs is list && d.outs.size() <= 6))
         && d.reason is string && d.reason.size() > 0 && d.reason.size() <= 50
         && d.by == myEmail()
         && d.role == (isAdmin() ? 'owner' : 'manager')
@@ -670,6 +675,17 @@ service cloud.firestore {
         && request.resource.data.deleted is bool
         && email == email.lower();
     }
+    // 集計表用の名簿（11/12〜）：店舗名・スタッフの表示名・従業員番号・氏名・職種・勤務パターンの休憩・有給の日・確定した月の予定の時刻。
+    // 管理者が作り、管理者と幹部が読む（iPad・スタッフは読めない）。幹部が担当していない店舗の集計表（見る・出力だけ）に使う。作成中のシフトは入れない
+    match /attendanceDirectory/{storeId} {
+      allow read: if isAdmin() || isManager();
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly(['storeId', 'storeName', 'order', 'staff', 'patterns', 'paid', 'rosters', 'updatedAt'])
+        && request.resource.data.storeId == storeId
+        && request.resource.data.staff is list
+        && request.resource.data.patterns is list
+        && request.resource.data.paid is list;
+    }
     // iPad に出す名前の一覧（名前と ID だけ）：その店舗の iPad・担当の幹部が読む。作るのは管理者だけ
     match /kioskDirectory/{storeId} {
       allow read: if isAdmin() || isKioskOf(storeId) || manages(storeId);
@@ -700,21 +716,22 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/punches/$(id)).data.staffId == request.resource.data.staffId;
       allow update, delete: if false;
     }
-    // 打刻：iPad が今日の分を出すだけ（追加するだけ。直すのは punchEdits）。iPad は今日の自分の店舗の分だけ読む
+    // 打刻：iPad が今日の分を出すだけ（追加するだけ。直すのは punchEdits）。iPad は自分の店舗の今日と前の日の分だけ読む
+    // 11/12〜 幹部は3店舗とも読める（見る・出力だけ。直せるのは担当店舗だけ）
     match /punches/{id} {
-      allow read: if isAdmin() || manages(resource.data.storeId) || (isKioskOf(resource.data.storeId) && resource.data.date == jstToday());
+      allow read: if isAdmin() || isManager() || (isKioskOf(resource.data.storeId) && (resource.data.date == jstToday() || resource.data.date == jstYesterday()));
       allow create: if punchOk(id, request.resource.data);
       allow update, delete: if false;
     }
     // 直した1日分（打刻より優先）：修正の記録と一緒にだけ。元に戻す（消す）のは管理者だけ
     match /punchEdits/{id} {
-      allow read: if isAdmin() || manages(resource.data.storeId);
+      allow read: if isAdmin() || isManager();
       allow create, update: if editOk(id, request.resource.data);
       allow delete: if isAdmin();
     }
     // 修正の記録：追加するだけ（書き換え・削除はできない）
     match /attendanceLogs/{id} {
-      allow read: if isAdmin() || manages(resource.data.storeId);
+      allow read: if isAdmin() || isManager();
       allow create: if (isAdmin() || (manages(request.resource.data.storeId) && attendanceOpen(request.resource.data.month)))
         && request.resource.data.keys().hasOnly(['targetId', 'staffId', 'storeId', 'date', 'month', 'from', 'to', 'reason', 'by', 'role', 'at'])
         && request.resource.data.by == myEmail()
@@ -728,7 +745,7 @@ service cloud.firestore {
     match /{collection}/{id} {
       allow read, write: if isAdmin()
         && !(collection in ['access', 'managers', 'wishRequests', 'paidRequests', 'changeRequests', 'decisionLogs', 'businessDays',
-          'kiosks', 'kioskDirectory', 'attendancePins', 'punchProofs', 'punches', 'punchEdits', 'attendanceLogs']);
+          'kiosks', 'kioskDirectory', 'attendanceDirectory', 'attendancePins', 'punchProofs', 'punches', 'punchEdits', 'attendanceLogs']);
     }
   }
 }

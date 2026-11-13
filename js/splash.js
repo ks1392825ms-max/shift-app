@@ -2,6 +2,8 @@
 // ・押すとすぐ閉じる。「視差効果を減らす」の設定の人は、ふわっと消えるだけ
 // ・名札の色（管理者＝オレンジ・幹部＝赤・スタッフ＝白）は、この端末で前にログインしたときの役割（ログインの前・初めては出さない）
 // ・勤怠用 iPad（前に勤怠用でログインした端末）と、自動テスト（navigator.webdriver）では出さない
+// 11/13 修正：アプリを読み込んでいる間（スマホでは1秒ほど）は黒い画面のまま止めておき、読み込みが終わってから最初から動かす
+//   （止めずに動かすと、読み込み中は画面が描かれないので、前半が飛んで最後だけが見えていた）
 // データには何も触れない。index.html の <body> のすぐ後で読む（defer なし）
 (function () {
   'use strict';
@@ -52,8 +54,24 @@
       if (e.target === node && (e.animationName === 'splash-lift' || e.animationName === 'splash-fade')) close();
     });
     document.body.prepend(node);
-    // 念のため（アニメーションが止まる環境でも、画面を隠したままにしない）
-    setTimeout(close, 4000);
+    // 読み込みが終わってから動かす（遅い端末でも、最初から最後まで見えるように）
+    let played = false;
+    const play = () => {
+      if (played || !node) return;
+      played = true;
+      // 2回描いてから動かす（止めていた最初の形を、いったん画面に出す）
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (!node) return;
+        node.classList.add('is-play');
+        // 念のため（アニメーションが止まる環境でも、画面を隠したままにしない）
+        setTimeout(close, 4000);
+      }));
+    };
+    const idle = (fn) => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 700 }) : setTimeout(fn, 120));
+    if (document.readyState === 'complete') idle(play);
+    else window.addEventListener('load', () => idle(play), { once: true });
+    // 読み込みがとても遅いときも、3秒たったら動かす
+    setTimeout(play, 3000);
   }
 
   const K = (window.ShiftApp = window.ShiftApp || {});
