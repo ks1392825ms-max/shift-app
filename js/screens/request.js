@@ -1020,7 +1020,7 @@
     return el(
       'section',
       { class: 'req-hero' },
-      el('p', { class: 'req-hero__eyebrow' }, params.manager ? '幹部・自分の申請' : 'スタッフ'),
+      el('p', { class: 'req-hero__eyebrow' }, params.manager ? '幹部・自分の申請' : greeting()),
       el('h2', { class: 'req-hero__name' }, member ? `${member.name} さん` : '希望休・有給の申請'),
       member ? el('p', { class: 'req-hero__store' }, store ? store.name : '', member.title ? `・${member.title}` : '') : null,
       el(
@@ -1049,7 +1049,15 @@
     );
   }
 
-  // いちばん下の「アカウント・この端末の設定」：ログイン中のメール・簡単ログイン・パスワード・ログアウト（ふだんは閉じておく）
+  // 上のカードのあいさつ（この端末の時刻）
+  function greeting() {
+    const h = new Date().getHours();
+    if (h >= 5 && h < 11) return 'おはようございます';
+    if (h >= 11 && h < 18) return 'こんにちは';
+    return 'おつかれさまです';
+  }
+
+  // いちばん下の「アカウント・この端末の設定」：ログイン中の役割（メールアドレスは出さない）・簡単ログイン・パスワード・ログアウト（ふだんは閉じておく）
   function accountSection(params) {
     const user = K.app.cloudUser();
     return el(
@@ -1059,7 +1067,7 @@
       el(
         'div',
         { class: 'req-account__body' },
-        el('p', { class: 'hint hint--left req-account__who' }, `${view.email} でログインしています（${params.manager ? '幹部・自分の申請' : 'スタッフ'}）。`),
+        el('p', { class: 'hint hint--left req-account__who' }, `${params.manager ? '幹部（自分の申請）' : 'スタッフ'}としてログインしています。`),
         // 簡単ログイン（この端末のロック）の設定
         K.quickLock && user ? K.quickLock.card(user, K.app.rerender) : null,
         K.loginUI && user ? K.loginUI.passwordCard(user) : null,

@@ -836,7 +836,7 @@
       el(
         'div',
         { class: 'req-account__body' },
-        el('p', { class: 'hint hint--left req-account__who' }, `${view.email} でログインしています（幹部）。担当店舗の申請を、受付期間（${R().periodLabel()}）に判断できます。`),
+        el('p', { class: 'hint hint--left req-account__who' }, `幹部としてログインしています。担当店舗の申請を、受付期間（${R().periodLabel()}）に判断できます。`),
         // 簡単ログイン（この端末のロック）の設定
         K.quickLock && user ? K.quickLock.card(user, K.app.rerender) : null,
         K.loginUI && user ? K.loginUI.passwordCard(user) : null,

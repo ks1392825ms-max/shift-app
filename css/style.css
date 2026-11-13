@@ -3310,6 +3310,8 @@ body.is-locked > :not(.qlock) {
   font-weight: 600;
   line-height: 1.2;
   overflow-wrap: anywhere;
+  /* 11/13：Chrome 157 から、行の終わりの「）」を半分の幅として折り返し位置を決め、描くときは全角のままで、枠から少しはみ出すため、詰めない */
+  text-spacing-trim: space-all;
 }
 
 .print-date {
@@ -3739,8 +3741,9 @@ body.is-gate .bottom-nav {
   }
 }
 
-/* ==== 誰としてログインしているか（「SHIFT」の枠と名札） ==== */
-/* 枠の中は白・文字は黒（暗い表示でも同じ）。外枠：管理者＝オレンジ・幹部＝赤・スタッフ＝白（外側に細い灰色の線） */
+/* ==== 誰としてログインしているか（ロゴの濃いマスの色と名札） ==== */
+/* 11/13〜：「SHIFT」の枠をやめて、アプリのアイコン・起動のアニメーションと同じロゴ（横4×縦3のマス）を出す。
+   濃いマス3つの色：管理者＝オレンジ・幹部＝赤・スタッフ＝白（細い灰色の線）。ログインの前・「この端末だけ」は灰色（アイコンと同じ） */
 body[data-role="admin"] {
   --role-color: #f08c00;
 }
@@ -3753,36 +3756,102 @@ body[data-role="staff"] {
   --role-color: #ffffff;
 }
 
-body[data-role] .app-title {
-  padding: 2px 6px 2px calc(8px + 0.18em);
-  border: 3px solid var(--role-color);
-  border-radius: 8px;
-  background: #ffffff;
-  color: #111214;
-  line-height: 1.3;
+.app-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  line-height: 1;
   white-space: nowrap;
 }
 
-/* 名札（「St」「As」の印の role-badge とは別の名前にする） */
+.brand-mark {
+  display: grid;
+  grid-template-columns: repeat(4, 9px);
+  gap: 2px;
+  padding: 6px 6px;
+  border-radius: 9px;
+  background: #111214;
+}
+
+.brand-mark i {
+  height: 5px;
+  border-radius: 1.5px;
+  background: #e6e6e3;
+}
+
+.brand-mark i.is-dark {
+  background: var(--role-color, #5a5b60);
+}
+
+body[data-role="staff"] .brand-mark i.is-dark {
+  box-shadow: inset 0 0 0 1px #9a9a96;
+}
+
+.brand-word {
+  display: grid;
+  gap: 4px;
+  font-size: 1rem;
+  letter-spacing: 0.2em;
+}
+
+.brand-word small {
+  color: var(--text-muted);
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.42em;
+}
+
+/* 名札（「St」「As」の印の role-badge とは別の名前にする）：役割の色の点つき */
 .login-role {
-  padding: 2px 10px;
-  border: 2px solid var(--role-color, var(--border));
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px 4px 9px;
+  border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
   color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
   font-size: 0.72rem;
   font-weight: 800;
+  letter-spacing: 0.06em;
   white-space: nowrap;
 }
 
-body[data-role="staff"] .app-title,
-body[data-role="staff"] .login-role {
-  box-shadow: 0 0 0 1px #9a9a96;
+.login-role::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--role-color, var(--text-muted));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--role-color, #999) 22%, transparent);
+}
+
+body[data-role="staff"] .login-role::before {
+  background: #ffffff;
+  box-shadow: 0 0 0 1px #9a9a96, 0 0 0 3px rgba(154, 154, 150, 0.2);
 }
 
 @media (max-width: 420px) {
   .login-role {
-    padding: 2px 8px;
+    padding: 3px 9px 3px 7px;
+    gap: 5px;
+  }
+
+  .app-title {
+    gap: 8px;
+  }
+
+  .brand-mark {
+    grid-template-columns: repeat(4, 8px);
+    padding: 5px;
+    border-radius: 8px;
+  }
+
+  .brand-word {
+    font-size: 0.95rem;
+    letter-spacing: 0.16em;
   }
 
   /* 幅の狭いスマホでは、管理者の名札があれば「共有中」は省く（管理者の名札が出るのは共有モードだけ） */
@@ -7990,7 +8059,8 @@ body.is-kv-full .kv-back {
 /* 11/13 修正：読み込みが終わるまで（is-play がつくまで）は、最初の形（黒い画面）で止めておく */
 .splash:not(.is-play),
 .splash:not(.is-play)::after,
-.splash:not(.is-play) * { animation-play-state: paused; }
+.splash:not(.is-play) *,
+.splash:not(.is-play) .splash__grid i.is-dark { animation-play-state: paused; } /* 濃いマスは animation をまとめて書いているので、強く指定する */
 /* 「視差効果を減らす」の人は、動かさずに、ふわっと消えるだけ */
 @media (prefers-reduced-motion: reduce) {
   .splash *, .splash::after { animation-duration: 0.01s !important; animation-delay: 0s !important; }
@@ -7998,3 +8068,63 @@ body.is-kv-full .kv-back {
 }
 /* 印刷のときは出さない */
 @media print { .splash { display: none !important; } }
+
+/* ==== 11/13：上のカードを少しおしゃれに（淡い光と輪の模様） ==== */
+.req-hero,
+.mgr-todo {
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(120% 140% at 100% 0%, #2a2b31 0%, #111214 55%);
+  border-radius: 22px;
+}
+
+.req-hero::after,
+.mgr-todo::after {
+  content: '';
+  position: absolute;
+  top: -18px;
+  right: -18px;
+  width: 120px;
+  height: 120px;
+  border: 1.5px solid rgba(255, 255, 255, 0.07);
+  border-radius: 50%;
+  box-shadow: 0 0 0 22px rgba(255, 255, 255, 0.025);
+  pointer-events: none;
+}
+
+.req-hero__eyebrow {
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.req-hero__store {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.req-hero__store::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--role-color, #ffffff);
+}
+
+@media (prefers-color-scheme: dark) {
+  .brand-mark {
+    box-shadow: 0 0 0 1px #3a3b40;
+  }
+
+  .req-hero,
+  .mgr-todo {
+    border: 1px solid #3a3b40;
+  }
+}
+
+@media print {
+  .req-hero::after,
+  .mgr-todo::after {
+    display: none;
+  }
+}
