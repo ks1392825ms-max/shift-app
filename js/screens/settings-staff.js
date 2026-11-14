@@ -507,6 +507,297 @@
     );
   }
 
+  // ---- パスワード設定用のメールの送信結果（11/14〜） ----
+  // ・結果は、画面とは別に、ここ（スタッフごと）に覚える。共有データが届いて画面が作り直されても、ここから描き直すので消えない
+  // ・「受付済み」は、Firebase が送信を受け付けたという意味。相手に届いたかどうかは、アプリでは確かめられない（混同しない）
+  // ・失敗したときは、Firebase のエラーコードと、どの手順（アカウントを作る／メールを送る）で失敗したかを残す
+  // ・送りすぎを防ぐ：1回ごとに5秒あける・受付済みの人は10分は再送しない・送りすぎ（too-many-requests）のあとは60分、
+  //   1日の上限（quota-exceeded）のあとはその日は止める（この端末で数える。Firebase 側の制限も別にある）
+  // ・この端末の記録（直近20件）には、スタッフの番号・時刻・結果・コード・手順だけを残す（メールアドレス・名前・パスワードは残さない）
+  const mailResults = new Map(); // スタッフID → { staffId, name, status: 'sending' | 'accepted' | 'failed', at, created, code, step, message, help }
+  const MAIL_LOG_KEY = 'shift-app.staffMail.log';
+  const MAIL_HOLD_KEY = 'shift-app.staffMail.hold';
+  const MAIL_LOG_MAX = 20;
+  const MAIL_GAP_MS = 5 * 1000; // 1回ごとの間隔
+  const MAIL_RESEND_MS = 10 * 60 * 1000; // 受付済みの人に再送できるまで
+  const MAIL_HOLD_MS = 60 * 60 * 1000; // 送りすぎのあと止める時間
+  let lastMailAt = 0;
+  let retrying = false;
+  let mailLogOpen = false;
+
+  // エラーの説明と対処（コードは Firebase のもの）
+  function explainMailError(err) {
+    const code = (err && err.code) || '';
+    const ask = 'この画面からは直せません。エラーコードを控えて相談してください。';
+    const table = [
+      [/too-many-requests/, '続けて送ったため、Firebase が一時的に送信を止めています。', 'この端末からの送信を60分止めます。1時間ほどあけてから、送れなかった人に再送してください。'],
+      [/quota-exceeded/, 'きょう送れるメールの数の上限に達しました。', 'この端末からの送信を、きょうは止めます。明日、送れなかった人に再送してください。'],
+      [/network-request-failed/, 'Firebase につながりませんでした。', '電波や Wi-Fi の状態を確かめてから、再送してください。'],
+      [/invalid-email|missing-email/, 'メールアドレスの形が正しくありません。', '全角の文字や空白が入っていないか確かめて、保存し直してから送ってください。'],
+      [/admin-restricted-operation|operation-not-allowed/, 'Firebase の設定で、新しいアカウントを作れないようになっています。', ask],
+      [/unauthorized-continue-uri|invalid-continue-uri|missing-continue-uri|unauthorized-domain/, 'メールのリンクの戻り先が、Firebase で許可されていません。', ask],
+      [/user-disabled/, 'このスタッフのログイン用アカウントが、使えない状態になっています。', ask],
+      [/internal-error/, 'Firebase の中でエラーが起きました。', '少し時間をおいてから再送してください。続くときは、エラーコードを控えて相談してください。'],
+    ];
+    const hit = table.find(([re]) => re.test(code));
+    if (hit) return { message: hit[1], help: hit[2] };
+    return { message: `送れませんでした${err && err.message ? `（${err.message}）` : ''}。`, help: '少し待ってから再送してください。続くときは、エラーコードを控えて相談してください。' };
+  }
+
+  // この端末の記録（調べるとき用）
+  function readMailLog() {
+    try {
+      const list = JSON.parse(localStorage.getItem(MAIL_LOG_KEY) || '[]');
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function logMailResult(r) {
+    try {
+      const list = readMailLog();
+      list.push({ staffId: r.staffId, at: r.at, status: r.status, step: r.step || '', code: r.code || '', created: !!r.created });
+      localStorage.setItem(MAIL_LOG_KEY, JSON.stringify(list.slice(-MAIL_LOG_MAX)));
+    } catch (e) {
+      /* 残せなくても、画面の表示はできる */
+    }
+  }
+
+  // 送信を止めている間（送りすぎ・1日の上限のあと）
+  function readHold() {
+    try {
+      const h = JSON.parse(localStorage.getItem(MAIL_HOLD_KEY) || 'null');
+      return h && Number(h.until) > Date.now() ? h : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function setHold(code) {
+    let until;
+    if (/quota-exceeded/.test(code)) {
+      // 日本時間の次の0時まで
+      const jst = new Date(Date.now() + 9 * 3600e3);
+      until = Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate() + 1) - 9 * 3600e3;
+    } else {
+      until = Date.now() + MAIL_HOLD_MS;
+    }
+    try {
+      localStorage.setItem(MAIL_HOLD_KEY, JSON.stringify({ until, code }));
+    } catch (e) {
+      /* 残せなくても、Firebase 側の制限は働く */
+    }
+  }
+
+  // その人に、最後に受け付けられた時刻（この画面で送った分と、この端末の記録から）
+  function lastAcceptedAt(staffId) {
+    const times = readMailLog().filter((x) => x.staffId === staffId && x.status === 'accepted').map((x) => Date.parse(x.at));
+    const r = mailResults.get(staffId);
+    if (r && r.status === 'accepted') times.push(Date.parse(r.at));
+    return times.length ? Math.max(...times) : 0;
+  }
+  function lastSentAt() {
+    const times = readMailLog().map((x) => Date.parse(x.at)).filter((t) => !Number.isNaN(t) && t <= Date.now());
+    return Math.max(lastMailAt, ...times, 0);
+  }
+  const minutesLeft = (ms) => Math.max(1, Math.ceil(ms / 60000));
+
+  // 今送れるか：{ ok, reason, label（ボタンの文字・押せないとき）, resend（受付済みの人への再送） }
+  function mailGate(staffId) {
+    const r = mailResults.get(staffId);
+    if (r && r.status === 'sending') return { ok: false, label: '送っています…', reason: '送っています。' };
+    const hold = readHold();
+    if (hold) {
+      const m = minutesLeft(hold.until - Date.now());
+      return { ok: false, label: `しばらく送れません（あと${m}分）`, reason: `Firebase の送信制限のため、この端末からの送信を止めています（あと${m}分）。` };
+    }
+    const acc = lastAcceptedAt(staffId);
+    if (acc && Date.now() - acc < MAIL_RESEND_MS) {
+      const m = minutesLeft(MAIL_RESEND_MS - (Date.now() - acc));
+      return { ok: false, label: `受付済み（あと${m}分で再送できます）`, reason: `このスタッフへの送信は、Firebase が受け付けています。続けて送らないよう、あと${m}分は再送できません。` };
+    }
+    const gap = lastSentAt() + MAIL_GAP_MS - Date.now();
+    if (gap > 0) return { ok: false, gapOnly: true, label: 'パスワード設定用のメールを送る', reason: `続けて送らないよう、あと${Math.ceil(gap / 1000)}秒待ってから押してください。` };
+    return { ok: true, resend: Boolean(acc) };
+  }
+
+  function timeLabel(iso) {
+    const d = new Date(iso);
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+  const MAIL_STATUS = { sending: '送信中…', accepted: '受付済み（到着は未確認）', failed: '送れませんでした' };
+  const STEP_LABEL = { create: 'アカウントを作るところ', send: 'メールを送るところ' };
+
+  // 1人分の結果の文
+  function resultLines(r) {
+    if (r.status === 'sending') return ['パスワード設定用のメールを送っています…'];
+    if (r.status === 'accepted') {
+      return [
+        `Firebase が送信を受け付けました${r.created ? '（ログイン用のアカウントも作りました）' : ''}。`,
+        '相手に届いたかどうかは、アプリでは確かめられません。届かないときは、迷惑メールのフォルダーや、携帯会社のメールの受信設定を見てもらってください。',
+      ];
+    }
+    return [r.message, `対処：${r.help}`, `エラーコード：${r.code || 'なし'}${r.step ? `（${STEP_LABEL[r.step] || r.step}）` : ''}`];
+  }
+
+  // 送れなかった人（再送できる人）
+  function failedTargets() {
+    return [...mailResults.values()].filter((r) => r.status === 'failed').map((r) => K.storage.getStaffMember(r.staffId)).filter((m) => m && m.email && m.active !== false);
+  }
+
+  // 画面上部のお知らせ欄（スタッフごとに1行。新しい順）
+  function mailNotice() {
+    const list = [...mailResults.values()].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    if (!list.length) return null;
+    const hold = readHold();
+    const failed = failedTargets();
+    return el(
+      'section',
+      { class: 'mail-notice', 'data-mail-notice': '', 'aria-live': 'polite' },
+      el(
+        'div',
+        { class: 'mail-notice__head' },
+        el('h2', { class: 'mail-notice__title' }, 'パスワード設定用のメールの送信結果'),
+        list.some((r) => r.status !== 'sending') && !retrying ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: clearMailResults }, '閉じる') : null
+      ),
+      hold ? el('p', { class: 'mail-notice__hold', role: 'alert' }, `Firebase の送信制限のため、この端末からの送信を止めています（${timeLabel(new Date(Number(hold.until)).toISOString())} まで）。`) : null,
+      el(
+        'ul',
+        { class: 'mail-notice__list' },
+        list.map((r) =>
+          el(
+            'li',
+            { class: `mail-notice__item is-${r.status}`, 'data-staff': r.staffId },
+            el('p', { class: 'mail-notice__who' }, el('b', null, `${r.name}さん`), el('span', { class: 'mail-notice__badge' }, MAIL_STATUS[r.status]), el('span', { class: 'mail-notice__time' }, timeLabel(r.at))),
+            resultLines(r).map((t) => el('p', { class: 'mail-notice__text' }, t))
+          )
+        )
+      ),
+      failed.length || retrying
+        ? el(
+            'div',
+            { class: 'mail-notice__retry' },
+            el('button', { type: 'button', class: 'btn btn--primary btn--small', 'data-mail-retry': '', disabled: retrying || Boolean(hold), onclick: retryFailed }, retrying ? '再送しています…' : `送れなかった人に再送（${failed.length}人）`),
+            el('p', { class: 'mail-notice__text' }, '送れなかった人だけに、1人ずつ5秒あけて送ります。受付済みの人には送りません。')
+          )
+        : null
+    );
+  }
+
+  // この端末の送信の記録（直近20件・新しい順）。名前は、見るときに名簿から引く（記録には残さない）
+  function mailLogView() {
+    const list = readMailLog().slice().reverse();
+    if (!list.length) return null;
+    return el(
+      'details',
+      { class: 'mail-log', open: mailLogOpen, ontoggle: (ev) => (mailLogOpen = ev.currentTarget.open) },
+      el('summary', null, `送信の記録（この端末・直近${MAIL_LOG_MAX}件）`),
+      el(
+        'ul',
+        { class: 'mail-log__list' },
+        list.map((x) => {
+          const m = K.storage.getStaffMember(x.staffId);
+          return el(
+            'li',
+            { class: `mail-log__item is-${x.status}`, 'data-staff': x.staffId },
+            el('span', { class: 'mail-log__time' }, timeLabel(x.at)),
+            el('b', null, m ? m.name : '（今はいないスタッフ）'),
+            el('span', null, MAIL_STATUS[x.status] || x.status),
+            x.code ? el('span', { class: 'mail-log__code' }, `${x.code}${x.step ? `（${STEP_LABEL[x.step] || x.step}）` : ''}`) : null
+          );
+        })
+      ),
+      el('p', { class: 'mail-notice__text' }, '記録には、スタッフの番号・時刻・結果・エラーコードだけを残しています（メールアドレスは残しません）。')
+    );
+  }
+
+  function mailPanel() {
+    return [mailNotice(), mailLogView()].filter(Boolean);
+  }
+
+  function clearMailResults() {
+    for (const [id, r] of mailResults) if (r.status !== 'sending') mailResults.delete(id);
+    refreshMail();
+  }
+
+  // 画面を作り直さずに、お知らせ欄・ボタン・スタッフの欄だけを今の結果に合わせる（入力途中の内容を消さないため）
+  function refreshMail() {
+    const slot = document.querySelector('[data-mail-slot]');
+    if (slot) slot.replaceChildren(...mailPanel());
+    document.querySelectorAll('[data-mail-btn]').forEach((btn) => paintMailButton(btn, btn.getAttribute('data-mail-btn')));
+    document.querySelectorAll('[data-mail-status]').forEach((p) => paintMailStatus(p, p.getAttribute('data-mail-status')));
+  }
+  function paintMailButton(btn, staffId) {
+    const g = mailGate(staffId);
+    const blocked = !g.ok && !g.gapOnly;
+    btn.disabled = blocked;
+    btn.textContent = blocked ? g.label : 'パスワード設定用のメールを送る';
+  }
+  function paintMailStatus(p, staffId) {
+    const r = mailResults.get(staffId);
+    p.textContent = r ? `${MAIL_STATUS[r.status]}（${timeLabel(r.at)}）。くわしくは、画面上部のお知らせを見てください。` : '';
+  }
+  // 「あと◯分」の表示を進める（スタッフの画面を開いているときだけ）
+  setInterval(() => {
+    if (document.querySelector('[data-mail-btn], [data-mail-notice]')) refreshMail();
+  }, 30 * 1000);
+
+  // 送る（成功・失敗とも、スタッフごとの結果に残す）。送る前に mailGate で確かめておくこと
+  async function sendStaffMail(backend, member) {
+    const cur = mailResults.get(member.id);
+    if (cur && cur.status === 'sending') return;
+    const base = { staffId: member.id, name: member.name };
+    lastMailAt = Date.now();
+    mailResults.set(member.id, { ...base, status: 'sending', at: new Date(Date.now()).toISOString() });
+    refreshMail();
+    let result;
+    try {
+      // 11/13〜 まだアカウントがない人は、先にアカウントを作ってから送る（パスワード再設定メールは、アカウントがないと届かないため）
+      let created = false;
+      if (backend.inviteStaff) created = Boolean(((await backend.inviteStaff(member.email)) || {}).created);
+      else await (backend.sendPasswordReset ? backend.sendPasswordReset(member.email) : backend.sendStaffLoginLink(member.email));
+      result = { ...base, status: 'accepted', at: new Date(Date.now()).toISOString(), created };
+      K.app.toast(`${member.name}さんへの送信を、Firebase が受け付けました（到着は未確認）`, 3500);
+    } catch (err) {
+      const why = explainMailError(err);
+      result = { ...base, status: 'failed', at: new Date(Date.now()).toISOString(), code: (err && err.code) || '', step: (err && err.step) || '', message: why.message, help: why.help };
+      if (/too-many-requests|quota-exceeded/.test(result.code)) setHold(result.code);
+      console.warn('[スタッフへのメール] 失敗', { staffId: member.id, code: result.code, step: result.step });
+      K.app.toast(`${member.name}さんに送れませんでした。画面上部のお知らせを見てください`, 3500);
+    }
+    mailResults.set(member.id, result);
+    logMailResult(result);
+    refreshMail();
+    return result;
+  }
+
+  // 送れなかった人だけに、1人ずつ間をあけて再送する
+  async function retryFailed() {
+    if (retrying) return;
+    const backend = K.storage.isCloud() && K.app.cloudBackend ? K.app.cloudBackend() : null;
+    const targets = failedTargets();
+    if (!backend || !targets.length || readHold()) return;
+    if (!window.confirm(`送れなかった ${targets.length}人に、パスワード設定用のメールを再送しますか？\n1人ずつ5秒あけて送ります。受付済みの人には送りません。`)) return;
+    retrying = true;
+    refreshMail();
+    try {
+      for (const m of targets) {
+        // 前の送信から5秒あける（止まっている間・受付済みになった人は飛ばす）
+        for (;;) {
+          const wait = lastSentAt() + MAIL_GAP_MS - Date.now();
+          if (wait <= 0) break;
+          await new Promise((res) => setTimeout(res, Math.min(wait, 250)));
+        }
+        if (readHold()) break;
+        const r = mailResults.get(m.id);
+        if (!r || r.status !== 'failed') continue;
+        await sendStaffMail(backend, m);
+      }
+    } finally {
+      retrying = false;
+      refreshMail();
+    }
+  }
+
   // スタッフのログインの案内（共有モードで、ログイン用メールを保存済みのときだけ）
   // ・ログイン用のURL：開くとすぐにログイン画面になる（LINE などでスタッフに送る）
   // ・パスワード設定用のメールを送る：保存済みのメールアドレスに、Firebase からパスワード再設定メールを送る（開くと、新しいパスワードを決める画面）
@@ -516,6 +807,8 @@
     if (!backend || !member || !member.email || member.active === false) return null;
     const url = backend.loginEntryUrl ? backend.loginEntryUrl() : '';
     const status = el('p', { class: 'field__note staff-login__status', role: 'status' });
+    const mailStatus = el('p', { class: 'field__note staff-login__status', 'data-mail-status': member.id });
+    paintMailStatus(mailStatus, member.id);
 
     async function copyUrl() {
       try {
@@ -526,26 +819,29 @@
       }
     }
 
-    async function sendMail(event) {
-      const btn = event.currentTarget;
+    function sendMail() {
+      const gate = mailGate(member.id);
+      if (!gate.ok) {
+        status.textContent = gate.reason;
+        return;
+      }
       // 入力欄を書き換えて、まだ保存していないときは送らない（保存済みのアドレスにだけ送る）
       if (emailInput.value.trim().toLowerCase() !== member.email) {
         status.textContent = 'メールアドレスが変わっています。先に「保存する」を押してから送ってください。';
         return;
       }
-      if (!window.confirm(`${member.name}さんの登録メールに、パスワード設定用のメールを送りますか？\nスタッフがメールのリンクを開くと、新しいパスワードを決める画面になります。`)) return;
-      btn.disabled = true;
-      status.textContent = '送っています…';
-      try {
-        // 11/13〜 まだアカウントがない人は、先にアカウントを作ってから送る（パスワード再設定メールは、アカウントがないと届かないため）
-        if (backend.inviteStaff) await backend.inviteStaff(member.email);
-        else await (backend.sendPasswordReset ? backend.sendPasswordReset(member.email) : backend.sendStaffLoginLink(member.email));
-        status.textContent = 'パスワード設定用のメールを送りました。スタッフがメールのリンクを開いてパスワードを決めると、ログインできるようになります。届かないときは、迷惑メールのフォルダーも見てもらってください。';
-      } catch (err) {
-        status.textContent = `送れませんでした（${err.message}）。少し待ってから、もう一度試してください。`;
-      } finally {
-        btn.disabled = false;
-      }
+      const ask = gate.resend
+        ? `${member.name}さんへの送信は、前に Firebase が受け付けています。\n先に、迷惑メールのフォルダーや受信設定を見てもらいましたか？\nもう一度送りますか？`
+        : `${member.name}さんの登録メールに、パスワード設定用のメールを送りますか？\nスタッフがメールのリンクを開くと、新しいパスワードを決める画面になります。`;
+      if (!window.confirm(ask)) return;
+      status.textContent = '';
+      sendStaffMail(backend, member);
+    }
+
+    let mailBtn = null;
+    if (backend.sendPasswordReset || backend.sendStaffLoginLink) {
+      mailBtn = el('button', { type: 'button', class: 'btn btn--ghost btn--small', 'data-mail-btn': member.id, onclick: sendMail }, 'パスワード設定用のメールを送る');
+      paintMailButton(mailBtn, member.id);
     }
 
     return el(
@@ -559,12 +855,8 @@
             el('span', { class: 'staff-login__url' }, url)
           )
         : null,
-      el(
-        'div',
-        { class: 'actions' },
-        url ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: copyUrl }, 'URLをコピー') : null,
-        (backend.sendPasswordReset || backend.sendStaffLoginLink) ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: sendMail }, 'パスワード設定用のメールを送る') : null
-      ),
+      el('div', { class: 'actions' }, url ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: copyUrl }, 'URLをコピー') : null, mailBtn),
+      mailStatus,
       status
     );
   }
@@ -648,6 +940,9 @@
 
   function render(container) {
     const editing = formTarget && formTarget !== 'new' ? K.storage.getStaffMember(formTarget) : null;
+
+    // 画面上部：メールの送信結果（作り直しても、覚えている結果から出す）
+    container.append(el('div', { class: 'mail-slot', 'data-mail-slot': '' }, mailPanel()));
 
     if (formTarget === 'new' || editing) {
       container.append(formTarget === 'new' ? staffForm(null) : staffForm(editing));

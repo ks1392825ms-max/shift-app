@@ -329,6 +329,38 @@
     return 'downloaded';
   }
 
+  // ファイルをメールで送る（11/14〜 勤怠集計表）
+  // ・スマホ：送り先のアドレスをコピーしてから、ファイル付きで共有メニューを開く（「メール」を選んで、宛先に貼り付ける。
+  //   iPhone の決まりで、共有メニューからは宛先を自動で入れられないため）
+  // ・パソコン：ファイルを保存してから、宛先と件名の入ったメールの画面を開く（ファイルは自分で添付する）
+  // 戻り値：'shared' / 'cancelled' / 'mail'（パソコン） / 'failed'
+  async function sendFiles(files, { to = '', subject = '' } = {}) {
+    const mobile = isIOS() || /Android/i.test(navigator.userAgent);
+    if (mobile && typeof navigator.canShare === 'function') {
+      const list = files.map((f) => new File([f.blob], f.name, { type: f.blob.type }));
+      if (navigator.canShare({ files: list })) {
+        if (to && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(to).catch(() => {});
+        try {
+          await navigator.share({ files: list, title: subject });
+          return 'shared';
+        } catch (err) {
+          if (err.name === 'AbortError') return 'cancelled';
+          console.warn(err);
+          return 'failed';
+        }
+      }
+    }
+    if (mobile) return 'failed';
+    await saveFiles(files);
+    const q = `subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(`${files.map((f) => f.name).join('\n')}\n（保存したファイルを添付してください）`)}`;
+    const a = document.createElement('a');
+    a.href = `mailto:${encodeURIComponent(to).replace(/%40/g, '@')}?${q}`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    return 'mail';
+  }
+
   // 店舗ごとに1枚ずつ画像を作って保存する
   async function saveImages(storeIds, month) {
     const files = [];
@@ -496,5 +528,5 @@
     }, 1500);
   }
 
-  K.exporter = { drawRoster, saveImages, printRosters, printLayout, rosterData, saveFiles };
+  K.exporter = { drawRoster, saveImages, printRosters, printLayout, rosterData, saveFiles, sendFiles };
 })();

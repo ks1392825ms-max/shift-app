@@ -412,12 +412,86 @@
       el(
         'div',
         { class: 'att-actions' },
-        el('button', { type: 'button', class: 'btn btn--primary', onclick: () => A().printSummary(args, { onNotOpened: () => K.app.toast('印刷の画面が開きませんでした。もう一度押すか、Safari の共有ボタンから「プリント」を選んでください') }) }, 'PDF（印刷）'),
-        el('button', { type: 'button', class: 'btn btn--primary', onclick: async () => { const r = await A().saveExcel(args); if (r === 'downloaded') K.app.toast('Excel のファイルを保存しました'); } }, 'Excel'),
+        el('button', { type: 'button', class: 'btn btn--primary', onclick: () => saveOut(args, 'pdf') }, 'PDF'),
+        el('button', { type: 'button', class: 'btn btn--primary', onclick: () => saveOut(args, 'excel') }, 'Excel'),
         el('button', { type: 'button', class: 'btn btn--ghost', onclick: () => { A().lockSummary(); K.app.rerender(); } }, '閉じる（鍵をかける）')
       ),
-      el('p', { class: 'att-note' }, 'PDF・Excel は、会社の勤怠集計表の形（1人1枚・A4 縦）です。全員のときは、1枚目が全体の集計表、2枚目から1人1枚です。PDF は、印刷の画面で「PDFとして保存」を選びます。'),
+      el('p', { class: 'att-note' }, 'PDF・Excel は、会社の勤怠集計表の形（1人1枚・A4 縦）です。全員のときは、1枚目が全体の集計表、2枚目から1人1枚です。スマホでは共有メニューが開くので、「プリント」「ファイルに保存」などを選びます。'),
+      sendBox(st, args),
       el('p', { class: 'att-note' }, '時間は小数第1位（四捨五入）。月の合計は、分のまま足してから四捨五入します。')
+    );
+  }
+
+  // ---- 出力と送信（11/14〜）：PDF もファイルを作る（ホーム画面のアプリでは印刷の画面が開かないことがあるため） ----
+  const MAIL_KEY = 'shift-app.attendance.mailTo';
+  function savedMailTo() {
+    try {
+      return localStorage.getItem(MAIL_KEY) || '';
+    } catch (e) {
+      return '';
+    }
+  }
+  function rememberMailTo(v) {
+    try {
+      localStorage.setItem(MAIL_KEY, v);
+    } catch (e) {
+      /* 覚えられなくても送れる */
+    }
+  }
+  function outFile(args, kind) {
+    return kind === 'pdf' ? A().pdfFile(args) : A().excelFile(args);
+  }
+  async function saveOut(args, kind) {
+    let file;
+    try {
+      file = outFile(args, kind);
+    } catch (err) {
+      K.app.toast(`ファイルを作れませんでした（${err.message}）`);
+      return;
+    }
+    const r = await K.exporter.saveFiles([file]);
+    if (r === 'downloaded') K.app.toast(`${kind === 'pdf' ? 'PDF' : 'Excel'} のファイルを保存しました`);
+  }
+  const MAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  async function sendOut(st, args, kind) {
+    const to = (st.mailTo || '').trim();
+    if (!MAIL_RE.test(to)) {
+      st.mailError = '送り先のメールアドレスを、正しく入れてください（半角）。';
+      K.app.rerender();
+      return;
+    }
+    if (st.mailError) {
+      st.mailError = '';
+      K.app.rerender();
+    }
+    rememberMailTo(to);
+    let file;
+    try {
+      file = outFile(args, kind);
+    } catch (err) {
+      K.app.toast(`ファイルを作れませんでした（${err.message}）`);
+      return;
+    }
+    const subject = file.name.replace(/\.(pdf|xlsx)$/, '');
+    const r = await K.exporter.sendFiles([file], { to, subject });
+    if (r === 'mail') K.app.toast('ファイルを保存して、メールの画面を開きました。保存したファイルを添付してください');
+    else if (r === 'failed') K.app.toast('共有メニューを開けませんでした。上の「PDF」「Excel」で保存してから、メールに添付してください');
+  }
+  // 送り先のアドレスと「PDF を送る」「Excel を送る」
+  function sendBox(st, args) {
+    if (st.mailTo == null) st.mailTo = savedMailTo();
+    return el(
+      'div',
+      { class: 'att-send' },
+      el('label', { class: 'att-field att-field--wide' }, el('span', null, '送り先のメールアドレス'), el('input', { id: 'att-mail-to', class: 'field__input', type: 'email', inputmode: 'email', autocomplete: 'email', placeholder: '例：jimu@example.com', value: st.mailTo, oninput: (ev) => { st.mailTo = ev.currentTarget.value; } })),
+      st.mailError ? el('p', { class: 'att-send__error', role: 'alert' }, st.mailError) : null,
+      el(
+        'div',
+        { class: 'att-actions' },
+        el('button', { type: 'button', class: 'btn btn--primary', id: 'att-send-pdf', onclick: () => sendOut(st, args, 'pdf') }, 'PDF を送る'),
+        el('button', { type: 'button', class: 'btn btn--primary', id: 'att-send-excel', onclick: () => sendOut(st, args, 'excel') }, 'Excel を送る')
+      ),
+      el('p', { class: 'att-note' }, 'スマホでは、アドレスをコピーしてから共有メニューが開きます。「メール」を選び、宛先の欄に貼り付けて送ってください。パソコンでは、ファイルを保存してからメールの画面が開くので、ファイルを添付してください。アドレスは、この端末に覚えておきます。')
     );
   }
 

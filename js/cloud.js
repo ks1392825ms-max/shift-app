@@ -98,12 +98,14 @@
   }
 
   // メールを送るときのエラーを、利用者に分かる文にする
+  // 11/14〜 日本語の文に置き換えても、Firebase の元のエラーコード（auth/…）は code に残す（原因を調べられるように）
   function mailError(err) {
     const code = (err && err.code) || '';
-    if (/quota-exceeded/.test(code)) return new Error('きょう送れるメールの数の上限に達しました。明日もう一度試してください。');
-    if (/too-many-requests/.test(code)) return new Error('続けて送ったため、しばらく送れません。時間をおいてから試してください。');
-    if (/invalid-email/.test(code)) return new Error('メールアドレスを正しく入力してください。');
-    if (/network-request-failed/.test(code)) return new Error('つながりませんでした。電波の状態を確認してください。');
+    const withCode = (message) => Object.assign(new Error(message), { code });
+    if (/quota-exceeded/.test(code)) return withCode('きょう送れるメールの数の上限に達しました。明日もう一度試してください。');
+    if (/too-many-requests/.test(code)) return withCode('続けて送ったため、しばらく送れません。時間をおいてから試してください。');
+    if (/invalid-email/.test(code)) return withCode('メールアドレスを正しく入力してください。');
+    if (/network-request-failed/.test(code)) return withCode('つながりませんでした。電波の状態を確認してください。');
     return err;
   }
 
@@ -168,13 +170,18 @@
         await authMod.signOut(helperAuth);
       } catch (err) {
         // すでにアカウントがある人は、そのままメールを送る
-        if (err && /admin-restricted-operation|operation-not-allowed/.test(err.code || '')) throw new Error('Firebase の設定で、新しいアカウントを作れないようになっています。');
-        if (!err || err.code !== 'auth/email-already-in-use') throw mailError(err);
+        // 11/14〜 失敗したときは、どの手順か（step：create＝アカウントを作る／send＝メールを送る）と元のコードを付けて返す
+        if (err && /admin-restricted-operation|operation-not-allowed/.test(err.code || '')) throw Object.assign(new Error('Firebase の設定で、新しいアカウントを作れないようになっています。'), { code: err.code, step: 'create' });
+        if (!err || err.code !== 'auth/email-already-in-use') throw Object.assign(mailError(err) || new Error('アカウントを作れませんでした。'), { step: 'create' });
       }
     } finally {
       await appMod.deleteApp(helper).catch(() => {});
     }
-    await sendPasswordReset(email);
+    try {
+      await sendPasswordReset(email);
+    } catch (err) {
+      throw Object.assign(err || new Error('メールを送れませんでした。'), { step: 'send' });
+    }
     return { created };
   }
 

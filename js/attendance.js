@@ -696,8 +696,7 @@
   }
 
   async function saveExcel(args) {
-    const blob = xlsxBlob(args);
-    return K.exporter.saveFiles([{ name: `${fileBase(args)}.xlsx`, blob }]);
+    return K.exporter.saveFiles([excelFile(args)]);
   }
 
   // 1人分の紙（PDF・印刷）
@@ -771,6 +770,125 @@
       ),
       el('p', { class: 'ks-extra' }, '時間は小数第1位（四捨五入）。月の合計は、分のまま足してから四捨五入しています。2ページ目から1人1枚です。')
     );
+  }
+
+  // ---- PDF のファイル（11/14〜）：印刷の画面に頼らず、ファイルそのものを作る（ホーム画面のアプリでも保存・プリント・メールができる） ----
+  //   形は、画面と印刷の集計表と同じ（2人以上は1ページ目に全体、そのあと1人1ページ・A4 縦）
+  const PDF_X = 13; // 左の余白（mm）
+  const PDF_W = 184; // 中身の幅（mm）
+  const HEAD_FILL = '#eeeeee';
+
+  function pdfTitle(P, ctx, str) {
+    P.font(ctx, 15, 700);
+    ctx.fillStyle = '#111';
+    ctx.textAlign = 'center';
+    ctx.fillText(Array.from(str).join(' '), PDF_X + PDF_W / 2, 15);
+  }
+  function pdfInfo(P, ctx, y, pairs) {
+    const half = PDF_W / 2;
+    const cols = [24, half - 24, 24, half - 24];
+    const rows = pairs.map((pr) => ({ h: 7, cells: pr, text: { pt: 9.5 }, styles: [{ fill: HEAD_FILL, weight: 600 }, {}, { fill: HEAD_FILL, weight: 600 }, {}] }));
+    return P.table(ctx, PDF_X, y, cols, rows);
+  }
+  // 見出しを2行に（「実働（時）」→「実働」「（時）」）
+  function headLines(h) {
+    const i = h.indexOf('（');
+    return i > 0 ? [h.slice(0, i), h.slice(i)] : h;
+  }
+
+  function pdfSheet(row, args) {
+    const P = K.pdf;
+    const { canvas, ctx } = P.page();
+    const info = sheetInfo(row, args);
+    pdfTitle(P, ctx, '勤怠集計表');
+    let y = pdfInfo(P, ctx, 22, [['従業員番号', info.employeeNo, '担当', info.tanto], ['氏名', info.name, '対象期間', info.period]]) + 4;
+    const rest = (PDF_W - 50) / 6;
+    const cols = [50, rest, rest, rest, rest, rest, rest];
+    const rowH = row.days.length > 31 ? 5.6 : 6.2;
+    const rows = [{ h: 6.5, cells: SHEET_HEAD, fill: HEAD_FILL, text: { pt: 9.5, weight: 600, align: 'center' } }];
+    for (const d of row.days) {
+      const r = sheetDayRow(d);
+      const wd = K.calc.weekdayOf(d.date);
+      const marks = marksOf(d).join('・');
+      const color = wd === 0 ? '#c00' : wd === 6 ? '#05c' : '#111';
+      rows.push({
+        h: rowH,
+        cells: ['', ...r.slice(1)],
+        text: { pt: 9.5, align: 'right', pad: 2 },
+        styles: [
+          {
+            // 日付（と、遅刻などの印を小さく）
+            after: (c, x, top, w, h) => {
+              P.font(c, 9.5, 400);
+              c.textAlign = 'left';
+              c.fillStyle = color;
+              c.fillText(r[0], x + 2, top + h / 2);
+              if (marks) {
+                const dx = c.measureText(r[0]).width + 3.5;
+                P.text(c, marks, x + dx, top + h / 2, w - dx - 1, { pt: 6.5, color: '#b45309', pad: 0, minPt: 4.5 });
+              }
+            },
+          },
+        ],
+      });
+    }
+    y = P.table(ctx, PDF_X, y, cols, rows) + 4;
+    // 合計
+    const t = sheetTotals(row.total);
+    const q = PDF_W / 4;
+    y = P.table(ctx, PDF_X, y, [q, q, q, q], [
+      { h: 7, cells: TOTAL_HEAD, fill: HEAD_FILL, text: { pt: 9.5, weight: 600, align: 'center' } },
+      { h: 9.5, cells: t, text: { pt: 12, weight: 600, align: 'center' } },
+    ]);
+    P.text(ctx, sheetExtra(row.total), PDF_X, y + 4, PDF_W, { pt: 8, color: '#555', pad: 0 });
+    return canvas;
+  }
+
+  // 全体の集計表（人数が多いときは、2ページ以上に分ける）
+  function pdfOverall({ store, month, rows }) {
+    const P = K.pdf;
+    const [yy, mo] = month.split('-').map(Number);
+    const period = `${yy}年${mo}月1日 〜 ${yy}年${mo}月${monthEnd(month)}日`;
+    const rest = (PDF_W - 18 - 32) / (OVERALL_HEAD.length - 2);
+    const cols = [18, 32, ...OVERALL_HEAD.slice(2).map(() => rest)];
+    const rowH = 7;
+    const perPage = 30;
+    const pages = [];
+    const body = rows.map((r) => {
+      const info = sheetInfo(r, { store, month });
+      return [info.employeeNo, info.name, ...summaryRow(r).slice(1)];
+    });
+    const total = totalRow(rows);
+    for (let start = 0; start === 0 || start < body.length; start += perPage) {
+      const { canvas, ctx } = P.page();
+      pdfTitle(P, ctx, '勤怠集計表（全体）');
+      let y = pdfInfo(P, ctx, 22, [['店舗', store ? store.name : '', '対象期間', period]]) + 4;
+      const slice = body.slice(start, start + perPage);
+      const last = start + perPage >= body.length;
+      const tr = [{ h: 10, cells: OVERALL_HEAD.map(headLines), fill: HEAD_FILL, text: { pt: 8, weight: 600, align: 'center', pad: 0.8 } }];
+      slice.forEach((c) => tr.push({ h: rowH, cells: c, text: { pt: 8.5, align: 'right', pad: 1.2 }, styles: [{ align: 'center' }, { align: 'left' }] }));
+      if (last) tr.push({ h: rowH, cells: ['', `合計（${rows.length}人）`, ...total.slice(1)], fill: '#f7f7f5', text: { pt: 8.5, weight: 700, align: 'right', pad: 1.2 }, styles: [{}, { align: 'left' }] });
+      y = P.table(ctx, PDF_X, y, cols, tr);
+      P.text(ctx, last ? '時間は小数第1位（四捨五入）。月の合計は、分のまま足してから四捨五入しています。このあと1人1枚です。' : '次のページに続きます。', PDF_X, y + 4, PDF_W, { pt: 8, color: '#555', pad: 0 });
+      pages.push(canvas);
+    }
+    return pages;
+  }
+
+  // PDF のファイル（Blob）
+  function pdfBlob({ store, month, rows }) {
+    const pages = [...(rows.length > 1 ? pdfOverall({ store, month, rows }) : []), ...rows.map((r) => pdfSheet(r, { store, month }))];
+    return K.pdf.build(pages, { title: `勤怠集計表 ${store ? store.name : ''} ${K.requests.monthLabel(month)}` });
+  }
+  function pdfFile(args) {
+    return { name: `${fileBase(args)}.pdf`, blob: pdfBlob(args) };
+  }
+  function excelFile(args) {
+    return { name: `${fileBase(args)}.xlsx`, blob: xlsxBlob(args) };
+  }
+  // 保存する（iPhone・Android は共有メニュー：プリント・ファイルに保存・メールなど。パソコンはダウンロード）
+  function savePdf(args) {
+    return K.exporter.saveFiles([pdfFile(args)]);
   }
 
   // PDF：印刷の画面を開く（「PDFとして保存」を選ぶ）。2人以上のときは1ページ目に全体の集計表、そのあと1人1ページ（A4 縦）
@@ -872,6 +990,10 @@
     sheetTotals,
     xlsxBlob,
     saveExcel,
+    pdfBlob,
+    pdfFile,
+    excelFile,
+    savePdf,
     printSummary,
     backend: () => backend,
   };
