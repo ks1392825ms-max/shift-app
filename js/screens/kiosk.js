@@ -170,6 +170,17 @@
     s.msg = '';
     if (s.code.length === 4) {
       // 番号は、打つときにルールが確かめる。ここではボタンの画面へ進む
+      // 11/14〜 その前に、最新の打刻を読み直す（スマホで打った分を、すぐ反映するため）
+      if (!view.demo) {
+        view.busy = true;
+        view.sheet = { kind: 'act', staff: s.staff, code: s.code, msg: '', checking: true };
+        K.app.rerender();
+        await load();
+        view.busy = false;
+        if (!view.sheet || view.sheet.staff !== s.staff) return;
+        const fresh = (view.data && view.data.punches ? view.data.punches : []).filter((p) => p.staffId === s.staff.id);
+        s.staff.punches = fresh;
+      }
       view.sheet = { kind: 'act', staff: s.staff, code: s.code, msg: '' };
     }
     K.app.rerender();
@@ -371,15 +382,18 @@
     } else if (s.kind === 'act') {
       const state = A().stateOf(s.staff.punches);
       const ok = A().NEXT[state];
+      // 11/14〜 スマホで打った分は「スマホで出勤済み（9:52）」と出す
+      const last = (s.staff.punches || []).slice().sort((x, y) => String(x.at).localeCompare(String(y.at))).pop();
       panel = [
         el('h3', null, `${s.staff.name} さん`),
-        el('p', null, `いま：${A().STATE_LABELS[state]}${s.staff.plan ? '' : '（今日は予定にありません）'}`),
+        el('p', null, s.checking ? '最新の打刻を確かめています…' : `いま：${A().STATE_LABELS[state]}${s.staff.plan ? '' : '（今日は予定にありません）'}`),
+        !s.checking && last && last.source === 'phone' ? el('p', { class: 'kiosk-phone' }, `スマホで${A().TYPES[last.type]}済み（${A().timeOf(last.at)}）`) : null,
         s.msg ? el('p', { class: 'kiosk-err', role: 'alert' }, s.msg) : null,
         el(
           'div',
           { class: 'kiosk-acts' },
           [['in', '出勤'], ['out', '退勤'], ['bs', '休憩開始'], ['be', '休憩戻り']].map(([k, t]) =>
-            el('button', { type: 'button', class: `kiosk-act a-${k}`, disabled: !ok.includes(k) || view.busy, onclick: () => askConfirm(k) }, t)
+            el('button', { type: 'button', class: `kiosk-act a-${k}`, disabled: !ok.includes(k) || view.busy || s.checking, onclick: () => askConfirm(k) }, t)
           )
         ),
       ];

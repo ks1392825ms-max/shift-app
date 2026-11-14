@@ -8292,3 +8292,378 @@ body.is-kv-full .kv-back {
   background: #f4f4f2;
   font-weight: 700;
 }
+
+/* ==== スマホの打刻（GPS・11/14〜） ==== */
+.pp-card .card__title {
+  margin-bottom: 4px;
+}
+
+.pp-plan,
+.pp-last,
+.pp-note {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.pp-state {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 10px 0 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-2, #f2f2f0);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.pp-state b {
+  font-size: 1rem;
+}
+
+.pp-btns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pp-btn {
+  min-height: 52px;
+  font-size: 1rem;
+}
+
+.pp-btn--in,
+.pp-btn--out {
+  grid-column: 1 / -1;
+}
+
+.pp-msg {
+  margin: 10px 0 0;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: #eafaf0;
+  color: #15803d;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.pp-msg.is-error {
+  background: #fdecec;
+  color: #b91c1c;
+}
+
+.pp-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.pp-dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(17, 18, 20, 0.45);
+}
+
+.pp-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 92dvh;
+  overflow-y: auto;
+  padding: 20px 18px calc(env(safe-area-inset-bottom, 0px) + 22px);
+  border-radius: 22px 22px 0 0;
+  background: var(--surface, #fff);
+  color: var(--text);
+}
+
+.pp-sheet__title {
+  margin: 0 0 6px;
+  font-size: 1.35rem;
+  text-align: center;
+}
+
+.pp-sheet__time {
+  margin: 4px 0 8px;
+  font-size: 2.6rem;
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-sheet__note {
+  margin: 8px 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.pp-sheet__label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.pp-sheet__btns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.pp-loc {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 6px 0;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.pp-loc i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 20%, transparent);
+}
+
+.pp-loc.is-ok {
+  background: #eafaf0;
+  color: #15803d;
+}
+
+.pp-loc.is-ng {
+  background: #fff4e5;
+  color: #b45309;
+}
+
+.pp-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pp-reason {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pp-reason.is-on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+/* 管理者・幹部：確認待ち */
+.att-pending {
+  margin: 0 0 12px;
+  padding: 14px;
+  border: 1.5px solid #f3c27a;
+  border-radius: 16px;
+  background: #fffaf2;
+  color: #111214;
+}
+
+.att-pending h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.att-pending__n {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff1dc;
+  color: #b45309;
+  font-size: 0.78rem;
+}
+
+.att-pending__list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.att-pending__item {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid #ecdcc4;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.att-pending__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.92rem;
+}
+
+.att-pending__why {
+  margin: 6px 0 10px;
+  color: #55575c;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.att-pending__btns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* 設定 › 勤怠：お店の位置 */
+.att-geo__tag {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff1dc;
+  color: #b45309;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.att-geo__tag.is-ok {
+  background: #eafaf0;
+  color: #15803d;
+}
+
+.att-geo__radius {
+  margin: 8px 0;
+}
+
+.att-geo__check {
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #eafaf0;
+  color: #15803d;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.att-geo__check.is-ng {
+  background: #fff4e5;
+  color: #b45309;
+}
+
+/* iPad：スマホで打った分 */
+.kiosk-phone {
+  margin: 4px 0 0;
+  color: #2563eb;
+  font-weight: 700;
+}
+
+/* 打刻のカード：今は押せないボタンは薄く */
+.pp-btn:disabled {
+  opacity: 0.38;
+}
+
+/* 打刻のカード（11/14〜）：小さくまとめる（カレンダーを最初の画面に残すため） */
+.pp-card {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.pp-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.pp-head .card__title {
+  margin: 0;
+}
+
+.pp-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-2, #f2f2f0);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.pp-badge.is-in {
+  background: #eafaf0;
+  color: #15803d;
+}
+
+.pp-badge.is-br {
+  background: #fff4e5;
+  color: #b45309;
+}
+
+.pp-head .pp-last {
+  margin: 0 0 0 auto;
+  font-size: 0.76rem;
+}
+
+.pp-btns.is-1 {
+  grid-template-columns: 1fr;
+}
+
+.pp-btns .pp-btn {
+  grid-column: auto;
+  min-height: 46px;
+}
+
+/* 打刻のカード：1行（左に「打刻・今の状態」、右にボタン）。メッセージなどは下の行に */
+.pp-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.pp-card > * {
+  grid-column: 1 / -1;
+}
+
+.pp-card > .pp-head {
+  grid-column: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.pp-card > .pp-btns {
+  grid-column: 2;
+  margin-top: 0;
+}
+
+.pp-card > .pp-note,
+.pp-card > .pp-msg,
+.pp-card > .pp-plan {
+  margin-top: 2px;
+}
+
+.pp-head .pp-last {
+  margin: 0;
+}
+
+@media (max-width: 420px) {
+  .pp-head .pp-last {
+    display: none;
+  }
+
+  .pp-btns .pp-btn {
+    min-height: 44px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}

@@ -334,6 +334,7 @@
       setNeedPassword(null);
       // ログアウトしたら、この端末の簡単ログインも解除する（「この端末では使わない」の設定は残す）
       if (K.quickLock) K.quickLock.clear();
+      if (K.phonePunch) K.phonePunch.stop(); // スマホの打刻の受け取りも止める（11/14〜）
       if (K.storage.isCloud()) K.storage.detachCloud();
       // ほかの端末でメールのリンクを開いた場合は、メールアドレスの入力を待つ
       if (cloud.linkError) {

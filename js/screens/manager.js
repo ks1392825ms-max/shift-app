@@ -858,7 +858,9 @@
       return;
     }
     if (view.tab === 'self' && !view.account) view.tab = 'paid';
-    const parts = [hero(), tabs()];
+    // 11/14〜 スマホの打刻（GPS）：幹部がスタッフとしても登録されているときは、上に「打刻」のカード
+    const me = selfMember();
+    const parts = [hero(), me && K.phonePunch ? K.phonePunch.card(me) : null, tabs()];
     if (view.tab === 'paid' || view.tab === 'calendar') {
       // 担当が2店舗以上の人だけ、店舗を選ぶ。月の切り替え
       if (view.ctx.stores.length > 1) parts.push(el('div', { class: 'mgr-stores' }, storeChips()));

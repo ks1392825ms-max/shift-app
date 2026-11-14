@@ -53,7 +53,7 @@
   }
 
   function table(st, ctx) {
-    return A().monthTable({ month: st.month, staff: ctx.staffOf(st.storeId), planOf: st.plan, punches: st.data.punches, edits: st.data.edits, patterns: ctx.patternsOf ? ctx.patternsOf(st.storeId) : [] });
+    return A().monthTable({ month: st.month, staff: ctx.staffOf(st.storeId), planOf: st.plan, punches: st.data.punches, edits: st.data.edits, checks: st.data.checks || [], patterns: ctx.patternsOf ? ctx.patternsOf(st.storeId) : [] });
   }
 
   // 直せるか：管理者はいつでも。幹部は担当店舗を、締めの前まで（ほかの店舗は見る・出力だけ）
@@ -63,6 +63,55 @@
   }
   // 時間（分）→「1.5」（0 は空欄）
   const hrs = (min) => (min ? A().hours(min) : '');
+
+  // ---- スマホの例外の打刻（お店の外・位置が取れない）の確認（11/14〜） ----
+  // 管理者はいつでも、幹部は担当店舗を締めの前まで。どちらか1人が認めれば確定（ユーザー A）
+  function pendingCard(st, ctx) {
+    const list = A().pendingExceptions(st.data.punches, st.data.checks);
+    if (!list.length) return null;
+    const can = canEdit(st, ctx);
+    const nameOf = (id) => {
+      const m = ctx.staffOf(st.storeId).find((x) => x.id === id);
+      return m ? m.name : '（いない人）';
+    };
+    const decide = async (p, status, btn) => {
+      btn.disabled = true;
+      try {
+        const c = await A().decidePunch(p, status, { email: ctx.email, role: ctx.role === 'owner' ? 'owner' : 'manager' });
+        st.data.checks = (st.data.checks || []).filter((x) => x.punchId !== c.punchId).concat([c]);
+        st.msg = { ok: true, text: `${nameOf(p.staffId)}さんの${A().TYPES[p.type]}（${md(p.date)} ${A().timeOf(p.at)}）を${status === 'ok' ? '認めました' : '認めませんでした（計算に入れません）'}。` };
+      } catch (err) {
+        st.msg = { ok: false, text: `保存できませんでした（${err.message}）` };
+      }
+      K.app.rerender();
+    };
+    return el(
+      'section',
+      { class: 'att-pending' },
+      el('h3', null, '確認待ち ', el('span', { class: 'att-pending__n' }, `${list.length}件`)),
+      el('p', { class: 'att-note' }, 'スマホで、お店の範囲の外・位置が取れなかった打刻です。認めるまでは、月の表と集計表に「確認待ち」と出ます。'),
+      el(
+        'ul',
+        { class: 'att-pending__list' },
+        list.map((p) =>
+          el(
+            'li',
+            { class: 'att-pending__item' },
+            el('div', { class: 'att-pending__head' }, el('b', null, `${nameOf(p.staffId)}・${A().TYPES[p.type]}`), el('span', null, `${md(p.date)} ${A().timeOf(p.at)}`)),
+            el('p', { class: 'att-pending__why' }, `${A().REASONS[p.reason] || '理由なし'}${p.note ? `「${p.note}」` : ''}`, el('br'), p.geo && p.geo.dist != null ? `お店から約 ${p.geo.dist}m` : '位置の情報なし'),
+            can
+              ? el(
+                  'div',
+                  { class: 'att-pending__btns' },
+                  el('button', { type: 'button', class: 'btn btn--ghost', onclick: (ev) => decide(p, 'ng', ev.currentTarget) }, '認めない'),
+                  el('button', { type: 'button', class: 'btn btn--primary', onclick: (ev) => decide(p, 'ok', ev.currentTarget) }, '認める')
+                )
+              : el('p', { class: 'att-note' }, ctx.canEditStore && !ctx.canEditStore(st.storeId) ? '担当していない店舗なので、見るだけです。' : '締めたあとは、管理者だけが確認できます。')
+          )
+        )
+      )
+    );
+  }
 
   // ---- 今日 ----
   function todayView(st, ctx) {
@@ -95,6 +144,7 @@
     return el(
       'div',
       { class: 'att-today' },
+      pendingCard(st, ctx),
       el(
         'div',
         { class: 'att-counts' },

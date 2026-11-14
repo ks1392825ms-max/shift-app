@@ -1098,6 +1098,8 @@
     if (stores.length > 1 || !view.staffId) parts.push(storePicker());
     if (view.staffId) {
       const { member, store } = current();
+      // 11/14〜 スマホの打刻（GPS）：いちばん上に「打刻」のカード（お店の位置が決まっている店舗だけ打てる）
+      if (K.phonePunch) parts.push(K.phonePunch.card(member));
       parts.push(tabSwitch());
       if (view.tab === 'roster') parts.push(rosterCard(member));
       else if (view.data) parts.push(requestCard(member, store), statusCard());

@@ -21,7 +21,8 @@
   const U = K.utils;
 
   const TYPES = { in: '出勤', out: '退勤', bs: '休憩開始', be: '休憩戻り' };
-  const NEXT = { wait: ['in'], in: ['bs', 'out'], br: ['be'], out: [] };
+  // 11/14〜 休憩中にも退勤を押せる（休憩戻りの押し忘れとして、退勤の時刻で休憩も終わり。ユーザー A）
+  const NEXT = { wait: ['in'], in: ['bs', 'out'], br: ['be', 'out'], out: [] };
   const STATE_LABELS = { wait: '出勤前', in: '出勤中', br: '休憩中', out: '退勤済み' };
   const CLOSE_HOUR = 20; // 毎月最終日の20時（日本時間）に締める
   const LATE_MIN = 10; // 予定から10分すぎても出勤していなければ「未出勤」
@@ -188,6 +189,7 @@
     let outs = [];
     let openBreak = '';
     let edited = false;
+    let dup = false;
     const pairs = (list) => (Array.isArray(list) ? list : []).filter((b) => b && b.s && b.e).map((b) => ({ s: b.s, e: b.e }));
     if (edit) {
       inT = edit.in || '';
@@ -197,6 +199,8 @@
       edited = true;
     } else {
       const sorted = (punches || []).slice().sort((a, b) => atOf(a) - atOf(b));
+      // 同じ種類が続けて2回（iPad とスマホでほぼ同時に押したなど）：最初の分を使い、印をつける（11/14〜）
+      dup = sorted.some((p, i) => i > 0 && p.type === sorted[i - 1].type);
       const first = sorted.find((p) => p.type === 'in') || sorted[0];
       const base = date || (first && first.date) || '';
       const t = (p) => {
@@ -205,8 +209,16 @@
       };
       for (const p of sorted) {
         if (p.type === 'in' && !inT) inT = t(p);
-        else if (p.type === 'out') outT = t(p);
-        else if (p.type === 'bs') openBreak = t(p);
+        else if (p.type === 'in') continue;
+        else if (p.type === 'out') {
+          outT = t(p);
+          // 休憩中の退勤：退勤の時刻で休憩も終わり（11/14〜）
+          if (openBreak) {
+            breaks.push({ s: openBreak, e: outT });
+            openBreak = '';
+          }
+        }
+        else if (p.type === 'bs' && !openBreak) openBreak = t(p);
         else if (p.type === 'be' && openBreak) {
           breaks.push({ s: openBreak, e: t(p) });
           openBreak = '';
@@ -222,7 +234,9 @@
     // 休憩の決まり：6時間をこえる日は45分以上、8時間をこえる日は60分以上
     const short = workMin != null && ((workMin > 480 && breakMin < 60) || (workMin > 360 && breakMin < 45));
     const missingOut = Boolean(inT) && !outT && Boolean(today && date && date < today);
-    return { in: inT, out: outT, breaks, outs, openBreak, edited, breakMin, outMin, workMin, short, missingOut };
+    // スマホの例外の打刻（お店の外・位置が取れない）で、まだ認められていないもの（11/14〜）
+    const pending = !edited && (punches || []).some((p) => p && p.pending);
+    return { in: inT, out: outT, breaks, outs, openBreak, edited, breakMin, outMin, workMin, short, missingOut, dup: !edited && dup, pending };
   }
 
   // 予定から10分すぎても出勤していないか（予定：{ kind: 'work', start: '09:00' }）
@@ -298,7 +312,7 @@
 
   // 1人分の月の集計（日ごとの記録から数える。同じ日は1回だけ）
   function summarize(days) {
-    const r = { workDays: 0, workMin: 0, breakMin: 0, outMin: 0, overMin: 0, shortDays: 0, missingOut: 0, edited: 0, paidDays: 0, late: 0, leftEarly: 0, cameEarly: 0 };
+    const r = { workDays: 0, workMin: 0, breakMin: 0, outMin: 0, overMin: 0, shortDays: 0, missingOut: 0, edited: 0, paidDays: 0, late: 0, leftEarly: 0, cameEarly: 0, pending: 0 };
     for (const d of days) {
       if (d.plan && d.plan.kind === 'paid') r.paidDays += 1;
       if (d.in) r.workDays += 1;
@@ -312,15 +326,16 @@
       if (d.late) r.late += 1;
       if (d.leftEarly) r.leftEarly += 1;
       if (d.cameEarly) r.cameEarly += 1;
+      if (d.pending) r.pending += 1;
     }
     return r;
   }
 
   // 店舗・月の表：staff（[{ id, name, … }]）・planOf(staffId, date)・データ（打刻・直したもの）・勤務パターンの休憩から、1人ずつ日ごとの行と集計を作る
   // 打刻は、前の月の最終日・次の月の1日の分も渡してよい（日をまたぐ勤務を正しく分けるため。表に出すのはその月の日だけ）
-  function monthTable({ month, staff, planOf, punches, edits, patterns }) {
+  function monthTable({ month, staff, planOf, punches, edits, patterns, checks }) {
     const today = nowJst().date;
-    const byKey = assignPunches(punches);
+    const byKey = assignPunches(withChecks(punches, checks));
     const editOf = new Map((edits || []).map((e) => [`${e.staffId}|${e.date}`, e]));
     return staff.map((m) => {
       const days = K.calc.monthDates(month).map((date) => {
@@ -384,6 +399,84 @@
       throw err;
     }
     return { id, ...data };
+  }
+
+  // ---- スマホの打刻（GPS・11/14〜） ----
+  // 例外（お店の外・位置が取れない）の理由
+  const REASONS = { direct: '外出先から直行', home: '外出先から直帰', nogps: '位置が取れない', other: 'そのほか' };
+  const RADII = [20, 50, 100, 200];
+
+  // 2点の距離（m）
+  function distanceM(a, b) {
+    const R = 6371000;
+    const rad = (x) => (x * Math.PI) / 180;
+    const dLat = rad(b.lat - a.lat);
+    const dLng = rad(b.lng - a.lng);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+    return Math.round(2 * R * Math.asin(Math.sqrt(h)));
+  }
+  // お店の位置（{ lat, lng, radius }）と、スマホの位置（{ lat, lng, acc }。取れないときは null）→ { ok, dist, acc }
+  // 細かい緯度・経度は返さない（保存しない）
+  function judgeGeo(store, pos) {
+    if (!store || !pos || !Number.isFinite(pos.lat) || !Number.isFinite(pos.lng)) return { ok: false, dist: null, acc: pos && Number.isFinite(pos.acc) ? Math.round(pos.acc) : null };
+    const dist = distanceM(store, pos);
+    return { ok: dist <= store.radius, dist, acc: Number.isFinite(pos.acc) ? Math.round(pos.acc) : null };
+  }
+  // 例外の打刻か（認める・認めないが必要）
+  function isException(p) {
+    return Boolean(p && p.source === 'phone' && p.geo && p.geo.ok === false);
+  }
+  // 確認（punchChecks）を打刻に重ねる：認めない → 計算から外す・まだ → pending の印
+  function withChecks(punches, checks) {
+    const byId = new Map((checks || []).map((c) => [c.punchId, c]));
+    const out = [];
+    for (const p of punches || []) {
+      if (!isException(p)) {
+        out.push(p);
+        continue;
+      }
+      const c = byId.get(punchIdOf(p));
+      if (c && c.status === 'ng') continue;
+      out.push(c && c.status === 'ok' ? p : { ...p, pending: true });
+    }
+    return out;
+  }
+  function punchIdOf(p) {
+    return p.id || `${p.staffId}_${p.date}_${p.atMs}`;
+  }
+  // まだ確認していない例外の打刻（新しい順）
+  function pendingExceptions(punches, checks) {
+    const done = new Set((checks || []).map((c) => c.punchId));
+    return (punches || []).filter((p) => isException(p) && !done.has(punchIdOf(p))).sort((a, b) => atOf(b) - atOf(a));
+  }
+
+  // スタッフがスマホで打つ（番号はいらない。ログインで本人と分かる）
+  // geo：judgeGeo の結果。範囲の外・位置が取れないときは reason（REASONS のキー）が必要
+  async function punchPhone({ staffId, storeId, type, email, current, geo, reason, note }) {
+    if (!TYPES[type]) throw new Error('打刻の種類が正しくありません。');
+    const d = clock();
+    const { date, month } = nowJst(d);
+    if (isClosed(month, d)) throw new Error(`${Number(month.slice(5))}月の勤怠は締めました。管理者に伝えてください。`);
+    const state = stateOf(current);
+    if (!NEXT[state].includes(type)) throw new Error(`今は「${STATE_LABELS[state]}」なので、${TYPES[type]}は押せません。`);
+    const g = { ok: Boolean(geo && geo.ok), dist: geo && Number.isInteger(geo.dist) ? geo.dist : null, acc: geo && Number.isInteger(geo.acc) ? geo.acc : null };
+    if (!g.ok && !REASONS[reason]) throw new Error('お店の範囲の外です。理由を選んでください。');
+    const id = punchId(staffId, date, d);
+    const data = { staffId, storeId, date, month, type, at: d.toISOString(), atMs: d.getTime(), by: String(email || '').toLowerCase(), source: 'phone', geo: g };
+    if (!g.ok) data.reason = reason;
+    const memo = String(note || '').trim().slice(0, 100);
+    if (!g.ok && memo) data.note = memo;
+    await requireBackend().addPhonePunch({ id, data });
+    return { id, ...data };
+  }
+
+  // 管理者・幹部：例外の打刻を認める（ok）・認めない（ng）
+  async function decidePunch(p, status, { email, role }) {
+    if (!['ok', 'ng'].includes(status)) throw new Error('選び方が正しくありません。');
+    const id = punchIdOf(p);
+    const data = { punchId: id, staffId: p.staffId, storeId: p.storeId, date: p.date, month: p.month || String(p.date).slice(0, 7), status, by: String(email || '').toLowerCase(), role, at: clock().toISOString() };
+    await requireBackend().savePunchCheck({ id, data });
+    return data;
   }
 
   // ---- 直す（管理者・幹部） ----
@@ -494,7 +587,7 @@
   function hours(min) {
     return (Math.round((min || 0) / 6) / 10).toFixed(1);
   }
-  const MARKS = [['late', '遅刻'], ['leftEarly', '早退'], ['cameEarly', '早出'], ['paid', '有給'], ['short', '休憩不足'], ['missingOut', '退勤なし'], ['edited', '修正']];
+  const MARKS = [['late', '遅刻'], ['leftEarly', '早退'], ['cameEarly', '早出'], ['paid', '有給'], ['short', '休憩不足'], ['missingOut', '退勤なし'], ['pending', '確認待ち'], ['dup', '重複'], ['edited', '修正']];
   function marksOf(d) {
     return MARKS.filter(([k]) => d[k]).map(([, t]) => t);
   }
@@ -730,6 +823,16 @@
     planWorkMin,
     legalBreak,
     marksOf,
+    REASONS,
+    RADII,
+    distanceM,
+    judgeGeo,
+    isException,
+    withChecks,
+    punchIdOf,
+    pendingExceptions,
+    punchPhone,
+    decidePunch,
     sheetPage,
     overallPage,
     OVERALL_HEAD,

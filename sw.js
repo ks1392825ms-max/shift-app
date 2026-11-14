@@ -5,7 +5,7 @@
 // シフトや設定のデータはここでは扱わない（端末だけのモードは localStorage、共有モードは Firebase が扱う）。
 // 同じ場所（このアプリ）のファイルだけを扱い、Firebase との通信には関わらない。
 
-const CACHE = 'shift-app-v44';
+const CACHE = 'shift-app-v45';
 
 // 最初に保存しておくファイル（アプリのファイルを増やしたら、ここにも追加する）
 const APP_FILES = [
@@ -61,6 +61,7 @@ const APP_FILES = [
   'js/screens/requests-admin.js',
   'js/screens/attendance.js',
   'js/screens/kiosk.js',
+  'js/screens/phone-punch.js',
   'js/screens/manager.js',
   'js/app.js',
 ];

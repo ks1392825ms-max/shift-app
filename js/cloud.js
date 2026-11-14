@@ -26,6 +26,7 @@
 //   setAttendancePin / loadPinStatus / deleteAttendancePin                                 勤怠の番号（PIN）
 //   loadAttendance / saveAttendanceEdit / loadAttendanceSettings / saveAttendanceSettings   勤怠の表・修正・集計表のパスワード
 //   loadAttendanceDirectory / saveAttendanceDirectory                                     集計表用の名簿（11/12〜）
+//   addPhonePunch / watchMyPunches / savePunchCheck / loadStoreGeo / loadStoreGeos / saveStoreGeo   スマホの打刻（GPS・11/14〜）
 //   loadKiosks / saveKiosk / saveKioskDirectory                                             勤怠用 iPad の登録（管理者）
 //   subscribe(onData, onError)  共有データを受け取り続ける（変わるたびに onData）。戻り値で止められる
 //   write(changes)              記録をまとめて保存する：[{ collection, id, data }]
@@ -693,8 +694,67 @@
     const [y, m] = month.split('-').map(Number);
     const prevLast = new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10);
     const nextFirst = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
-    const [punches, edits, logs, before, after] = await Promise.all([read('punches'), read('punchEdits'), read('attendanceLogs'), onDay(prevLast), onDay(nextFirst)]);
-    return { punches: [...before, ...punches, ...after], edits, logs };
+    const [punches, edits, logs, before, after, checks] = await Promise.all([read('punches'), read('punchEdits'), read('attendanceLogs'), onDay(prevLast), onDay(nextFirst), read('punchChecks')]);
+    return { punches: [...before, ...punches, ...after], edits, logs, checks };
+  }
+
+  // ---- スマホの打刻（GPS・11/14〜） ----
+  // スタッフ本人が、自分の分を出す（番号はいらない）
+  async function addPhonePunch({ id, data }) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, 'punches', id), data);
+  }
+
+  // スタッフ本人の、今日と前の日の打刻と、その確認を受け取り続ける（iPad で打った分も、すぐ反映）。戻り値で止められる
+  async function watchMyPunches(staffId, dates, onData, onError) {
+    const { fsMod, db } = await load();
+    const state = { punches: new Map(), checks: [] };
+    const emit = () => onData({ punches: [...state.punches.values()].flat(), checks: state.checks });
+    const stops = dates.map((date) =>
+      fsMod.onSnapshot(
+        fsMod.query(fsMod.collection(db, 'punches'), fsMod.where('staffId', '==', staffId), fsMod.where('date', '==', date)),
+        (snap) => {
+          state.punches.set(date, snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+          emit();
+        },
+        onError
+      )
+    );
+    stops.push(
+      fsMod.onSnapshot(
+        fsMod.query(fsMod.collection(db, 'punchChecks'), fsMod.where('staffId', '==', staffId), fsMod.where('date', 'in', dates)),
+        (snap) => {
+          state.checks = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          emit();
+        },
+        onError
+      )
+    );
+    return () => stops.forEach((f) => f());
+  }
+
+  // 管理者・幹部：例外の打刻を認める・認めない
+  async function savePunchCheck({ id, data }) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, 'punchChecks', id), data);
+  }
+
+  // お店の位置：1店舗（スタッフ・幹部・管理者）／全部（管理者）／決める（管理者）
+  async function loadStoreGeo(storeId) {
+    const { fsMod, db } = await load();
+    const snap = await fsMod.getDoc(fsMod.doc(db, 'storeGeo', storeId));
+    return snap.exists() ? snap.data() : null;
+  }
+
+  async function loadStoreGeos() {
+    const { fsMod, db } = await load();
+    const snap = await fsMod.getDocs(fsMod.collection(db, 'storeGeo'));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
+
+  async function saveStoreGeo(storeId, data) {
+    const { fsMod, db } = await load();
+    await fsMod.setDoc(fsMod.doc(db, 'storeGeo', storeId), data);
   }
 
   // 集計表用の名簿（11/12〜）：店舗ごとの名前・従業員番号・氏名・職種・勤務パターンの休憩・有給の日。管理者が作り、管理者と幹部が読む
@@ -902,6 +962,12 @@
     sendStaffLoginLink,
     sendPasswordReset,
     inviteStaff,
+    addPhonePunch,
+    watchMyPunches,
+    savePunchCheck,
+    loadStoreGeo,
+    loadStoreGeos,
+    saveStoreGeo,
     mailError, // テスト用（エラーの文）
     completeLogin,
     clearLoginLink,

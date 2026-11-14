@@ -301,6 +301,69 @@ service cloud.firestore {
         && attendanceOpen(d.month)
         && existsAfter(/databases/$(database)/documents/punchProofs/$(id));
     }
+    // 11/14〜 スマホの打刻（GPS）：スタッフ本人が、自分の分を、今日の日付・今の時刻で出す（番号はいらない。ログインで本人と分かる）
+    //   geo：{ ok: お店の範囲内か, dist: お店からの距離（m・取れないときは null）, acc: 位置のずれ（m・null） }。細かい緯度・経度は残さない
+    //   範囲の外・位置が取れないときは、理由（reason）が必要。管理者か担当の幹部が punchChecks で認める
+    //   （位置はスマホが調べた値なので、偽装は完全には防げない。利用者に説明済み）
+    function geoOk(g) {
+      return g is map
+        && g.keys().hasOnly(['ok', 'dist', 'acc'])
+        && g.keys().hasAll(['ok', 'dist', 'acc'])
+        && g.ok is bool
+        && (g.dist == null || (g.dist is int && g.dist >= 0 && g.dist <= 20000000))
+        && (g.acc == null || (g.acc is int && g.acc >= 0 && g.acc <= 100000));
+    }
+    function phonePunchOk(id, d) {
+      return isStaff()
+        && d.keys().hasOnly(['staffId', 'storeId', 'date', 'month', 'type', 'at', 'atMs', 'by', 'source', 'geo', 'reason', 'note'])
+        && d.keys().hasAll(['staffId', 'storeId', 'date', 'month', 'type', 'at', 'atMs', 'by', 'source', 'geo'])
+        && ownsStaff(d.staffId)
+        && staffInStore(d.staffId, d.storeId)
+        && d.type in ['in', 'out', 'bs', 'be']
+        && d.date == jstToday()
+        && d.month == d.date[0:7]
+        && d.atMs is int
+        && d.atMs > request.time.toMillis() - 300000
+        && d.atMs < request.time.toMillis() + 300000
+        && d.at is string
+        && d.by == myEmail()
+        && d.source == 'phone'
+        && id == d.staffId + '_' + d.date + '_' + string(d.atMs)
+        && attendanceOpen(d.month)
+        && geoOk(d.geo)
+        && (d.geo.ok || d.get('reason', '') in ['direct', 'home', 'nogps', 'other'])
+        && (!('reason' in d) || d.reason in ['direct', 'home', 'nogps', 'other'])
+        && (!('note' in d) || (d.note is string && d.note.size() <= 100));
+    }
+    // 例外の打刻を認める・認めない（11/14〜）：管理者はいつでも、幹部は担当店舗を締めの前まで。打刻と同じ人・店舗・日
+    function punchCheckOk(id, d) {
+      return (isAdmin() || (manages(d.storeId) && attendanceOpen(d.month)))
+        && d.keys().hasOnly(['punchId', 'staffId', 'storeId', 'date', 'month', 'status', 'by', 'role', 'at'])
+        && d.keys().hasAll(['punchId', 'staffId', 'storeId', 'date', 'month', 'status', 'by', 'role', 'at'])
+        && id == d.punchId
+        && d.status in ['ok', 'ng']
+        && ((isAdmin() && d.role == 'owner') || (!isAdmin() && d.role == 'manager'))
+        && d.by == myEmail()
+        && isNowIso(d.at)
+        && exists(/databases/$(database)/documents/punches/$(id))
+        && get(/databases/$(database)/documents/punches/$(id)).data.staffId == d.staffId
+        && get(/databases/$(database)/documents/punches/$(id)).data.storeId == d.storeId
+        && get(/databases/$(database)/documents/punches/$(id)).data.date == d.date
+        && d.month == d.date[0:7];
+    }
+    // お店の位置（11/14〜）：管理者がお店の中で決める。範囲は 20・50・100・200m
+    function storeGeoOk(storeId, d) {
+      return isAdmin()
+        && d.keys().hasOnly(['storeId', 'lat', 'lng', 'radius', 'acc', 'setAt', 'setBy'])
+        && d.keys().hasAll(['storeId', 'lat', 'lng', 'radius', 'acc', 'setAt', 'setBy'])
+        && d.storeId == storeId
+        && d.lat is number && d.lat >= -90 && d.lat <= 90
+        && d.lng is number && d.lng >= -180 && d.lng <= 180
+        && d.radius in [20, 50, 100, 200]
+        && (d.acc == null || (d.acc is int && d.acc >= 0 && d.acc <= 100000))
+        && isNowIso(d.setAt)
+        && d.setBy == myEmail();
+    }
     // 直した1日分：管理者はいつでも、幹部は担当店舗を締めの前まで
     function editOk(id, d) {
       return (isAdmin() || (manages(d.storeId) && attendanceOpen(d.month) && (resource == null || manages(resource.data.storeId))))
@@ -314,7 +377,7 @@ service cloud.firestore {
         && (!('outs' in d) || (d.outs is list && d.outs.size() <= 6))
         && d.reason is string && d.reason.size() > 0 && d.reason.size() <= 50
         && d.by == myEmail()
-        && d.role == (isAdmin() ? 'owner' : 'manager')
+        && ((isAdmin() && d.role == 'owner') || (!isAdmin() && d.role == 'manager'))
         && isNowIso(d.at)
         && staffInStore(d.staffId, d.storeId)
         && getAfter(/databases/$(database)/documents/attendanceLogs/$(d.logId)).data.targetId == id;
@@ -718,10 +781,24 @@ service cloud.firestore {
     }
     // 打刻：iPad が今日の分を出すだけ（追加するだけ。直すのは punchEdits）。iPad は自分の店舗の今日と前の日の分だけ読む
     // 11/12〜 幹部は3店舗とも読める（見る・出力だけ。直せるのは担当店舗だけ）
+    // 11/14〜 スタッフはスマホから自分の分を出せる（phonePunchOk）・自分の今日と前の日の分だけ読める（今の状態を出すため）
     match /punches/{id} {
-      allow read: if isAdmin() || isManager() || (isKioskOf(resource.data.storeId) && (resource.data.date == jstToday() || resource.data.date == jstYesterday()));
-      allow create: if punchOk(id, request.resource.data);
+      allow read: if isAdmin() || isManager() || (isKioskOf(resource.data.storeId) && (resource.data.date == jstToday() || resource.data.date == jstYesterday()))
+        || (ownsStaff(resource.data.staffId) && (resource.data.date == jstToday() || resource.data.date == jstYesterday()));
+      allow create: if punchOk(id, request.resource.data) || phonePunchOk(id, request.resource.data);
       allow update, delete: if false;
+    }
+    // 例外の打刻の確認（11/14〜）：管理者・幹部が読む。スタッフは自分の分だけ読める（確認待ち・認めた・認めないを出すため）
+    match /punchChecks/{id} {
+      allow read: if isAdmin() || isManager() || ownsStaff(resource.data.staffId);
+      allow create, update: if punchCheckOk(id, request.resource.data);
+      allow delete: if isAdmin();
+    }
+    // お店の位置（11/14〜）：管理者が書く。管理者・幹部と、その店舗のスタッフが読む（スマホでお店からの距離を出すため）
+    match /storeGeo/{storeId} {
+      allow read: if isAdmin() || isManager() || inMyStore(storeId);
+      allow create, update: if storeGeoOk(storeId, request.resource.data);
+      allow delete: if isAdmin();
     }
     // 直した1日分（打刻より優先）：修正の記録と一緒にだけ。元に戻す（消す）のは管理者だけ
     match /punchEdits/{id} {
@@ -745,7 +822,8 @@ service cloud.firestore {
     match /{collection}/{id} {
       allow read, write: if isAdmin()
         && !(collection in ['access', 'managers', 'wishRequests', 'paidRequests', 'changeRequests', 'decisionLogs', 'businessDays',
-          'kiosks', 'kioskDirectory', 'attendanceDirectory', 'attendancePins', 'punchProofs', 'punches', 'punchEdits', 'attendanceLogs']);
+          'kiosks', 'kioskDirectory', 'attendanceDirectory', 'attendancePins', 'punchProofs', 'punches', 'punchEdits', 'attendanceLogs',
+          'punchChecks', 'storeGeo']);
     }
   }
 }

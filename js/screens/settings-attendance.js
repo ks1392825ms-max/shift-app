@@ -2,6 +2,7 @@
 // ・勤怠用 iPad のアカウント（店舗ごと）を登録・解除する（kiosks/{メール}）
 // ・集計表のパスワードを決める（settings/attendance。元に戻せない形だけを保存）
 // ・スタッフの勤怠の番号（PIN）：決めたかどうかを見る・管理者が決める・消す（決め直してもらう）
+// ・11/14〜 スマホの打刻（GPS）：店舗ごとに、お店の位置（お店の中で「今いる場所」）と範囲（20・50・100・200m）を決める（storeGeo/{店舗}）
 (function () {
   'use strict';
   const K = window.ShiftApp;
@@ -21,10 +22,15 @@
   }
 
   async function load() {
-    st = { loading: true, kiosks: [], pins: [], settings: {}, msg: null };
+    st = { loading: true, kiosks: [], pins: [], settings: {}, msg: null, geos: [], radius: {}, check: {} };
     try {
-      const [kiosks, pins, settings] = await Promise.all([backend().loadKiosks(), backend().loadPinStatus(), backend().loadAttendanceSettings()]);
-      Object.assign(st, { kiosks, pins, settings: settings || {}, loading: false });
+      const [kiosks, pins, settings, geos] = await Promise.all([
+        backend().loadKiosks(),
+        backend().loadPinStatus(),
+        backend().loadAttendanceSettings(),
+        backend().loadStoreGeos ? backend().loadStoreGeos() : Promise.resolve([]),
+      ]);
+      Object.assign(st, { kiosks, pins, settings: settings || {}, geos: geos || [], loading: false });
     } catch (err) {
       Object.assign(st, { loading: false, msg: { ok: false, text: `読み込めませんでした（${err.message}）` } });
     }
@@ -229,6 +235,107 @@
     );
   }
 
+  // ---- スマホの打刻（GPS・11/14〜）：お店の位置と範囲 ----
+  function locate() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) return resolve(null);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy }),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+  }
+
+  async function saveGeo(storeId, base, radius) {
+    const data = { storeId, lat: base.lat, lng: base.lng, radius, acc: Number.isFinite(base.acc) ? Math.round(base.acc) : null, setAt: A().now().toISOString(), setBy: email() };
+    await backend().saveStoreGeo(storeId, data);
+    st.geos = st.geos.filter((g) => g.storeId !== storeId).concat([data]);
+    return data;
+  }
+
+  async function setHere(store) {
+    st.check[store.id] = { busy: true };
+    K.app.rerender();
+    const pos = await locate();
+    st.check[store.id] = null;
+    if (!pos) return say(false, '位置が取れませんでした。スマホの設定で、位置情報（Safari・ブラウザ）を許可してから、もう一度押してください。');
+    const radius = st.radius[store.id] || (geoOf(store.id) || {}).radius || 50;
+    if (!window.confirm(`今いる場所を「${store.name}」の位置にしますか？\n位置のずれ：±${Math.round(pos.acc)}m　範囲：${radius}m\n（お店の中で押してください）`)) return K.app.rerender();
+    try {
+      await saveGeo(store.id, pos, radius);
+      say(true, `「${store.name}」の位置を決めました（ずれ ±${Math.round(pos.acc)}m・範囲 ${radius}m）。`);
+    } catch (err) {
+      say(false, `保存できませんでした（${err.message}）`);
+    }
+  }
+
+  async function setRadius(store, radius) {
+    st.radius[store.id] = radius;
+    const g = geoOf(store.id);
+    if (!g) return K.app.rerender();
+    try {
+      await saveGeo(store.id, g, radius);
+      say(true, `「${store.name}」の範囲を ${radius}m にしました。`);
+    } catch (err) {
+      say(false, `保存できませんでした（${err.message}）`);
+    }
+  }
+
+  async function checkHere(store) {
+    st.check[store.id] = { busy: true };
+    K.app.rerender();
+    const pos = await locate();
+    const g = geoOf(store.id);
+    st.check[store.id] = pos ? { acc: Math.round(pos.acc), dist: g ? A().distanceM(g, pos) : null } : { none: true };
+    K.app.rerender();
+  }
+
+  function geoOf(storeId) {
+    return st.geos.find((g) => g.storeId === storeId) || null;
+  }
+
+  function geoCard() {
+    if (!backend().saveStoreGeo) return null;
+    const stores = K.storage.getStores();
+    const stamp = (iso) => {
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? '' : `${d.getMonth() + 1}/${d.getDate()} ${A().timeOf(iso)}`;
+    };
+    return el(
+      'section',
+      { class: 'card' },
+      el('h2', { class: 'card__title' }, 'スマホの打刻（GPS）'),
+      el('p', { class: 'hint hint--left' }, '店舗ごとに、お店の位置と範囲を決めます。お店の中で「今いる場所をお店の位置にする」を押してください（地図のサービスは使いません）。位置が決まった店舗のスタッフは、スマホからも打刻できます。'),
+      stores.map((s) => {
+        const g = geoOf(s.id);
+        const radius = st.radius[s.id] || (g && g.radius) || 50;
+        const c = st.check[s.id];
+        return el(
+          'div',
+          { class: 'att-set-store att-geo' },
+          el('p', { class: 'att-set-store__name' }, s.name, el('span', { class: `att-geo__tag${g ? ' is-ok' : ''}` }, g ? '決めた' : 'まだ')),
+          g ? el('p', { class: 'hint hint--left' }, `位置：${stamp(g.setAt)} に決めた${g.acc != null ? `（そのときのずれ ±${g.acc}m）` : ''}　範囲：${g.radius}m`) : el('p', { class: 'hint hint--left' }, 'お店の中で、下のボタンを押してください。'),
+          el(
+            'div',
+            { class: 'segment att-geo__radius', role: 'group', 'aria-label': `${s.name}の範囲` },
+            A().RADII.map((r) => el('button', { type: 'button', class: `segment__btn${radius === r ? ' is-selected' : ''}`, 'aria-pressed': String(radius === r), onclick: () => setRadius(s, r) }, `${r}m`))
+          ),
+          c && !c.busy
+            ? el('p', { class: `att-geo__check${c.none ? ' is-ng' : ''}`, role: 'status' }, c.none ? '位置が取れませんでした。' : `今の位置のずれ：±${c.acc}m${c.dist != null ? `　お店から ${c.dist}m（${c.dist <= radius ? '範囲内' : '範囲の外'}）` : ''}`)
+            : null,
+          el(
+            'div',
+            { class: 'actions actions--tight' },
+            el('button', { type: 'button', class: `btn ${g ? 'btn--ghost' : 'btn--primary'} btn--small`, disabled: Boolean(c && c.busy), onclick: () => setHere(s) }, c && c.busy ? '位置を確かめています…' : '今いる場所をお店の位置にする'),
+            el('button', { type: 'button', class: 'btn btn--ghost btn--small', disabled: Boolean(c && c.busy), onclick: () => checkHere(s) }, '今の位置のずれを確かめる')
+          )
+        );
+      }),
+      el('p', { class: 'hint hint--left' }, '建物の中ではスマホの位置が 10〜50m ずれることがあります。20m で「範囲の外」が多いときは 50m に変えてください（いつでも変えられます）。位置は、打刻のときに1回だけ確かめます。保存するのは「範囲内か」「お店からの距離」「ずれ」だけです。')
+    );
+  }
+
   function render(container) {
     if (!K.storage.isCloud() || !A() || !backend()) {
       container.append(el('section', { class: 'card' }, el('h2', { class: 'card__title' }, '勤怠'), el('p', { class: 'hint hint--left' }, '勤怠は共有モード（ログインして使うとき）で使えます。')));
@@ -246,6 +353,7 @@
     container.append(
       st.msg ? el('p', { class: st.msg.ok ? 'sync__result' : 'form-error', role: 'status' }, st.msg.text) : '',
       kioskCard(),
+      geoCard(),
       summaryCard(),
       pinCard()
     );
