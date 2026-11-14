@@ -103,6 +103,15 @@
                   const staffMail = K.storage.getStaff({ includeInactive: true }).some((m) => String(m.email || '').toLowerCase() === v);
                   if (v === email() || staffMail) return say(false, 'スタッフ・管理者のログインのメールとは別のアドレスにしてください。');
                   try {
+                    // 11/14〜 1つのアドレスは1つの店舗の iPad（kiosks/{メール}）。同じアドレスで別の店舗を登録すると、前の店舗の登録が上書きされるので止める
+                    //   （ほかの端末で登録した分もあるので、保存の直前に読み直して確かめる。解除済みのアドレスは、登録し直せる）
+                    const now = (await backend().loadKiosks()).find((k) => String(k.email).toLowerCase() === v && !k.deleted);
+                    if (now && now.storeId === s.id) return say(false, `${v} は、すでに${s.name}の勤怠用 iPad として登録されています。`);
+                    if (now) {
+                      const other = stores.find((x) => x.id === now.storeId);
+                      const [local, dom] = v.split('@');
+                      return say(false, `${v} は、すでに${other ? other.name : 'ほかの店舗'}の勤怠用 iPad として登録されています。1つのアドレスは1つの店舗にしか使えません。店舗ごとに別のアドレスにしてください（例：${local.replace(/\+.*$/, '')}+tenpo2@${dom}）。`);
+                    }
                     await backend().saveKiosk(v, { storeId: s.id, deleted: false, createdAt: new Date().toISOString(), createdBy: email() });
                     await K.attendanceView.syncDirectories();
                     st.kiosks = st.kiosks.filter((k) => k.email !== v).concat({ email: v, storeId: s.id, deleted: false });
