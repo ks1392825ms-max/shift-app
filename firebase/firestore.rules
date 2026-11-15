@@ -6,13 +6,13 @@
 //   オーナー：「データ」タブで access/admins の emails（array）に、メールアドレスをすべて小文字で入れる（今までどおり）。
 //   幹部：「データ」タブで、コレクション「managers」に、ドキュメント名＝メールアドレス（小文字）で作り、
 //         フィールド storeIds（array・担当店舗のID）と deleted（boolean・false）を入れる。
-//   （オーナーと幹部の登録は、管理画面からだけ変えられる。アプリからは誰も変えられない）
+//   （オーナーの登録は、管理画面からだけ変えられる。幹部の登録は、11/15〜 オーナーがアプリの「設定 > スタッフ」でも変えられる）
 //   スタッフ：オーナーがアプリの「設定 > スタッフ」でログイン用のメールを入れると、アプリが staffAccounts/{メール} を作る。
 //
 // まとめ：
 //   ・未ログインの人：何も読めず、何も書けない。
 //   ・オーナー：すべてのデータを読み書きできる。ただし、申請の判断は履歴（decisionLogs）と一緒にだけ変えられ、
-//       履歴は書き換え・削除できない。access と managers は読むだけ。
+//       履歴は書き換え・削除できない。access は読むだけ。managers は決まった形でだけ書ける（消せない）。
 //   ・幹部：担当店舗の希望休・有給・スタッフ記録・判断の履歴と、担当店舗の確定シフトの写しを読める。
 //       担当店舗の申請を、受付期間（日本時間の毎月25日〜月末、翌月分）だけ、承認・却下・申請中に戻すことができる。
 //       自分（スタッフとしての自分）の申請・ほかの幹部やオーナーが判断したものは変えられない。却下は理由（50文字以内）が必須。
@@ -389,10 +389,27 @@ service cloud.firestore {
       allow read: if isAdmin();
       allow write: if false;
     }
-    // 幹部の名簿：本人が自分の分を読むだけ（書き換えは管理画面からだけ）
+    // 幹部の名簿：本人が自分の分を読むだけ。書き換えはオーナーだけ（11/15〜 アプリの「設定 > スタッフ」の幹部の欄）。
+    // 決まった項目・形のときだけ書ける。消すことはできない（外すときは deleted: true）
+    function validManager(email, d) {
+      return email == email.lower()
+        && email.size() <= 254
+        && email.matches('^[^\\s@/]+@[^\\s@/]+[.][^\\s@/]+$')
+        && d.keys().hasAll(['storeIds', 'deleted'])
+        && d.keys().hasOnly(['id', 'email', 'storeIds', 'deleted', 'name', 'staffId', 'createdAt', 'updatedAt'])
+        && d.storeIds is list && d.storeIds.size() <= 20
+        && d.deleted is bool
+        && (!('id' in d) || d.id == email)
+        && (!('email' in d) || d.email == email)
+        && (!('name' in d) || (d.name is string && d.name.size() <= 30))
+        && (!('staffId' in d) || d.staffId == null || (d.staffId is string && d.staffId.size() <= 200))
+        && (!('createdAt' in d) || (d.createdAt is string && d.createdAt.size() <= 40))
+        && (!('updatedAt' in d) || (d.updatedAt is string && d.updatedAt.size() <= 40));
+    }
     match /managers/{email} {
       allow read: if isAdmin() || (signedIn() && email == myEmail());
-      allow write: if false;
+      allow create, update: if isAdmin() && validManager(email, request.resource.data);
+      allow delete: if false;
     }
     // スタッフのログイン用メールの対応表：本人は自分の分だけ読める。作るのはオーナー（アプリ）だけ
     match /staffAccounts/{email} {

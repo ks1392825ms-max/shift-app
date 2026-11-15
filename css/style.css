@@ -7986,9 +7986,9 @@ body.is-kv-full .kv-back {
 .att-viewonly { margin-left: 4px; font-size: 10px; opacity: 0.7; }
 .att-out-who { margin-top: 12px; }
 
-/* ---- 起動のアニメーション（11/13〜 js/splash.js）：ロゴのマス → SHIFT → RENASCOR. → 名札の線 → 画面が上へ抜ける ---- */
+/* ---- 起動のアニメーション（11/13〜・11/15 作り直し js/splash.js）：パスコード・顔認証で解除した直後だけ。約4.7秒 ----
+   ロゴのマスが浮かぶ → 灰色のマスが横から入る → SHIFT・RENASCOR. → 2.5秒から、マスは360度に散り、文字はふわっと消え、黒い画面は透明に */
 .splash {
-  --splash-accent: #ffffff;
   position: fixed;
   inset: 0;
   z-index: 10000;
@@ -7996,7 +7996,8 @@ body.is-kv-full .kv-back {
   place-items: center;
   overflow: hidden;
   background: #111214;
-  animation: splash-lift 0.7s cubic-bezier(0.7, 0, 0.2, 1) 2.15s forwards;
+  will-change: opacity;
+  animation: splash-out 2.2s cubic-bezier(0.45, 0, 0.55, 1) 2.5s forwards;
 }
 .splash::after {
   content: "";
@@ -8005,70 +8006,77 @@ body.is-kv-full .kv-back {
   height: 140vmax;
   border-radius: 50%;
   background: radial-gradient(circle, rgba(255, 255, 255, 0.07), transparent 55%);
-  animation: splash-glow 2.2s ease-out both;
+  animation: splash-glow 1.4s ease-out both, splash-glow-out 2.2s cubic-bezier(0.45, 0, 0.55, 1) 2.5s forwards;
 }
-.splash__mark { position: relative; z-index: 1; display: grid; justify-items: center; }
-.splash__grid { display: grid; grid-template-columns: repeat(4, 46px); gap: 8px; }
+.splash__mark { position: relative; z-index: 1; display: grid; justify-items: center; margin-top: -4vh; }
+.splash__grid { display: grid; grid-template-columns: repeat(4, 40px); gap: 7px; }
 .splash__grid i {
-  height: 25px;
-  border-radius: 7px;
+  height: 22px;
+  border-radius: 6px;
   background: #e6e6e3;
   opacity: 0;
-  transform: translateY(26px) scale(0.9);
-  filter: blur(6px);
-  animation: splash-rise 0.62s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
-  animation-delay: calc(0.08s + var(--d) * 55ms);
+  transform: translateY(16px) scale(0.85);
+  filter: blur(4px);
+  will-change: transform, opacity;
+  animation: splash-rise 0.78s cubic-bezier(0.2, 0.85, 0.25, 1.1) forwards, splash-fly 2.2s cubic-bezier(0.3, 0, 0.25, 1) forwards;
+  animation-delay: calc(var(--d) * 78ms), calc(2.45s + var(--fo, 0ms));
 }
 .splash__grid i.is-dark {
   background: #55565a;
-  animation: splash-rise 0.62s cubic-bezier(0.2, 0.8, 0.2, 1) forwards, splash-shift 0.5s cubic-bezier(0.6, 0, 0.2, 1) both;
-  animation-delay: calc(0.08s + var(--d) * 55ms), 0.95s;
+  animation: splash-rise 0.78s cubic-bezier(0.2, 0.85, 0.25, 1.1) forwards, splash-shift 0.66s cubic-bezier(0.6, 0, 0.2, 1) both, splash-fly 2.2s cubic-bezier(0.3, 0, 0.25, 1) forwards;
+  animation-delay: calc(var(--d) * 78ms), 1.08s, calc(2.45s + var(--fo, 0ms));
 }
-.splash__word { margin-top: 18px; display: flex; gap: 0.26em; font-size: 50px; font-weight: 800; letter-spacing: 0.02em; line-height: 1.1; }
+.splash__word {
+  margin-top: 14px;
+  display: flex;
+  gap: 0.22em;
+  font-size: 44px;
+  font-weight: 800;
+  line-height: 1.1;
+  will-change: transform, opacity, filter;
+  animation: splash-soft 1.8s cubic-bezier(0.33, 0, 0.4, 1) 2.5s forwards;
+}
 .splash__word span {
   display: inline-block;
   opacity: 0;
-  transform: translateY(0.7em);
-  filter: blur(8px);
+  transform: translateY(0.5em);
+  filter: blur(5px);
   background: linear-gradient(100deg, #cfcfcc 0 40%, #ffffff 50%, #cfcfcc 60% 100%) no-repeat;
   background-size: 400% 100%;
   background-position: 100% 0;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: splash-rise 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards, splash-shine 0.8s ease-in-out forwards;
-  animation-delay: calc(0.75s + var(--i) * 70ms), calc(1.4s + var(--i) * 60ms);
+  animation: splash-rise 0.73s cubic-bezier(0.2, 0.8, 0.2, 1) forwards, splash-shine 0.87s ease-in-out forwards;
+  animation-delay: calc(0.73s + var(--i) * 87ms), calc(1.65s + var(--i) * 70ms);
 }
 .splash__brand {
-  margin-top: 8px;
-  padding-left: 0.9em;
-  font-size: 12px;
+  margin-top: 6px;
+  padding-left: 0.55em;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.9em;
+  letter-spacing: 0.2em;
   color: #9c9da1;
   opacity: 0;
-  animation: splash-brand 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) 1.25s forwards;
+  animation: splash-brand 0.87s cubic-bezier(0.2, 0.8, 0.2, 1) 1.36s forwards, splash-soft 1.8s cubic-bezier(0.33, 0, 0.4, 1) 2.5s forwards;
 }
 .splash__brand b { color: #f5f5f3; font-weight: 800; }
-.splash__line { margin-top: 16px; width: 0; height: 2px; border-radius: 2px; background: var(--splash-accent); animation: splash-line 0.6s cubic-bezier(0.6, 0, 0.2, 1) 1.45s forwards; }
-.splash__role { margin-top: 10px; font-size: 11px; letter-spacing: 0.4em; color: #8d8e92; opacity: 0; animation: splash-fadein 0.5s ease 1.65s forwards; }
 @keyframes splash-rise { to { opacity: 1; transform: none; filter: blur(0); } }
 @keyframes splash-shift { from { translate: var(--from) 0; } to { translate: 0 0; } }
 @keyframes splash-shine { from { background-position: 100% 0; } to { background-position: 0 0; } }
-@keyframes splash-brand { from { opacity: 0; letter-spacing: 0.2em; filter: blur(4px); } to { opacity: 1; letter-spacing: 0.55em; filter: blur(0); } }
-@keyframes splash-line { to { width: 54px; } }
-@keyframes splash-fadein { to { opacity: 1; } }
+@keyframes splash-brand { from { opacity: 0; letter-spacing: 0.2em; } to { opacity: 1; letter-spacing: 0.55em; } }
 @keyframes splash-glow { from { transform: scale(0.4); opacity: 0; } 60% { opacity: 1; } to { transform: scale(1); opacity: 1; } }
-@keyframes splash-lift { to { transform: translateY(-100%); } }
+@keyframes splash-glow-out { to { transform: scale(1.3); opacity: 0; } }
+@keyframes splash-fly { 0% { transform: none; opacity: 1; } 15% { opacity: 1; } 100% { transform: translate(var(--fx), var(--fy)) rotate(var(--fr)) scale(0.7); opacity: 0; } }
+@keyframes splash-soft { from { transform: scale(1); opacity: 1; filter: blur(0); } to { transform: scale(1.1); opacity: 0; filter: blur(10px); } }
+@keyframes splash-out { from { opacity: 1; } to { opacity: 0; visibility: hidden; } }
 @keyframes splash-fade { to { opacity: 0; visibility: hidden; } }
-/* 11/13 修正：読み込みが終わるまで（is-play がつくまで）は、最初の形（黒い画面）で止めておく */
-.splash:not(.is-play),
-.splash:not(.is-play)::after,
-.splash:not(.is-play) *,
-.splash:not(.is-play) .splash__grid i.is-dark { animation-play-state: paused; } /* 濃いマスは animation をまとめて書いているので、強く指定する */
 /* 「視差効果を減らす」の人は、動かさずに、ふわっと消えるだけ */
 @media (prefers-reduced-motion: reduce) {
   .splash *, .splash::after { animation-duration: 0.01s !important; animation-delay: 0s !important; }
+  .splash__grid i, .splash__grid i.is-dark { animation: splash-rise 0.01s forwards !important; }
+  .splash__word, .splash__brand { animation: none !important; }
+  .splash__brand { opacity: 1; }
   .splash { animation: splash-fade 0.4s ease 0.8s forwards; }
 }
 /* 印刷のときは出さない */
@@ -8699,3 +8707,102 @@ body.is-kv-full .kv-back {
 .mail-log__time { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .mail-log__code { overflow-wrap: anywhere; color: var(--text-muted); }
 .mail-notice__retry .btn:disabled { opacity: 0.45; }
+
+/* 幹部の欄（11/15〜 設定 > スタッフ） */
+.mgr-row__mail { font-variant-numeric: tabular-nums; }
+.mgr-row__actions { margin-top: 6px; }
+.mgr-row__actions .btn:disabled { opacity: .45; }
+.mgr-group__foot { padding: 10px 2px 0; display: grid; gap: 6px; justify-items: start; }
+.mgr-linked { background: var(--surface-2, rgba(0,0,0,.04)); border-radius: 8px; padding: 8px 10px; word-break: break-all; }
+
+/* ログインする人（11/15〜 設定 > スタッフのいちばん上）：幹部とスタッフを1つの表に */
+.lp { background: var(--surface); border: 1px solid var(--border, #e5e5e0); border-radius: 14px; padding: 14px; margin-bottom: 18px; container-type: inline-size; }
+.lp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.lp-title { font-size: 1.05rem; margin: 0; }
+.lp-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+.lp-filter { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border, #e5e5e0); background: var(--surface-2); color: inherit; font: inherit; cursor: pointer; }
+.lp-filter__label { font-size: .8rem; color: var(--text-muted, #666); }
+.lp-filter__num { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lp-filter.is-mgr .lp-filter__num { color: #e03131; }
+.lp-filter.is-nomail .lp-filter__num { color: #b45309; }
+.lp-filter.is-on { border-color: var(--text, #111); box-shadow: inset 0 0 0 1px var(--text, #111); background: var(--surface); }
+.lp-table { display: grid; }
+.lp-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.2fr) minmax(0, 1.3fr) minmax(0, 1fr); grid-template-areas: 'name store mail state' 'act act act act'; gap: 6px 12px; align-items: center; padding: 10px 4px; border-top: 1px solid var(--border, #e5e5e0); }
+.lp-name { grid-area: name; }
+.lp-store { grid-area: store; }
+.lp-mail { grid-area: mail; }
+.lp-state { grid-area: state; }
+.lp-actions { grid-area: act; }
+.lp-row--head { border-top: 0; padding-top: 0; font-size: .75rem; color: var(--text-muted, #666); }
+.lp-row.is-nomail { background: color-mix(in srgb, #f59e0b 7%, transparent); }
+.lp-cell { min-width: 0; overflow-wrap: anywhere; }
+.lp-name { display: grid; gap: 4px; }
+.lp-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.lp-badge { font-size: .7rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border, #ddd); }
+.lp-badge.is-mgr { background: #e03131; border-color: #e03131; color: #fff; }
+.lp-badge.is-staff { background: var(--surface); color: var(--text, #111); }
+.lp-store { display: grid; gap: 2px; font-size: .85rem; }
+.lp-store__mgr { color: #c92a2a; font-weight: 600; }
+.lp-mail { font-size: .85rem; font-variant-numeric: tabular-nums; }
+.lp-none { color: #b45309; font-weight: 600; }
+.lp-chip { display: inline-block; font-size: .75rem; padding: 3px 9px; border-radius: 10px; background: var(--surface-2); }
+.lp-chip.is-accepted { background: color-mix(in srgb, #16a34a 15%, transparent); color: #15803d; font-weight: 600; }
+.lp-chip.is-failed { background: color-mix(in srgb, #dc2626 14%, transparent); color: #b91c1c; font-weight: 600; }
+.lp-chip.is-sending { background: color-mix(in srgb, #2563eb 14%, transparent); color: #1d4ed8; }
+.lp-chip.is-none { background: color-mix(in srgb, #f59e0b 16%, transparent); color: #b45309; }
+.lp-actions { display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: center; justify-content: flex-start; }
+.lp-actions .btn:disabled { opacity: .45; }
+.lp-note { margin-top: 10px; }
+@media (max-width: 760px) {
+  .lp { padding: 12px; }
+}
+@container (max-width: 560px) {
+  .lp-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lp-row--head { display: none; }
+  .lp-row { grid-template-columns: 1fr auto; grid-template-areas: 'name state' 'store store' 'mail mail' 'act act'; gap: 4px 8px; padding: 12px 2px; }
+  .lp-name { grid-area: name; }
+  .lp-store { grid-area: store; }
+  .lp-mail { grid-area: mail; }
+  .lp-state { grid-area: state; justify-self: end; }
+  .lp-actions { grid-area: act; justify-content: flex-start; margin-top: 4px; }
+}
+@media (prefers-color-scheme: dark) {
+  .lp-store__mgr { color: #ff8787; }
+}
+
+/* 店舗ごとの一覧（ログインする人の上） */
+.sb { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin-top: 12px; }
+.sb-store { border: 1px solid var(--border, #e5e5e0); border-top: 4px solid var(--store-color, #999); border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px; align-content: start; background: var(--surface); }
+.sb-store__name { margin: 0; font-size: 1rem; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.sb-store__count { font-size: .75rem; font-weight: 400; color: var(--text-muted, #666); }
+.sb-line { display: grid; grid-template-columns: 4.2em 1fr; gap: 6px; align-items: start; }
+.sb-line__label { font-size: .72rem; font-weight: 700; color: var(--text-muted, #666); padding-top: 5px; }
+.sb-line__label.is-mgr { color: #e03131; }
+.sb-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.sb-chip { font: inherit; font-size: .85rem; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border, #ddd); background: var(--surface); color: var(--text, #111); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.sb-chip.is-mgr { background: #e03131; border-color: #e03131; color: #fff; }
+.sb-chip.is-nomail { border-style: dashed; border-color: #f59e0b; }
+.sb-chip__warn { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; background: #f59e0b; color: #fff; font-size: .65rem; font-weight: 800; }
+.sb-empty { font-size: .8rem; color: var(--text-muted, #888); padding-top: 4px; }
+.sb-note { margin: 8px 0 4px; }
+.lp-subtitle { font-size: .95rem; margin: 18px 0 0; padding-top: 14px; border-top: 1px solid var(--border, #e5e5e0); }
+
+/* メールアドレスと送信の結果：店舗ごとの列（11/15〜） */
+.lp-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; align-items: start; }
+.lp-col { border: 1px solid var(--border, #e5e5e0); border-top: 4px solid var(--store-color, #999); border-radius: 12px; padding: 10px; display: grid; gap: 8px; background: var(--surface-2); }
+.lp-col__name { margin: 0; font-size: .95rem; display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.lp-col__count { font-size: .75rem; font-weight: 400; color: var(--text-muted, #666); }
+.lp-card { background: var(--surface); border: 1px solid var(--border, #e5e5e0); border-radius: 10px; padding: 9px 10px; display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.lp-card.is-mgr { border-left: 4px solid #e03131; }
+.lp-card.is-nomail { background: color-mix(in srgb, #f59e0b 8%, var(--surface)); border-style: dashed; border-color: #f59e0b; }
+.lp-card__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.lp-card__name { font-size: 1rem; }
+.lp-card p { margin: 0; }
+.lp-card__mgr { font-size: .8rem; color: #c92a2a; font-weight: 600; }
+.lp-card__mail { font-size: .8rem; color: var(--text-muted, #555); font-variant-numeric: tabular-nums; }
+.lp-card .lp-actions { margin-top: 4px; gap: 4px 12px; }
+.lp-card .lp-actions .btn { width: 100%; }
+@media (prefers-color-scheme: dark) { .lp-card__mgr { color: #ff8787; } }
+.lp-card { grid-template-columns: minmax(0, 1fr); }
+.lp-card > *, .lp-card .lp-actions { grid-area: auto; }
+.lp-card .lp-chip { white-space: normal; }

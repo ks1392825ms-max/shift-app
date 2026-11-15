@@ -17,6 +17,7 @@
 //   requests: [...],          スタッフの希望（使っていない。将来のために残している）
 //   staffAccounts: [...],     スタッフのログイン用メールと、本人の記録・所属店舗の対応（スタッフの設定から自動で作る）
 //   publications: [...],      シフト確定の記録（店舗・月ごと）
+//   managers: [...],          幹部（id＝ログイン用のメールアドレス・担当店舗 storeIds。11/15〜 設定 > スタッフの幹部の欄から）
 //   settings: { checks: {...} }
 // }
 // すべての記録に id / createdAt / updatedAt / deleted を持たせる（同期のため）。
@@ -32,7 +33,7 @@
   const DEFAULTS_TIMESTAMP = '2000-01-01T00:00:00.000Z'; // 初期データの日時（同期で編集したほうが必ず優先されるように）
   const LIST_KEYS = [
     'stores', 'staff', 'shiftPatterns', 'shifts', 'businessTimes', 'businessTimeSkips',
-    'staffingRules', 'dayOverrides', 'holidays', 'requests', 'staffAccounts', 'publications',
+    'staffingRules', 'dayOverrides', 'holidays', 'requests', 'staffAccounts', 'publications', 'managers',
   ];
   // 職種（St／As のどちらで数えるかは U.POSITION_ROLE）と雇用形態
   const POSITIONS = ['stylist', 'junior_stylist', 'junior_assistant', 'assistant'];
@@ -65,6 +66,14 @@
     for (const key of LIST_KEYS) obj[key] = Array.isArray(obj[key]) ? obj[key] : [];
     // 臨時休業日の機能はなくしたので、以前のデータに残っていても使わない
     for (const s of obj.stores) delete s.closedDates;
+    // 幹部：Firebase の管理画面で作った記録（storeIds と deleted だけ）にも、ほかの記録と同じ項目をそろえる
+    for (const m of obj.managers) {
+      if (!m.email) m.email = m.id;
+      if (!m.createdAt) m.createdAt = DEFAULTS_TIMESTAMP;
+      if (!m.updatedAt) m.updatedAt = DEFAULTS_TIMESTAMP;
+      if (typeof m.deleted !== 'boolean') m.deleted = false;
+      if (!Array.isArray(m.storeIds)) m.storeIds = [];
+    }
     obj.settings = obj.settings || {};
     obj.settings.checks = { ...K.defaults.checks, ...(obj.settings.checks || {}) };
     return obj;
@@ -1093,6 +1102,101 @@
     }
   }
 
+  // ---- 幹部（managers・11/15〜） ----
+  // id はログイン用のメールアドレス（小文字）。Firestore のルールは、ログインした人のメールでこの記録を探し、担当店舗（storeIds）を決める。
+  // staffId：スタッフの名簿の本人（つないだとき）。つないだ幹部は、名前とメールアドレスを名簿から取り、
+  //   名簿でメールアドレスを変えると、幹部の記録も新しいアドレスに移る（updateStaff）。
+  //   Firebase の管理画面で作った以前の記録（staffId がない）は、名簿に同じアドレスの人がいれば、その人とつながっているとみなす。
+  // 外すときは消さず deleted: true にする（ルールでも消せない）。
+  const MAX_MANAGER_NAME = 12;
+
+  // つながっている名簿の人（いなければ null）
+  function managerStaff(m, d = data) {
+    if (m.staffId) {
+      const s = d.staff.find((x) => x.id === m.staffId && !x.deleted);
+      if (s) return s;
+    }
+    return d.staff.find((s) => !s.deleted && s.email && s.email === m.id) || null;
+  }
+
+  // この名簿の人が幹部なら、その記録（なければ null）
+  function managerOfStaff(member, d = data) {
+    return active(d.managers).find((m) => m.staffId === member.id || (!m.staffId && member.email && m.id === member.email && managerStaff(m, d) === member)) || null;
+  }
+
+  // 幹部の一覧（外した人は入れない）。name・email は、つながっている名簿の人がいればそちらから
+  function getManagers() {
+    return active(data.managers)
+      .map((m) => {
+        const s = managerStaff(m);
+        return { id: m.id, email: m.id, name: s ? s.name : m.name || '', storeIds: (m.storeIds || []).slice(), staffId: s ? s.id : null };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, 'ja') || a.id.localeCompare(b.id));
+  }
+
+  // 記録を新しいアドレスに移す（同じアドレスなら名前などだけ合わせる）。commit の中で呼ぶ
+  function moveManager(d, oldId, { email, name, staffId, storeIds }) {
+    const now = U.nowIso();
+    const old = d.managers.find((m) => m.id === oldId);
+    const nextStores = storeIds || (old ? old.storeIds.slice() : []);
+    const fields = { storeIds: nextStores, name: String(name || '').slice(0, MAX_MANAGER_NAME), staffId: staffId || null };
+    if (old && old.id === email) {
+      const same = JSON.stringify([old.storeIds, old.name || '', old.staffId || null, old.deleted]) === JSON.stringify([fields.storeIds, fields.name, fields.staffId, false]);
+      if (!same) Object.assign(old, fields, { deleted: false, updatedAt: now });
+      return;
+    }
+    if (old && !old.deleted) Object.assign(old, { deleted: true, updatedAt: now });
+    const existing = d.managers.find((m) => m.id === email);
+    if (existing) Object.assign(existing, fields, { email, deleted: false, updatedAt: now });
+    else d.managers.push({ id: email, email, ...fields, createdAt: now, updatedAt: now, deleted: false });
+  }
+
+  // 幹部を登録する・直す。oldId：直すときの今のアドレス（新しく登録するときは null）
+  // fields：{ staffId（名簿の人。名簿にいない人は空）, name, email（名簿にいない人だけ使う）, storeIds }
+  function saveManager(oldId, fields) {
+    const old = oldId ? findActive(data.managers, oldId, '幹部の登録が見つかりませんでした。') : null;
+    const storeIds = [...new Set((fields.storeIds || []).filter((id) => data.stores.some((s) => s.id === id && !s.deleted)))];
+    if (!storeIds.length) throw new Error('担当する店舗を1つ以上選んでください。');
+    let email;
+    let name;
+    let staffId = null;
+    if (fields.staffId) {
+      const member = findActive(data.staff, fields.staffId, 'スタッフが見つかりませんでした。');
+      if (!member.active) throw new Error(`${member.name}さんは「在籍中」ではありません。`);
+      if (!member.email) throw new Error(`${member.name}さんのログイン用のメールアドレスが、まだ登録されていません。先にスタッフの編集で登録してください。`);
+      const other = managerOfStaff(member);
+      if (other && other.id !== oldId) throw new Error(`${member.name}さんは、すでに幹部として登録されています。`);
+      email = member.email;
+      name = member.name;
+      staffId = member.id;
+    } else {
+      email = cleanEmail(fields.email);
+      if (!email) throw new Error('メールアドレスを入れてください。');
+      name = String(fields.name || '').trim();
+      if (!name) throw new Error('名前を入れてください。');
+      if (name.length > MAX_MANAGER_NAME) throw new Error(`名前は${MAX_MANAGER_NAME}文字以内にしてください。`);
+      const clash = active(data.staff).find((s) => s.email === email);
+      if (clash) {
+        const store = data.stores.find((x) => x.id === clash.storeId);
+        throw new Error(`このメールアドレスは、スタッフの${clash.name}さん（${store ? store.name : 'ほかの店舗'}）に登録されています。「スタッフの名簿の人」で${clash.name}さんを選んでください。`);
+      }
+    }
+    if (email !== oldId && active(data.managers).some((m) => m.id === email)) throw new Error('このメールアドレスは、すでに幹部として登録されています。');
+    commit((d) => {
+      if (old) moveManager(d, old.id, { email, name, staffId, storeIds });
+      else moveManager(d, null, { email, name, staffId, storeIds });
+    });
+    return email;
+  }
+
+  // 幹部から外す（記録は残す）
+  function removeManager(id) {
+    findActive(data.managers, id, '幹部の登録が見つかりませんでした。');
+    commit((d) => {
+      Object.assign(d.managers.find((m) => m.id === id), { deleted: true, updatedAt: U.nowIso() });
+    });
+  }
+
   // 同じメールを、同じ人でないスタッフに使っていないか（保存の前に確かめる）
   function checkEmailOwner(email, id, personId) {
     if (!email) return;
@@ -1205,6 +1309,11 @@
     if ('role' in fields && !('position' in fields)) merged.position = fields.role;
     const clean = normalizeStaff(merged, id);
     checkEmailOwner(clean.email, id, current.personId);
+    const mgr = managerOfStaff(current);
+    if (mgr) {
+      if (!clean.email || !clean.active) throw new Error(`${current.name}さんは幹部として登録されています。メールアドレスを消す・「在籍中」を外すときは、先に幹部の欄で「幹部から外す」を押してください。`);
+      if (clean.email !== mgr.id && active(data.managers).some((m) => m.id === clean.email)) throw new Error('このメールアドレスは、ほかの幹部に登録されています。');
+    }
     commit((d) => {
       const s = d.staff.find((x) => x.id === id);
       const moved = clean.storeId !== s.storeId;
@@ -1219,6 +1328,8 @@
       const order = moved ? nextOrder(d.staff) : s.order;
       Object.assign(s, clean, { order, updatedAt: U.nowIso() });
       rebuildStaffAccounts(d);
+      // 幹部としても登録されている人：メールアドレス・名前を変えたら、幹部の記録も合わせる（アドレスが変わったら新しいアドレスに移す）
+      if (mgr) moveManager(d, mgr.id, { email: clean.email, name: clean.name, staffId: id });
     });
   }
 
@@ -1267,7 +1378,8 @@
 
   // 間違えて登録したときの削除。辞めた人は「在籍中」を外す（過去のシフトを残すため）
   function deleteStaff(id) {
-    findActive(data.staff, id, 'スタッフが見つかりませんでした。');
+    const current = findActive(data.staff, id, 'スタッフが見つかりませんでした。');
+    if (managerOfStaff(current)) throw new Error(`${current.name}さんは幹部として登録されています。先に幹部の欄で「幹部から外す」を押してください。`);
     commit((d) => {
       const s = d.staff.find((x) => x.id === id);
       s.deleted = true;
@@ -2235,6 +2347,9 @@
     autoShiftCount,
     undoAutoShifts,
     getSamePersonStaff,
+    getManagers,
+    saveManager,
+    removeManager,
     startFreshCloud,
   };
 })();

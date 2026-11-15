@@ -7,6 +7,10 @@
 
   // 開いているフォーム（null / 'new' / スタッフID）。表示する店舗は、ヘッダーで選んだ店舗
   let formTarget = null;
+  // 開いている幹部のフォーム（null / 'new' / 'staff:スタッフID'（その人を幹部にする）/ 幹部のメールアドレス）
+  let mgrTarget = null;
+  // 「ログインする人」の表の絞り込み（all / mgr / staff / nomail）
+  let loginFilter = 'all';
 
   function openForm(target) {
     formTarget = target;
@@ -16,6 +20,17 @@
 
   function closeForm() {
     formTarget = null;
+    K.app.rerender();
+  }
+
+  function openMgrForm(target) {
+    mgrTarget = target;
+    K.app.rerender();
+    window.scrollTo(0, 0);
+  }
+
+  function closeMgrForm() {
+    mgrTarget = null;
     K.app.rerender();
   }
 
@@ -488,6 +503,9 @@
         el('label', { class: 'field__label', for: 'staff-email' }, 'ログイン用のメールアドレス（任意）'),
         emailInput,
         el('p', { class: 'field__note' }, '希望休・有給の申請で、本人がログインするためのメールアドレスです。共有モードでは Firebase にだけ保存し、公開するファイルには入りません。'),
+        member && K.storage.isCloud() && K.storage.getManagers && K.storage.getManagers().some((g) => g.staffId === member.id)
+          ? el('p', { class: 'field__note', 'data-staff-is-mgr': '' }, 'この人は幹部としても登録されています。メールアドレスを変えて保存すると、幹部の登録も新しいアドレスに移ります。')
+          : null,
         isNew ? null : loginBox(member, emailInput)
       ),
       el(
@@ -639,9 +657,22 @@
     return [r.message, `対処：${r.help}`, `エラーコード：${r.code || 'なし'}${r.step ? `（${STEP_LABEL[r.step] || r.step}）` : ''}`];
   }
 
+  // メールを送る相手：スタッフ（スタッフID）か、名簿にいない幹部（'mgr_'＋アドレスから作った短い番号。記録にアドレスを残さないため）
+  function mgrKey(email) {
+    let h = 5381;
+    for (const c of String(email)) h = ((h * 33) ^ c.codePointAt(0)) >>> 0;
+    return `mgr_${h.toString(16).padStart(8, '0')}`;
+  }
+  function mailTarget(id) {
+    const m = K.storage.getStaffMember(id);
+    if (m) return m;
+    const g = K.storage.getManagers ? K.storage.getManagers().find((x) => !x.staffId && mgrKey(x.email) === id) : null;
+    return g ? { id, name: g.name || '（名前が未登録の幹部）', email: g.email, active: true } : null;
+  }
+
   // 送れなかった人（再送できる人）
   function failedTargets() {
-    return [...mailResults.values()].filter((r) => r.status === 'failed').map((r) => K.storage.getStaffMember(r.staffId)).filter((m) => m && m.email && m.active !== false);
+    return [...mailResults.values()].filter((r) => r.status === 'failed').map((r) => mailTarget(r.staffId)).filter((m) => m && m.email && m.active !== false);
   }
 
   // 画面上部のお知らせ欄（スタッフごとに1行。新しい順）
@@ -695,12 +726,12 @@
         'ul',
         { class: 'mail-log__list' },
         list.map((x) => {
-          const m = K.storage.getStaffMember(x.staffId);
+          const m = mailTarget(x.staffId);
           return el(
             'li',
             { class: `mail-log__item is-${x.status}`, 'data-staff': x.staffId },
             el('span', { class: 'mail-log__time' }, timeLabel(x.at)),
-            el('b', null, m ? m.name : '（今はいないスタッフ）'),
+            el('b', null, m ? m.name : '（今はいない人）'),
             el('span', null, MAIL_STATUS[x.status] || x.status),
             x.code ? el('span', { class: 'mail-log__code' }, `${x.code}${x.step ? `（${STEP_LABEL[x.step] || x.step}）` : ''}`) : null
           );
@@ -725,12 +756,15 @@
     if (slot) slot.replaceChildren(...mailPanel());
     document.querySelectorAll('[data-mail-btn]').forEach((btn) => paintMailButton(btn, btn.getAttribute('data-mail-btn')));
     document.querySelectorAll('[data-mail-status]').forEach((p) => paintMailStatus(p, p.getAttribute('data-mail-status')));
+    // 「ログインする人」の表の、送信の結果の欄も新しくする（表はフォームを開いていないときだけ出ている）
+    if (document.querySelector('[data-managers]')) K.app.rerender();
   }
   function paintMailButton(btn, staffId) {
     const g = mailGate(staffId);
     const blocked = !g.ok && !g.gapOnly;
     btn.disabled = blocked;
-    btn.textContent = blocked ? g.label : 'パスワード設定用のメールを送る';
+    const idle = btn.hasAttribute('data-mail-compact') ? 'メールを送る' : 'パスワード設定用のメールを送る';
+    btn.textContent = blocked ? g.label : idle;
   }
   function paintMailStatus(p, staffId) {
     const r = mailResults.get(staffId);
@@ -861,6 +895,318 @@
     );
   }
 
+  // ---- 幹部（11/15〜） ----
+  // 幹部の登録（managers）も、この画面で決める。スタッフの名簿の人とつなぐと、名簿でメールアドレスを変えたときに、幹部の登録も一緒に移る。
+  // 一覧ではメールアドレスの一部を伏せる（全部見えるのは編集画面だけ。この画面は管理者だけが開ける）
+  function maskEmail(email) {
+    const [local, dom] = String(email).split('@');
+    return `${local.slice(0, 1)}***@${dom || ''}`;
+  }
+
+  function storeNames(ids) {
+    return ids.map((id) => (K.storage.getStore(id) || {}).name).filter(Boolean).join('・') || '（店舗なし）';
+  }
+
+  // 幹部にメールを送る（名簿の人はスタッフと同じ番号で、名簿にいない人は幹部の番号で、結果を残す）
+  function mgrMailMember(g) {
+    if (g.staffId) return K.storage.getStaffMember(g.staffId);
+    return { id: mgrKey(g.email), name: g.name || '（名前が未登録の幹部）', email: g.email, active: true };
+  }
+
+  function managerMailButton(g, compact) {
+    const backend = K.storage.isCloud() && K.app.cloudBackend ? K.app.cloudBackend() : null;
+    if (!backend || !(backend.inviteStaff || backend.sendPasswordReset || backend.sendStaffLoginLink)) return null;
+    const member = mgrMailMember(g);
+    if (!member || !member.email) return null;
+    const btn = el(
+      'button',
+      {
+        type: 'button',
+        class: 'btn btn--ghost btn--small',
+        'data-mail-btn': member.id,
+        onclick: () => {
+          const gate = mailGate(member.id);
+          if (!gate.ok) return K.app.toast(gate.reason, 3500);
+          const ask = gate.resend
+            ? `${member.name}さんへの送信は、前に Firebase が受け付けています。\n先に、迷惑メールのフォルダーや受信設定を見てもらいましたか？\nもう一度送りますか？`
+            : `${member.name}さんの登録メールに、パスワード設定用のメールを送りますか？\nメールのリンクを開くと、新しいパスワードを決める画面になります。`;
+          if (!window.confirm(ask)) return;
+          sendStaffMail(backend, member);
+        },
+      },
+      compact ? 'メールを送る' : 'パスワード設定用のメールを送る'
+    );
+    if (compact) btn.setAttribute('data-mail-compact', '');
+    paintMailButton(btn, member.id);
+    return btn;
+  }
+
+  // 最後の送信の結果（この画面の結果と、この端末の記録から）
+  function lastMail(id) {
+    const r = mailResults.get(id);
+    if (r) return r;
+    const log = readMailLog().filter((x) => x.staffId === id);
+    return log.length ? log[log.length - 1] : null;
+  }
+  const MAIL_SHORT = { sending: '送信中…', accepted: '受付済み', failed: '送れなかった' };
+
+  // 「ログインする人」：幹部とスタッフを1つの表にまとめる（全店舗）。
+  // 1行＝1人。幹部でスタッフの人は1行に「幹部」「スタッフ」の両方の札。名簿にいない幹部も入れる
+  function loginPeople() {
+    const stores = K.storage.getStores();
+    const storeRank = (id) => {
+      const i = stores.findIndex((x) => x.id === id);
+      return i < 0 ? 99 : i;
+    };
+    const managers = K.storage.getManagers ? K.storage.getManagers() : [];
+    const rows = [];
+    for (const m of K.storage.getStaff()) {
+      const g = managers.find((x) => x.staffId === m.id) || null;
+      rows.push({ key: m.id, name: m.name, staff: m, mgr: g, storeId: m.storeId, email: m.email || '' });
+    }
+    for (const g of managers.filter((x) => !x.staffId)) rows.push({ key: mgrKey(g.email), name: g.name, staff: null, mgr: g, storeId: g.storeIds[0], email: g.email });
+    return rows.sort((a, b) => Number(!a.mgr) - Number(!b.mgr) || storeRank(a.storeId) - storeRank(b.storeId) || (a.staff && b.staff ? a.staff.order - b.staff.order : 0));
+  }
+
+  // 店舗ごとの一覧：店舗のカードに、幹部（担当）とスタッフ（所属）の名前を並べる。名前を押すと編集
+  function storeBoard(all) {
+    const chip = (r, kind) =>
+      el(
+        'button',
+        {
+          type: 'button',
+          class: `sb-chip is-${kind}${r.email ? '' : ' is-nomail'}`,
+          'data-board-chip': r.key,
+          title: r.email ? '' : 'メールアドレスが未登録です',
+          onclick: () => (kind === 'mgr' && !r.staff ? openMgrForm(r.mgr.email) : kind === 'mgr' ? openMgrForm(r.mgr.email) : openForm(r.staff.id)),
+        },
+        r.name || '名前未登録',
+        r.email ? null : el('span', { class: 'sb-chip__warn', 'aria-label': 'メール未登録' }, '!')
+      );
+    return el(
+      'div',
+      { class: 'sb', 'data-store-board': '' },
+      K.storage.getStores().map((st) => {
+        const mgrs = all.filter((r) => r.mgr && r.mgr.storeIds.includes(st.id));
+        const staff = all.filter((r) => r.staff && r.staff.storeId === st.id);
+        return el(
+          'section',
+          { class: 'sb-store', style: { '--store-color': st.color }, 'data-board-store': st.id },
+          el('h3', { class: 'sb-store__name' }, st.name, el('span', { class: 'sb-store__count' }, `${staff.length}人`)),
+          el('div', { class: 'sb-line' }, el('span', { class: 'sb-line__label is-mgr' }, '幹部'), el('div', { class: 'sb-chips' }, mgrs.length ? mgrs.map((r) => chip(r, 'mgr')) : el('span', { class: 'sb-empty' }, 'いません'))),
+          el('div', { class: 'sb-line' }, el('span', { class: 'sb-line__label' }, 'スタッフ'), el('div', { class: 'sb-chips' }, staff.length ? staff.map((r) => chip(r, 'staff')) : el('span', { class: 'sb-empty' }, 'いません')))
+        );
+      })
+    );
+  }
+
+  function loginOverview() {
+    if (!K.storage.isCloud() || !K.storage.getManagers) return null;
+    const all = loginPeople();
+    const count = { all: all.length, mgr: all.filter((r) => r.mgr).length, staff: all.filter((r) => r.staff).length, nomail: all.filter((r) => !r.email).length };
+    const filters = [
+      ['all', 'すべて', count.all],
+      ['mgr', '幹部', count.mgr],
+      ['staff', 'スタッフ', count.staff],
+      ['nomail', 'メール未登録', count.nomail],
+    ];
+    const pick = { all: () => true, mgr: (r) => r.mgr, staff: (r) => r.staff, nomail: (r) => !r.email };
+    const rows = all.filter(pick[loginFilter] || pick.all);
+    const storeName = (id) => (K.storage.getStore(id) || {}).name || '';
+
+    // 1人分のカード（名前・役割の札・担当・メール・送信の結果・ボタン）
+    function card(r) {
+      const member = r.staff || mgrMailMember(r.mgr);
+      const last = r.email ? lastMail(member.id) : null;
+      return el(
+        'div',
+        { class: `lp-card${r.email ? '' : ' is-nomail'}${r.mgr ? ' is-mgr' : ''}`, 'data-login-row': r.key },
+        el(
+          'div',
+          { class: 'lp-card__head' },
+          el('b', { class: 'lp-card__name' }, r.name || '（名前が未登録）'),
+          el('span', { class: 'lp-badges' }, r.mgr ? el('span', { class: 'lp-badge is-mgr' }, '幹部') : null, r.staff ? el('span', { class: 'lp-badge is-staff' }, 'スタッフ') : null)
+        ),
+        r.mgr ? el('p', { class: 'lp-card__mgr' }, `担当：${storeNames(r.mgr.storeIds)}`) : null,
+        el('p', { class: 'lp-card__mail' }, r.email ? maskEmail(r.email) : el('span', { class: 'lp-none' }, 'メール未登録')),
+        el(
+          'p',
+          { class: 'lp-card__state' },
+          !r.email
+            ? el('span', { class: 'lp-chip is-none' }, 'ログインできません')
+            : last
+              ? el('span', { class: `lp-chip is-${last.status}` }, `${MAIL_SHORT[last.status] || last.status} ${timeLabel(last.at)}`)
+              : el('span', { class: 'lp-chip is-never' }, 'まだ送っていない')
+        ),
+        el(
+          'div',
+          { class: 'lp-actions' },
+          r.email ? managerMailButton({ staffId: r.staff ? r.staff.id : null, email: r.email, name: r.name }, true) : null,
+          el('button', { type: 'button', class: 'text-btn', onclick: () => (r.staff ? openForm(r.staff.id) : openMgrForm(r.mgr.email)) }, r.email ? '編集' : 'メールを入れる'),
+          r.staff && r.mgr ? el('button', { type: 'button', class: 'text-btn', 'data-mgr-edit': '', onclick: () => openMgrForm(r.mgr.email) }, '幹部の設定') : null,
+          r.staff && !r.mgr && r.email ? el('button', { type: 'button', class: 'text-btn lp-make-mgr', 'data-mgr-make': '', onclick: () => openMgrForm(`staff:${r.staff.id}`) }, '幹部にする') : null
+        )
+      );
+    }
+
+    // 店舗ごとの列（スタッフは所属する店舗、名簿にいない幹部は最初の担当店舗）。幹部を上に
+    const columns = K.storage.getStores().map((st) => {
+      const list = rows.filter((r) => r.storeId === st.id);
+      return el(
+        'section',
+        { class: 'lp-col', style: { '--store-color': st.color }, 'data-login-col': st.id },
+        el('h4', { class: 'lp-col__name' }, st.name, el('span', { class: 'lp-col__count' }, `${list.length}人`)),
+        list.length ? list.map(card) : el('p', { class: 'sb-empty' }, '当てはまる人はいません')
+      );
+    });
+
+    return el(
+      'section',
+      { class: 'lp', 'data-managers': '' },
+      el(
+        'div',
+        { class: 'lp-head' },
+        el('h2', { class: 'lp-title' }, 'ログインする人（全店舗）'),
+        el('button', { type: 'button', class: 'btn btn--ghost btn--small', 'data-mgr-add': '', onclick: () => openMgrForm('new') }, '＋ 名簿にいない幹部を追加')
+      ),
+      storeBoard(all),
+      el('p', { class: 'field__note sb-note' }, '赤い名前は幹部（担当する店舗）、白い名前はスタッフ（所属する店舗）です。「!」はメールアドレスが未登録で、まだログインできない人です。名前を押すと編集できます。'),
+      el('h3', { class: 'lp-subtitle' }, 'メールアドレスと送信の結果'),
+      el(
+        'div',
+        { class: 'lp-filters', role: 'group', 'aria-label': '絞り込み' },
+        filters.map(([k, label, n]) =>
+          el(
+            'button',
+            { type: 'button', class: `lp-filter is-${k}${loginFilter === k ? ' is-on' : ''}`, 'aria-pressed': String(loginFilter === k), 'data-login-filter': k, onclick: () => { loginFilter = k; K.app.rerender(); } },
+            el('span', { class: 'lp-filter__label' }, label),
+            el('span', { class: 'lp-filter__num' }, `${n}人`)
+          )
+        )
+      ),
+      el('div', { class: 'lp-cols' }, columns),
+      el(
+        'p',
+        { class: 'field__note lp-note' },
+        '幹部にするときは、スタッフの行の「幹部にする」を押します。メールアドレスを変えるときは「編集」から。幹部の登録も一緒に変わります。登録したら「メールを送る」を押してください（相手がメールのリンクでパスワードを決めると、ログインできます）。'
+      )
+    );
+  }
+
+  function managerForm(g, preset) {
+    const isNew = !g;
+    const stores = K.storage.getStores();
+    const staff = K.storage.getStaff();
+    const presetMember = preset ? staff.find((m) => m.id === preset) : null;
+    const state = { staffId: g ? g.staffId || '' : presetMember ? presetMember.id : '', storeIds: new Set(g ? g.storeIds : [presetMember ? presetMember.storeId : K.app.currentStore().id]), busy: false };
+    const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+    const nameInput = el('input', { id: 'mgr-name', class: 'field__input', type: 'text', maxlength: '12', autocomplete: 'off', placeholder: '例：山田', value: g && !g.staffId ? g.name : '' });
+    const emailInput = el('input', { id: 'mgr-email', class: 'field__input', type: 'email', inputmode: 'email', autocomplete: 'off', placeholder: '例：name@example.com', value: g && !g.staffId ? g.email : '' });
+    const linkedInfo = el('p', { class: 'field__note mgr-linked', 'data-mgr-linked': '' });
+    const ownFields = el(
+      'div',
+      { class: 'mgr-own' },
+      el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'mgr-name' }, '名前'), nameInput),
+      el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'mgr-email' }, 'ログイン用のメールアドレス'), emailInput)
+    );
+    function paintLink() {
+      const m = state.staffId ? staff.find((x) => x.id === state.staffId) : null;
+      ownFields.hidden = Boolean(m);
+      linkedInfo.hidden = !m;
+      if (m) {
+        linkedInfo.textContent = m.email
+          ? `名前とメールアドレスは、スタッフの名簿の${m.name}さんのものを使います（${m.email}）。アドレスを変えるときは、スタッフの編集で変えてください。幹部の登録も一緒に変わります。`
+          : `${m.name}さんのログイン用のメールアドレスが、まだ登録されていません。先にスタッフの編集で登録してください。`;
+      }
+    }
+    const staffSelect = el(
+      'select',
+      { id: 'mgr-staff', class: 'field__input', onchange: (ev) => { state.staffId = ev.currentTarget.value; paintLink(); } },
+      el('option', { value: '', selected: !state.staffId }, '名簿にいない（シフトに入らない人）'),
+      stores.map((st) => {
+        const members = staff.filter((m) => m.storeId === st.id);
+        return members.length ? el('optgroup', { label: st.name }, members.map((m) => el('option', { value: m.id, selected: m.id === state.staffId }, `${m.name}${m.email ? '' : '（メール未登録）'}`))) : null;
+      })
+    );
+    paintLink();
+    const storeChecks = el(
+      'div',
+      { class: 'check-chips', role: 'group', 'aria-label': '担当する店舗' },
+      stores.map((st) =>
+        el(
+          'label',
+          { class: 'check-chip', style: { '--chip-color': st.color } },
+          el('input', { type: 'checkbox', checked: state.storeIds.has(st.id), 'data-mgr-store': st.id, onchange: (ev) => (ev.currentTarget.checked ? state.storeIds.add(st.id) : state.storeIds.delete(st.id)) }),
+          el('span', { class: 'check-chip__label' }, st.name)
+        )
+      )
+    );
+    const showError = (msg) => {
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+    };
+
+    async function onSubmit(ev) {
+      ev.preventDefault();
+      if (state.busy) return;
+      errorBox.hidden = true;
+      const fields = { staffId: state.staffId, name: nameInput.value, email: emailInput.value, storeIds: [...state.storeIds] };
+      // 勤怠用 iPad のアドレスは使えない（ログインすると iPad の画面になるため）
+      const backend = K.app.cloudBackend ? K.app.cloudBackend() : null;
+      const m = state.staffId ? staff.find((x) => x.id === state.staffId) : null;
+      const target = String(m ? m.email || '' : fields.email).trim().toLowerCase();
+      state.busy = true;
+      try {
+        if (target && backend && backend.loadKiosks) {
+          const kiosk = (await backend.loadKiosks()).find((k) => String(k.email).toLowerCase() === target && !k.deleted);
+          if (kiosk) throw new Error('このメールアドレスは、勤怠用 iPad に登録されています。幹部には、別のアドレスを使ってください。');
+        }
+        K.storage.saveManager(isNew ? null : g.email, fields);
+        K.app.toast(isNew ? '幹部を登録しました。「パスワード設定用のメールを送る」を押してください' : '保存しました', 3500);
+        closeMgrForm();
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        state.busy = false;
+      }
+    }
+
+    function onRemove() {
+      if (!window.confirm(`${g.name ? `${g.name}さん` : 'この人'}を幹部から外しますか？\n外すと、幹部の画面に入れなくなります（スタッフとして登録されていれば、スタッフの画面は使えます）。`)) return;
+      try {
+        K.storage.removeManager(g.email);
+        K.app.toast('幹部から外しました');
+        closeMgrForm();
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    return el(
+      'form',
+      { class: 'card mgr-form', 'data-mgr-form': '', onsubmit: onSubmit, novalidate: true },
+      el('h2', { class: 'card__title' }, isNew ? '幹部を追加' : g.name ? `幹部の編集（${g.name}さん）` : '幹部の編集'),
+      el(
+        'div',
+        { class: 'field' },
+        el('label', { class: 'field__label', for: 'mgr-staff' }, 'スタッフの名簿の人'),
+        staffSelect,
+        el('p', { class: 'field__note' }, 'シフトに入る人は、名簿の本人を選びます。名簿にいない人は「名簿にいない」を選んで、名前とメールアドレスを入れます。'),
+        linkedInfo
+      ),
+      ownFields,
+      el('div', { class: 'field' }, el('p', { class: 'field__label' }, '担当する店舗'), storeChecks, el('p', { class: 'field__note' }, '担当する店舗の申請を判断し、確定したシフトを見られます。いくつでも選べます。')),
+      errorBox,
+      el(
+        'div',
+        { class: 'actions' },
+        el('button', { type: 'submit', class: 'btn btn--primary' }, isNew ? '登録する' : '保存する'),
+        el('button', { type: 'button', class: 'btn btn--ghost', onclick: closeMgrForm }, 'キャンセル'),
+        isNew ? null : el('button', { type: 'button', class: 'btn btn--danger', 'data-mgr-remove': '', onclick: onRemove }, '幹部から外す')
+      )
+    );
+  }
+
   function move(id, direction) {
     try {
       K.storage.moveStaff(id, direction);
@@ -948,12 +1294,19 @@
       container.append(formTarget === 'new' ? staffForm(null) : staffForm(editing));
       return;
     }
+    const preset = mgrTarget && mgrTarget.startsWith('staff:') ? mgrTarget.slice(6) : null;
+    const mgr = mgrTarget && mgrTarget !== 'new' && !preset && K.storage.getManagers ? K.storage.getManagers().find((g) => g.email === mgrTarget) : null;
+    if (mgrTarget === 'new' || preset || mgr) {
+      container.append(managerForm(mgr, preset));
+      return;
+    }
 
     // 表示するのは、ヘッダーで選んだ店舗のスタッフだけ
     const store = K.app.currentStore();
     const inactive = K.storage.getStaff({ storeId: store.id, includeInactive: true }).filter((m) => !m.active);
 
     const parts = [
+      loginOverview(),
       el(
         'div',
         { class: 'toolbar' },

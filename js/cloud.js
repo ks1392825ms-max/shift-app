@@ -310,7 +310,8 @@
       fsMod.onSnapshot(
         fsMod.collection(db, k),
         (snap) => {
-          lists[k] = snap.docs.map((d) => d.data());
+          // 幹部（managers）は、Firebase の管理画面で作った記録に id がないので、ドキュメント名（メールアドレス）を id にする
+          lists[k] = snap.docs.map((d) => (k === 'managers' ? { id: d.id, ...d.data() } : d.data()));
           markLoaded(k);
           emit();
         },

@@ -93,6 +93,10 @@
     staffAccounts: (r) =>
       isStr(r.email, 254) && r.id === r.email && Array.isArray(r.staffIds) && r.staffIds.every(isId) &&
       Array.isArray(r.storeIds) && r.storeIds.every(isId),
+    // 幹部（11/15〜 設定 > スタッフの幹部の欄）
+    managers: (r) =>
+      isStr(r.email, 254) && r.id === r.email && Array.isArray(r.storeIds) && r.storeIds.every(isId) &&
+      isStr(r.name || '', 12) && (r.staffId === undefined || r.staffId === null || isId(r.staffId)),
   };
 
   // 段階Aで足した項目（ある場合だけ）：正しくない値は使わない（記録そのものは取り込む）

@@ -312,7 +312,6 @@
       resolve = r;
     });
     lockState = { uid, resolve, promise, digits: '', busy: false, timer: null };
-    if (K.splash) K.splash.hold(); // 起動のアニメーションは、解除してから最初から
     renderLock();
     setAppHidden(true);
     if (hasBio(uid)) tryBio(true);
@@ -328,7 +327,8 @@
     const box = document.getElementById('quick-lock');
     if (box) box.remove();
     setAppHidden(false);
-    if (K.splash) K.splash.release(result);
+    // 解除できたら、起動のアニメーションを流す（11/15〜 開いたときには出さず、解除したあとにだけ）
+    if (result && K.splash) K.splash.play();
     s.resolve(result);
   }
 
