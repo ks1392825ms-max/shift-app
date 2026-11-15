@@ -12,6 +12,14 @@
   // 「ログインする人」の表の絞り込み（all / mgr / staff / nomail）
   let loginFilter = 'all';
 
+  // 携帯会社のメール（11/16〜）：パソコンなどから送られたメールを受け取らない設定のことが多く、届きにくい
+  const CARRIER_DOMAINS = ['docomo.ne.jp', 'ezweb.ne.jp', 'au.com', 'softbank.ne.jp', 'i.softbank.jp', 'ymobile.ne.jp', 'y-mobile.ne.jp', 'uqmobile.jp', 'disney.ne.jp', 'rakumail.jp'];
+  function isCarrierMail(email) {
+    const dom = String(email || '').trim().toLowerCase().split('@')[1] || '';
+    return CARRIER_DOMAINS.some((d) => dom === d || dom.endsWith(`.${d}`));
+  }
+  const CARRIER_NOTE = '携帯会社のメールは、届かないことがあります。Android の人は Gmail、iPhone の人は iCloud メール（@icloud.com）がおすすめです。携帯会社のメールのままにするときは、本人に「firebaseapp.com」からのメールを受け取る設定をしてもらってください。';
+
   function openForm(target) {
     formTarget = target;
     K.app.rerender();
@@ -166,7 +174,9 @@
       autocomplete: 'off',
       placeholder: '例：name@example.com（なければ空欄）',
       value: member ? member.email || '' : '',
+      oninput: () => (carrierNote.hidden = !isCarrierMail(emailInput.value)),
     });
+    const carrierNote = el('p', { class: 'field__note carrier-note', 'data-carrier-note': '', hidden: !isCarrierMail(member && member.email) }, CARRIER_NOTE);
 
     // 曜日のチェック（固定休・この店舗で働く曜日）
     function weekdayChips(name, set) {
@@ -502,6 +512,7 @@
         { class: 'field' },
         el('label', { class: 'field__label', for: 'staff-email' }, 'ログイン用のメールアドレス（任意）'),
         emailInput,
+        carrierNote,
         el('p', { class: 'field__note' }, '希望休・有給の申請で、本人がログインするためのメールアドレスです。共有モードでは Firebase にだけ保存し、公開するファイルには入りません。'),
         member && K.storage.isCloud() && K.storage.getManagers && K.storage.getManagers().some((g) => g.staffId === member.id)
           ? el('p', { class: 'field__note', 'data-staff-is-mgr': '' }, 'この人は幹部としても登録されています。メールアドレスを変えて保存すると、幹部の登録も新しいアドレスに移ります。')
@@ -950,6 +961,82 @@
   }
   const MAIL_SHORT = { sending: '送信中…', accepted: '受付済み', failed: '送れなかった' };
 
+  // ---- はじめかたの案内（11/16〜）：1人ずつの案内の文をコピーして、LINE などで本人に送る・アプリの URL の QR コード ----
+  // 文には、その人の登録アドレスが全部入る（管理者の画面だけで作る。本人にだけ送る）
+  const INVITE_QR = 'icons/login-qr.svg'; // https://ks1392825ms-max.github.io/shift-app/?login の QR（macOS の CoreImage で作成・読み取りで確認済み）
+  const SENDER = 'noreply@r-r-m-0000.firebaseapp.com';
+  function loginUrl() {
+    const b = K.app.cloudBackend ? K.app.cloudBackend() : null;
+    return (b && b.loginEntryUrl && b.loginEntryUrl()) || 'https://ks1392825ms-max.github.io/shift-app/?login';
+  }
+  function inviteText(r) {
+    const storeName = (id) => (K.storage.getStore(id) || {}).name || '';
+    const who = [r.staff ? `${storeName(r.staff.storeId)}・スタッフ` : null, r.mgr ? `幹部（担当：${storeNames(r.mgr.storeIds)}）` : null].filter(Boolean).join('／');
+    return [
+      '【RENASCOR SHIFT のはじめかた】',
+      `${r.name || ''}さん（${who}）`,
+      '',
+      ...(isCarrierMail(r.email)
+        ? ['※ 登録したアドレスは携帯会社のメールです。先に、メールの設定で「firebaseapp.com」からのメールを受け取れるようにしてください（「受信リスト設定」「許可するメール」などの名前です）。', '']
+        : []),
+      '① 下のURLを開いて、ホーム画面に追加してください',
+      loginUrl(),
+      '',
+      `② 「${SENDER}」から届くメールを開いて、`,
+      '   1時間以内にリンクを押し、パスワードを決めてください',
+      `   （登録したアドレス：${r.email}）`,
+      '   メールが見つからないときは、迷惑メールのフォルダーを見てください。',
+      '   リンクが切れたときは、ログイン画面の',
+      '   「初めての方・パスワードを忘れた方」から送り直せます',
+      '',
+      '③ アプリで、メールアドレスと決めたパスワードでログインします',
+      '',
+      '※ メールが届きにくいときは、Android の人は Gmail、iPhone の人は iCloud メール（@icloud.com）で登録し直すと届きやすいです。管理者に伝えてください。',
+    ].join('\n');
+  }
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {
+      // 古いブラウザ：見えない入力欄に入れてコピー
+      const ta = el('textarea', { style: { position: 'fixed', top: '-1000px', opacity: '0' } }, text);
+      document.body.append(ta);
+      ta.select();
+      let ok = false;
+      try {
+        ok = document.execCommand('copy');
+      } catch (err) {
+        ok = false;
+      }
+      ta.remove();
+      return ok;
+    }
+  }
+  async function copyInvite(r, memberId) {
+    const ok = await copyText(inviteText(r));
+    if (!ok) return K.app.toast('コピーできませんでした。もう一度押してください', 3500);
+    const sent = lastMail(memberId);
+    K.app.toast(sent && sent.status === 'accepted' ? `${r.name}さんの案内をコピーしました。LINE などで本人に送ってください` : `${r.name}さんの案内をコピーしました。先に「メールを送る」を押してください（②のメールは、そのときに届きます）`, 4500);
+  }
+  function showQr() {
+    const close = () => layer.remove();
+    const layer = el(
+      'div',
+      { class: 'invite-qr', 'data-invite-qr': '', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'アプリのQRコード', onclick: (ev) => { if (ev.target === layer) close(); } },
+      el(
+        'div',
+        { class: 'invite-qr__box' },
+        el('h3', null, 'アプリのQRコード'),
+        el('img', { src: INVITE_QR, alt: 'アプリのログイン画面のQRコード', width: '240', height: '240' }),
+        el('p', { class: 'invite-qr__url' }, loginUrl()),
+        el('p', { class: 'field__note' }, 'スマホのカメラで読み取ると、アプリのログイン画面が開きます。開いたら「ホーム画面に追加」してもらってください。'),
+        el('button', { type: 'button', class: 'btn btn--primary btn--block', onclick: close }, '閉じる')
+      )
+    );
+    document.body.append(layer);
+  }
+
   // 「ログインする人」：幹部とスタッフを1つの表にまとめる（全店舗）。
   // 1行＝1人。幹部でスタッフの人は1行に「幹部」「スタッフ」の両方の札。名簿にいない幹部も入れる
   function loginPeople() {
@@ -1028,7 +1115,7 @@
           el('span', { class: 'lp-badges' }, r.mgr ? el('span', { class: 'lp-badge is-mgr' }, '幹部') : null, r.staff ? el('span', { class: 'lp-badge is-staff' }, 'スタッフ') : null)
         ),
         r.mgr ? el('p', { class: 'lp-card__mgr' }, `担当：${storeNames(r.mgr.storeIds)}`) : null,
-        el('p', { class: 'lp-card__mail' }, r.email ? maskEmail(r.email) : el('span', { class: 'lp-none' }, 'メール未登録')),
+        el('p', { class: 'lp-card__mail' }, r.email ? maskEmail(r.email) : el('span', { class: 'lp-none' }, 'メール未登録'), r.email && isCarrierMail(r.email) ? el('span', { class: 'lp-carrier', title: CARRIER_NOTE }, '携帯会社のメール・届きにくい') : null),
         el(
           'p',
           { class: 'lp-card__state' },
@@ -1042,6 +1129,7 @@
           'div',
           { class: 'lp-actions' },
           r.email ? managerMailButton({ staffId: r.staff ? r.staff.id : null, email: r.email, name: r.name }, true) : null,
+          r.email ? el('button', { type: 'button', class: 'btn btn--ghost btn--small lp-invite', 'data-invite-copy': r.key, onclick: () => copyInvite(r, member.id) }, '案内をコピー') : null,
           el('button', { type: 'button', class: 'text-btn', onclick: () => (r.staff ? openForm(r.staff.id) : openMgrForm(r.mgr.email)) }, r.email ? '編集' : 'メールを入れる'),
           r.staff && r.mgr ? el('button', { type: 'button', class: 'text-btn', 'data-mgr-edit': '', onclick: () => openMgrForm(r.mgr.email) }, '幹部の設定') : null,
           r.staff && !r.mgr && r.email ? el('button', { type: 'button', class: 'text-btn lp-make-mgr', 'data-mgr-make': '', onclick: () => openMgrForm(`staff:${r.staff.id}`) }, '幹部にする') : null
@@ -1067,7 +1155,12 @@
         'div',
         { class: 'lp-head' },
         el('h2', { class: 'lp-title' }, 'ログインする人（全店舗）'),
-        el('button', { type: 'button', class: 'btn btn--ghost btn--small', 'data-mgr-add': '', onclick: () => openMgrForm('new') }, '＋ 名簿にいない幹部を追加')
+        el(
+          'div',
+          { class: 'lp-head__btns' },
+          el('button', { type: 'button', class: 'btn btn--ghost btn--small', 'data-invite-qr-open': '', onclick: showQr }, 'QRコードを表示'),
+          el('button', { type: 'button', class: 'btn btn--ghost btn--small', 'data-mgr-add': '', onclick: () => openMgrForm('new') }, '＋ 名簿にいない幹部を追加')
+        )
       ),
       storeBoard(all),
       el('p', { class: 'field__note sb-note' }, '赤い名前は幹部（担当する店舗）、白い名前はスタッフ（所属する店舗）です。「!」はメールアドレスが未登録で、まだログインできない人です。名前を押すと編集できます。'),
@@ -1088,7 +1181,7 @@
       el(
         'p',
         { class: 'field__note lp-note' },
-        '幹部にするときは、スタッフの行の「幹部にする」を押します。メールアドレスを変えるときは「編集」から。幹部の登録も一緒に変わります。登録したら「メールを送る」を押してください（相手がメールのリンクでパスワードを決めると、ログインできます）。'
+        '「案内をコピー」は、その人だけに送ってください（登録したメールアドレスが入っています）。幹部にするときは、スタッフの行の「幹部にする」を押します。メールアドレスを変えるときは「編集」から。幹部の登録も一緒に変わります。登録したら「メールを送る」を押してください（相手がメールのリンクでパスワードを決めると、ログインできます）。'
       )
     );
   }
@@ -1101,13 +1194,14 @@
     const state = { staffId: g ? g.staffId || '' : presetMember ? presetMember.id : '', storeIds: new Set(g ? g.storeIds : [presetMember ? presetMember.storeId : K.app.currentStore().id]), busy: false };
     const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
     const nameInput = el('input', { id: 'mgr-name', class: 'field__input', type: 'text', maxlength: '12', autocomplete: 'off', placeholder: '例：山田', value: g && !g.staffId ? g.name : '' });
-    const emailInput = el('input', { id: 'mgr-email', class: 'field__input', type: 'email', inputmode: 'email', autocomplete: 'off', placeholder: '例：name@example.com', value: g && !g.staffId ? g.email : '' });
+    const emailInput = el('input', { id: 'mgr-email', class: 'field__input', type: 'email', inputmode: 'email', autocomplete: 'off', placeholder: '例：name@example.com', value: g && !g.staffId ? g.email : '', oninput: () => (mgrCarrier.hidden = !isCarrierMail(emailInput.value)) });
+    const mgrCarrier = el('p', { class: 'field__note carrier-note', 'data-carrier-note': '', hidden: !isCarrierMail(g && !g.staffId ? g.email : '') }, CARRIER_NOTE);
     const linkedInfo = el('p', { class: 'field__note mgr-linked', 'data-mgr-linked': '' });
     const ownFields = el(
       'div',
       { class: 'mgr-own' },
       el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'mgr-name' }, '名前'), nameInput),
-      el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'mgr-email' }, 'ログイン用のメールアドレス'), emailInput)
+      el('div', { class: 'field' }, el('label', { class: 'field__label', for: 'mgr-email' }, 'ログイン用のメールアドレス'), emailInput, mgrCarrier)
     );
     function paintLink() {
       const m = state.staffId ? staff.find((x) => x.id === state.staffId) : null;

@@ -8806,3 +8806,17 @@ body.is-kv-full .kv-back {
 .lp-card { grid-template-columns: minmax(0, 1fr); }
 .lp-card > *, .lp-card .lp-actions { grid-area: auto; }
 .lp-card .lp-chip { white-space: normal; }
+
+/* はじめかたの案内（11/16〜）：案内をコピー・QR コード */
+.lp-head__btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.lp-card .lp-actions .lp-invite { width: 100%; }
+.invite-qr { position: fixed; inset: 0; z-index: 9000; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, 0.45); }
+.invite-qr__box { width: min(340px, 100%); display: grid; gap: 10px; justify-items: center; padding: 20px; border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); text-align: center; }
+.invite-qr__box h3 { margin: 0; font-size: 1.05rem; }
+.invite-qr__box img { width: 240px; height: 240px; max-width: 100%; border-radius: 10px; background: #fff; }
+.invite-qr__url { margin: 0; font-size: 0.75rem; color: var(--text-muted); word-break: break-all; }
+/* 携帯会社のメールの注意（11/16〜） */
+.carrier-note { color: #b5651d; background: #fff4e6; border-radius: 8px; padding: 6px 10px; }
+.carrier-note[hidden] { display: none; }
+.lp-carrier { display: inline-block; margin-left: 6px; font-size: .68rem; font-weight: 700; color: #b5651d; background: #fff0e0; border-radius: 99px; padding: 0 8px; }
+@media (prefers-color-scheme: dark) { .carrier-note { background: #3a2a1a; color: #f5c28e; } .lp-carrier { background: #3a2a1a; color: #f5c28e; } }
