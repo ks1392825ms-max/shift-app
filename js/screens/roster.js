@@ -1,4 +1,5 @@
 // シフト表（日付が縦・スタッフが横。右に St／As／計の人数）
+// 11/17〜 表の大きさ：月全体を1画面（2本指で広げる・js/fit-table.js）／ふつうの大きさ。列の並べ替えは、ふつうの大きさのときだけ
 (function () {
   'use strict';
   const K = window.ShiftApp;
@@ -1039,6 +1040,7 @@
 
   // マウス・ペン：押したまま少し動かしたら始める（指のときは onHeadTouchStart）
   function onHeadPointerDown(e) {
+    if (isFit()) return; // 11/16〜 月全体の表示では、並べ替えはしない（小さい表で、まちがって動かさないように）
     if (e.pointerType === 'touch' || e.button !== 0) return;
     beginDrag(e.currentTarget, e.clientX, e.clientY, false);
   }
@@ -1050,6 +1052,7 @@
 
   // タッチ：動かさずに長押ししたら始める（すぐ動かしたときは、今までどおり表のスクロール）
   function onHeadTouchStart(e) {
+    if (isFit()) return;
     if (e.touches.length !== 1) return;
     beginDrag(e.currentTarget, e.touches[0].clientX, e.touches[0].clientY, true);
   }
@@ -1186,6 +1189,7 @@
 
   // キーボード：見出しを選んで Alt＋←／→ で1つずつ動かす
   function onHeadKey(e) {
+    if (isFit()) return;
     if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
     e.preventDefault();
     const ids = view.staff.map((m) => m.id);
@@ -1309,6 +1313,69 @@
     return U.toDateStr(new Date(y, m - 1 + delta, 1)).slice(0, 7);
   }
 
+  // ---- 表の大きさ（11/16〜）：月全体を1画面（2本指で広げる）／ふつうの大きさ。選んだほうは、この端末が覚える ----
+  const FIT_KEY = 'shift-roster-fit';
+  const fitState = { mode: 'all', zoom: null, fitZoom: 1, key: '', left: 0, top: 0 };
+  try {
+    if (localStorage.getItem(FIT_KEY) === 'normal') fitState.mode = 'normal';
+  } catch (e) {
+    /* 保存できない端末では、毎回「月全体」 */
+  }
+  const isFit = () => fitState.mode === 'all';
+
+  function setFitMode(mode) {
+    fitState.mode = mode;
+    fitState.zoom = null;
+    try {
+      localStorage.setItem(FIT_KEY, mode);
+    } catch (e) {
+      /* 覚えられなくても、今の表示は切り替える */
+    }
+    K.app.rerender();
+  }
+
+  function fitBar() {
+    return el(
+      'div',
+      { class: 'fit-bar' },
+      el(
+        'div',
+        { class: 'segment segment--compact fit-bar__seg', role: 'group', 'aria-label': '表の大きさ' },
+        [['all', '月全体を1画面'], ['normal', 'ふつうの大きさ']].map(([key, label]) =>
+          el('button', { type: 'button', class: `segment__btn${fitState.mode === key ? ' is-selected' : ''}`, 'aria-pressed': String(fitState.mode === key), onclick: () => setFitMode(key) }, label)
+        )
+      ),
+      isFit() ? el('button', { type: 'button', class: 'fit-bar__reset', hidden: true, onclick: () => { fitState.zoom = null; fitNow(); } }, '全体に戻す') : null,
+      el('p', { class: 'fit-bar__hint' }, isFit() ? '2本の指で広げると大きくなります。列の並べ替えは「ふつうの大きさ」で' : '名前を長押し（パソコンはドラッグ）で列を並べ替え')
+    );
+  }
+
+  function fitNow() {
+    const wrap = document.querySelector('#screen .roster-wrap');
+    if (!wrap || !K.fitTable) return;
+    K.fitTable.fit(wrap, fitState, { bar: () => document.querySelector('body > .bottom-nav'), reset: () => document.querySelector('#screen .fit-bar__reset') });
+  }
+
+  // 作り直したあと（マスを直したときなど）も、広げた大きさと表の中の位置をそのままにする。月・店舗が変わったら最初から
+  function startFit(wrap) {
+    const key = `${view.store.id}|${view.month}`;
+    if (fitState.key !== key) {
+      fitState.key = key;
+      fitState.zoom = null;
+      fitState.left = 0;
+      fitState.top = 0;
+    }
+    wrap.addEventListener('scroll', () => {
+      fitState.left = wrap.scrollLeft;
+      fitState.top = wrap.scrollTop;
+    }, { passive: true });
+    const keep = [fitState.left, fitState.top];
+    setTimeout(() => {
+      fitNow();
+      [wrap.scrollLeft, wrap.scrollTop] = keep;
+    }, 0);
+  }
+
   function render(container) {
     closeSheet(false);
     const store = K.app.currentStore();
@@ -1359,7 +1426,7 @@
               scope: 'col',
               'data-staff': m.id,
               tabindex: '0',
-              title: 'ドラッグで左右に並べ替え（スマートフォンは長押ししてから動かす）',
+              title: isFit() ? '' : 'ドラッグで左右に並べ替え（スマートフォンは長押ししてから動かす）',
               onpointerdown: onHeadPointerDown,
               ontouchstart: onHeadTouchStart,
               onkeydown: onHeadKey,
@@ -1392,8 +1459,11 @@
       footer()
     );
 
+    const wrap = el('div', { class: 'roster-wrap' }, view.table);
+    if (isFit()) startFit(wrap);
     container.append(
-      el('div', { class: 'roster-wrap' }, view.table),
+      fitBar(),
+      wrap,
       el(
         'p',
         { class: 'roster-legend' },

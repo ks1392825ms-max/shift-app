@@ -418,10 +418,10 @@
         el('div', { class: 'kiosk-names kiosk-names--extra' }, people().extras.map((m) => el('button', { type: 'button', class: 'kiosk-nm is-wait', onclick: () => pick({ id: m.id, name: m.name, plan: null, punches: [], extra: true }) }, el('b', null, m.name)))),
       ];
     } else if (s.kind === 'exit') {
-      const input = el('input', { type: 'password', class: 'kiosk-input', id: 'kiosk-pass', autocomplete: 'current-password', placeholder: 'この iPad のアカウントのパスワード' });
+      const input = el('input', { type: 'password', class: 'kiosk-input', id: 'kiosk-pass', autocomplete: 'current-password', placeholder: 'このタブレットのアカウントのパスワード' });
       panel = [
         el('h3', null, '勤怠の画面を閉じる（管理者）'),
-        el('p', null, 'ログアウトします。この iPad のアカウントのパスワードを入れてください。'),
+        el('p', null, 'ログアウトします。このタブレットのアカウントのパスワードを入れてください。'),
         input,
         s.msg ? el('p', { class: 'kiosk-err', role: 'alert' }, s.msg) : null,
         el(
@@ -506,7 +506,7 @@
         { class: 'kv-bar', role: 'note' },
         el('span', { class: 'kv-badge' }, '見本'),
         el('span', { class: 'kv-text' }, `${store.name}のタブレットと同じ画面です。押しても記録されません。`),
-        el('span', { class: 'kv-rotate' }, 'スマホを横向きにすると、iPad と同じ画面で見られます'),
+        el('span', { class: 'kv-rotate' }, 'スマホを横向きにすると、お店のタブレットと同じ画面で見られます'),
         el('span', { class: 'kv-back' }, '縦向きに戻すと、管理者の画面に戻ります')
       )
     );

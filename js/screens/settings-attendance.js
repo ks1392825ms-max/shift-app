@@ -42,13 +42,53 @@
     K.app.rerender();
   }
 
+  // 11/17〜 勤怠用タブレットにメールを送る：パスワードを決めるメール（まだアカウントがないアドレスは、先にアカウントを作る）
+  //   送り方・続けて送らない間隔・送信の制限・記録は、スタッフへのメールと同じ（settings-staff.js の K.loginMail）
+  function kioskMailButton(store, k) {
+    const backend = K.app.cloudBackend ? K.app.cloudBackend() : null;
+    if (!K.loginMail || !backend || !(backend.inviteStaff || backend.sendPasswordReset)) return null;
+    const id = K.loginMail.kioskKey(k.email);
+    const gate = K.loginMail.gate(id);
+    const blocked = !gate.ok && !gate.gapOnly;
+    return el(
+      'button',
+      {
+        type: 'button',
+        class: 'btn btn--primary btn--small',
+        'data-kiosk-mail': k.email,
+        disabled: blocked,
+        onclick: async () => {
+          const g = K.loginMail.gate(id);
+          if (!g.ok) return say(false, g.reason);
+          const ask = g.resend
+            ? `${store.name}のタブレット（${k.email}）への送信は、前に Firebase が受け付けています。\n先に、Gmail の迷惑メールのフォルダーを見ましたか？\nもう一度送りますか？`
+            : `${store.name}の勤怠用タブレット（${k.email}）に、パスワードを決めるメールを送りますか？`;
+          if (!confirm(ask)) return;
+          const run = K.loginMail.send(backend, { id, name: `勤怠用タブレット（${store.name}）`, email: k.email });
+          K.app.rerender();
+          const r = await run;
+          if (r && r.status === 'accepted') say(true, `${store.name}のタブレット用のメールを、Firebase が受け付けました。タブレットの Gmail で「パスワードの再設定」のメールを開き、宛先が ${k.email} のものを選んで、リンクからパスワードを決めてください。そのあと、ログイン画面でこのアドレスとパスワードを入れると、${store.name}の打刻の画面になります。`);
+          else if (r) say(false, `${store.name}のタブレットにメールを送れませんでした。${r.message || ''}${r.help ? `（対処：${r.help}）` : ''}${r.code ? ` エラーコード：${r.code}` : ''}`);
+        },
+      },
+      blocked ? gate.label : gate.resend ? 'もう一度メールを送る' : 'タブレットにメールを送る'
+    );
+  }
+  function kioskMailResult(k) {
+    if (!K.loginMail) return null;
+    const r = K.loginMail.result(K.loginMail.kioskKey(k.email));
+    if (!r) return null;
+    const time = new Date(r.at);
+    return el('p', { class: `field__note att-set-kiosk__status is-${r.status}`, role: 'status' }, `${K.loginMail.status[r.status]}（${time.getMonth() + 1}/${time.getDate()} ${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}）`);
+  }
+
   function kioskCard() {
     const stores = K.storage.getStores();
     return el(
       'section',
       { class: 'card' },
-      el('h2', { class: 'card__title' }, '勤怠用 iPad（店舗ごと）'),
-      el('p', { class: 'hint hint--left' }, '店舗の入口に置く iPad 用のアカウントです。ここで登録したメールアドレスでログインした端末は、その店舗の打刻の画面だけになります（シフト表や設定は開けません）。'),
+      el('h2', { class: 'card__title' }, '勤怠用タブレット（店舗ごと）'),
+      el('p', { class: 'hint hint--left' }, '店舗の入口に置くタブレット（Android・iPad）用のアカウントです。ここで登録したメールアドレスでログインした端末は、その店舗の打刻の画面だけになります（シフト表や設定は開けません）。'),
       el('p', { class: 'hint hint--left' }, 'メールアドレスは、いつもの Gmail に「+店舗名」をつけた形（例：あなたのアドレスが abc@gmail.com なら abc+honten@gmail.com）にすると、新しいアドレスを作らずに、いつもの受信箱でパスワード設定のメールを受け取れます。'),
       stores.map((s) => {
         const list = st.kiosks.filter((k) => k.storeId === s.id && !k.deleted);
@@ -64,15 +104,16 @@
                 list.map((k) =>
                   el(
                     'li',
-                    null,
-                    el('span', null, k.email),
+                    { class: 'att-set-kiosk' },
+                    el('span', { class: 'att-set-kiosk__mail' }, k.email),
+                    kioskMailButton(s, k),
                     el(
                       'button',
                       {
                         type: 'button',
                         class: 'btn btn--ghost btn--small',
                         onclick: async () => {
-                          if (!confirm(`${k.email} の登録を解除しますか？（その iPad では打刻できなくなります）`)) return;
+                          if (!confirm(`${k.email} の登録を解除しますか？（そのタブレットでは打刻できなくなります）`)) return;
                           try {
                             await backend().saveKiosk(k.email, { storeId: k.storeId, deleted: true, createdAt: k.createdAt || new Date().toISOString(), createdBy: email() });
                             k.deleted = true;
@@ -83,7 +124,8 @@
                         },
                       },
                       '解除'
-                    )
+                    ),
+                    kioskMailResult(k)
                   )
                 )
               )
@@ -106,16 +148,16 @@
                     // 11/14〜 1つのアドレスは1つの店舗の iPad（kiosks/{メール}）。同じアドレスで別の店舗を登録すると、前の店舗の登録が上書きされるので止める
                     //   （ほかの端末で登録した分もあるので、保存の直前に読み直して確かめる。解除済みのアドレスは、登録し直せる）
                     const now = (await backend().loadKiosks()).find((k) => String(k.email).toLowerCase() === v && !k.deleted);
-                    if (now && now.storeId === s.id) return say(false, `${v} は、すでに${s.name}の勤怠用 iPad として登録されています。`);
+                    if (now && now.storeId === s.id) return say(false, `${v} は、すでに${s.name}の勤怠用タブレットとして登録されています。`);
                     if (now) {
                       const other = stores.find((x) => x.id === now.storeId);
                       const [local, dom] = v.split('@');
-                      return say(false, `${v} は、すでに${other ? other.name : 'ほかの店舗'}の勤怠用 iPad として登録されています。1つのアドレスは1つの店舗にしか使えません。店舗ごとに別のアドレスにしてください（例：${local.replace(/\+.*$/, '')}+tenpo2@${dom}）。`);
+                      return say(false, `${v} は、すでに${other ? other.name : 'ほかの店舗'}の勤怠用タブレットとして登録されています。1つのアドレスは1つの店舗にしか使えません。店舗ごとに別のアドレスにしてください（例：${local.replace(/\+.*$/, '')}+tenpo2@${dom}）。`);
                     }
                     await backend().saveKiosk(v, { storeId: s.id, deleted: false, createdAt: new Date().toISOString(), createdBy: email() });
                     await K.attendanceView.syncDirectories();
                     st.kiosks = st.kiosks.filter((k) => k.email !== v).concat({ email: v, storeId: s.id, deleted: false });
-                    say(true, `${s.name}の勤怠用 iPad として ${v} を登録しました。iPad で、ログイン画面の「初めての方・パスワードを忘れた方」からパスワードを決めて、ログインしてください。`);
+                    say(true, `${s.name}の勤怠用タブレットとして ${v} を登録しました。続けて、登録したアドレスの横の「タブレットにメールを送る」を押してください。`);
                   } catch (err) {
                     say(false, `登録できませんでした（${err.message}）`);
                   }
@@ -129,17 +171,22 @@
       el(
         'details',
         { class: 'att-howto' },
-        el('summary', null, 'iPad の準備のしかた（最初に1回）'),
+        el('summary', null, 'タブレットの準備のしかた（最初に1回）'),
+        K.loginMail
+          ? el('button', { type: 'button', class: 'btn btn--ghost btn--small att-howto__qr', onclick: () => K.loginMail.showQr('タブレットのカメラで読み取ると、アプリのログイン画面が開きます。開いたら、Chrome の「︙」→「ホーム画面に追加」をしてください。') }, 'タブレットで開くページ（QRコード）')
+          : null,
+        // 11/17〜 お店のタブレットは Android。iPad の手順は下に短く残す
         el(
           'ol',
           null,
-          el('li', null, 'iPad の Safari で SHIFT のログインページを開き、「初めての方・パスワードを忘れた方」から、登録したメールアドレスでパスワードを決める'),
+          el('li', null, '上で登録したアドレスの横の「タブレットにメールを送る」を押す。タブレットの Gmail で届いたメールを開き、リンクからパスワードを決める（宛先のアドレスが、その店舗のものか確かめる）'),
           el('li', null, 'そのメールアドレスとパスワードでログインする（その店舗の打刻の画面になります）'),
-          el('li', null, 'Safari の共有ボタン →「ホーム画面に追加」'),
-          el('li', null, 'iPad の 設定 › アクセシビリティ › アクセスガイド をオン。SHIFT を開いてサイドボタン（ホームボタン）を3回押す →「開始」。ほかの画面に移れなくなります'),
-          el('li', null, '設定 › 画面表示と明るさ › 自動ロック を「なし」にして、電源につないでおく')
+          el('li', null, 'Chrome の右上の「︙」→「ホーム画面に追加」（「アプリをインストール」と出る機種もあります）。次からはホーム画面の SHIFT から開く'),
+          el('li', null, 'タブレットの 設定 › セキュリティ › アプリの固定（画面の固定）をオン（機種によって「その他のセキュリティ設定」の中）。SHIFT を開いて、最近使ったアプリの画面で SHIFT のアイコン →「固定」。ほかの画面に移れなくなります'),
+          el('li', null, '設定 › ディスプレイ › 画面消灯（スリープ）までの時間を、いちばん長くして、電源につないでおく')
         ),
-        el('p', { class: 'hint hint--left' }, '打刻の画面を閉じるときは、右下の「管理者」を押して、この iPad のアカウントのパスワードを入れます。')
+        el('p', { class: 'hint hint--left' }, 'iPad のとき：Safari で開き、共有ボタン →「ホーム画面に追加」。設定 › アクセシビリティ › アクセスガイド で画面を固定し、自動ロックを「なし」にします。'),
+        el('p', { class: 'hint hint--left' }, '打刻の画面を閉じるときは、右下の「管理者」を押して、このタブレットのアカウントのパスワードを入れます。')
       )
     );
   }

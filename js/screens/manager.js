@@ -4,6 +4,8 @@
 // ・担当店舗の判断の履歴を見る
 // ・担当店舗の確定・公開済みのシフト（公開用の写し）を見る（作成中のシフト・担当外の店舗は読めない）
 // 読み書きの決まりは Firestore のルールでも強制している（画面のボタンは、その決まりに合わせて出し分けるだけ）
+// 11/16〜 形を管理者の画面とそろえた：切り替えは下のタブ（確定シフト／カレンダー／勤怠／有給／自分の休み／設定）、開いたときは確定シフト。
+//   確定シフトは、月全体を1画面に収めて表示し、2本指で広げて大きくできる。できること・中身は前と同じ
 (function () {
   'use strict';
   const K = window.ShiftApp;
@@ -26,12 +28,13 @@
       ctx: null, // { stores（担当店舗）, staff（担当店舗のスタッフ）, settings }
       storeId: null,
       month: R().requestWindow().month,
-      tab: 'paid', // paid / calendar / self / roster（11/8〜 幹部が承認するのは有給だけ。希望休は申請したらそのまま確定）
+      tab: 'roster', // roster / calendar / attendance / paid / self / settings（11/8〜 幹部が承認するのは有給だけ。希望休は申請したらそのまま確定）（11/16〜 最初は確定シフト）
       self: { mode: 'off', draft: [], bizDate: null, bizKind: 'day', start: '13:00', end: '15:00', what: '', detail: '' },
       data: null, // { wishRequests, wishCounts, paidRequests, quotas, logs }
       message: null,
       pub: null, // { loading, rosters, month, storeId, error }
       att: null, // 11/12〜 集計表用の名簿 { loading, list, error }
+      fitState: { mode: 'all', zoom: null, fitZoom: 1 }, // 11/16〜 確定シフトの表の大きさ：all（月全体を1画面）/ width（横幅に合わせる）・広げた倍率
     };
     load();
   }
@@ -195,35 +198,41 @@
     );
   }
 
-  function tabs() {
+  // 下のタブ（11/16〜 管理者の画面と同じ形・同じ場所）。有給の判断待ちは、タブに件数
+  const TABS = [
+    ['roster', '▦', '確定シフト'],
+    ['calendar', '▣', 'カレンダー'],
+    ['attendance', '◷', '勤怠'],
+    ['paid', '✉', '有給'],
+    ['self', '☖', '自分の休み'],
+    ['settings', '⚙', '設定'],
+  ];
+
+  function go(key) {
+    view.tab = key;
+    view.message = null;
+    if (key === 'roster' && !view.pub) loadPublished();
+    K.app.rerender();
+    window.scrollTo(0, 0);
+  }
+
+  function nav() {
     const pend = (list) => (list || []).filter((r) => r.status === 'pending').length;
-    const list = [
-      ['paid', '有給', pend(view.data.paidRequests) + pend(view.data.changeRequests)],
-      ['calendar', 'カレンダー', 0],
-      ['attendance', '勤怠', 0],
-      view.account ? ['self', '自分の休み・社用', 0] : null,
-      ['roster', '確定シフト', 0],
-    ].filter(Boolean);
+    const n = pend(view.data.paidRequests) + pend(view.data.changeRequests);
     return el(
-      'div',
-      { class: 'segment segment--compact req-tabs mgr-tabs', role: 'tablist', 'aria-label': '幹部の画面の切り替え' },
-      list.map(([key, label, n]) =>
-        el(
-          'button',
-          {
-            type: 'button',
-            role: 'tab',
-            class: `segment__btn${view.tab === key ? ' is-selected' : ''}`,
-            'aria-selected': String(view.tab === key),
-            onclick: () => {
-              view.tab = key;
-              view.message = null;
-              if (key === 'roster' && !view.pub) loadPublished();
-              K.app.rerender();
-            },
-          },
-          label,
-          n ? el('span', { class: 'req-badge' }, String(n)) : null
+      'nav',
+      { class: 'bottom-nav mgr-nav', 'aria-label': '幹部の画面の切り替え' },
+      el(
+        'div',
+        { class: 'bottom-nav__inner' },
+        TABS.filter(([key]) => key !== 'self' || view.account).map(([key, icon, label]) =>
+          el(
+            'button',
+            { type: 'button', class: `bottom-nav__btn${view.tab === key ? ' is-active' : ''}`, 'data-tab': key, 'aria-current': view.tab === key ? 'page' : null, onclick: () => go(key) },
+            el('span', { class: 'bottom-nav__icon', 'aria-hidden': 'true' }, icon),
+            label,
+            key === 'paid' && n ? el('span', { class: 'mgr-nav__badge', 'aria-label': `判断待ち${n}件` }, String(n)) : null
+          )
         )
       )
     );
@@ -674,7 +683,6 @@
     const inMonth = p.rosters.filter((r) => r.month === p.month).sort((a, b) => (a.storeName || '').localeCompare(b.storeName || ''));
     const roster = inMonth.find((r) => r.storeId === p.storeId) || inMonth[0] || null;
     const parts = [
-      el('p', { class: 'hint hint--left' }, '確定・公開済みのシフトだけを表示します（作成中のシフトは表示されません）。'),
       el(
         'div',
         { class: 'segment segment--compact req-mode', role: 'group', 'aria-label': '表示する月' },
@@ -697,7 +705,7 @@
       ),
     ];
     if (!inMonth.length) {
-      parts.push(el('p', { class: 'empty-row' }, `${R().monthLabel(p.month)}に確定したシフトは、まだありません。`));
+      parts.push(el('p', { class: 'empty-row' }, `${R().monthLabel(p.month)}に確定したシフトは、まだありません。`), pubNote());
       return el('div', null, parts);
     }
     parts.push(
@@ -722,9 +730,40 @@
         )
       )
     );
-    parts.push(pubRoster(roster));
+    parts.push(fitBar(), pubRoster(roster), pubNote());
+    setTimeout(fitRoster, 0);
     return el('div', null, parts);
   }
+
+  function pubNote() {
+    return el('p', { class: 'hint hint--left fit-bar__note' }, '確定・公開済みのシフトだけを表示します（作成中のシフトは表示されません）。');
+  }
+
+  // 表の大きさ：月全体を1画面（最初）／横幅に合わせる。広げたあとは「全体に戻す」
+  function fitBar() {
+    const fs = view.fitState;
+    return el(
+      'div',
+      { class: 'fit-bar' },
+      el(
+        'div',
+        { class: 'segment segment--compact fit-bar__seg', role: 'group', 'aria-label': '表の大きさ' },
+        [['all', '月全体を1画面'], ['width', '横幅に合わせる']].map(([key, label]) =>
+          el('button', { type: 'button', class: `segment__btn${fs.mode === key ? ' is-selected' : ''}`, 'aria-pressed': String(fs.mode === key), onclick: () => { fs.mode = key; fs.zoom = null; K.app.rerender(); } }, label)
+        )
+      ),
+      el('button', { type: 'button', class: 'fit-bar__reset', hidden: true, onclick: () => { fs.zoom = null; fitRoster(); } }, '全体に戻す'),
+      el('p', { class: 'fit-bar__hint' }, '2本の指で広げると大きくなります')
+    );
+  }
+
+  // 表を画面に合わせて縮める・2本指で広げる（管理者のシフト表と共通：js/fit-table.js）
+  function fitRoster() {
+    if (!view || !K.fitTable) return;
+    K.fitTable.fit(document.querySelector('#screen .manager-roster'), view.fitState, { bar: () => document.querySelector('#screen .mgr-nav'), reset: () => document.querySelector('#screen .fit-bar__reset') });
+  }
+  // 向きを変えたら、合わせ直す
+  window.addEventListener('orientationchange', () => setTimeout(fitRoster, 300));
 
   // 申請中の件数（選んでいる店舗・表示している月）：判断が必要なもの
   function pendingCount() {
@@ -826,14 +865,23 @@
     });
   }
 
-  // いちばん下の「アカウント・この端末の設定」（スタッフの画面と同じ形。ふだんは閉じておく）
+  // 「アカウント・この端末の設定」：読み込み中・担当店舗がないときは、いちばん下に閉じて置く。ふだんは「設定」のタブ（11/16〜）
   function accountSection() {
-    const user = K.app.cloudUser();
     return el(
       'details',
       { class: 'req-account' },
       el('summary', { class: 'req-account__summary' }, el('span', { class: 'req-account__title' }, 'アカウント・この端末の設定'), el('span', { class: 'req-account__hint' }, '勤怠の番号・簡単ログイン・パスワード・ログアウト')),
-      el(
+      accountBody()
+    );
+  }
+
+  function settingsView() {
+    return el('div', { class: 'mgr-settings' }, el('h3', { class: 'mgr-sec' }, 'アカウント・この端末の設定'), accountBody());
+  }
+
+  function accountBody() {
+    const user = K.app.cloudUser();
+    return el(
         'div',
         { class: 'req-account__body' },
         el('p', { class: 'hint hint--left req-account__who' }, `幹部としてログインしています。担当店舗の申請を、受付期間（${R().periodLabel()}）に判断できます。`),
@@ -843,8 +891,7 @@
         // 勤怠の番号（PIN）（11/9〜。スタッフとしても登録されている幹部だけ）
         K.attendanceView && view.account ? K.attendanceView.pinCard(view.account.staffIds, view.email) : null,
         el('button', { type: 'button', class: 'btn btn--ghost btn--block', onclick: () => K.app.cloudActions.signOut() }, 'ログアウト')
-      )
-    );
+      );
   }
 
   function render(container, params) {
@@ -858,18 +905,27 @@
       return;
     }
     if (view.tab === 'self' && !view.account) view.tab = 'paid';
-    // 11/14〜 スマホの打刻（GPS）：幹部がスタッフとしても登録されているときは、上に「打刻」のカード
+    if (view.tab === 'roster' && !view.pub) setTimeout(loadPublished, 0);
+    // 上の見出しに、今のタブの名前（管理者の画面と同じ）
+    const title = document.getElementById('screen-title');
+    if (title) title.textContent = (TABS.find(([key]) => key === view.tab) || [])[2] || '幹部の画面';
+    container.dataset.mgrTab = view.tab;
     const me = selfMember();
-    const parts = [hero(), me && K.phonePunch ? K.phonePunch.card(me) : null, tabs()];
+    const parts = [];
+    // 有給のタブ：上に「あいさつ」（担当店舗・判断待ちの件数・受付の状況）。確定シフトのタブ：勤怠の締めのお知らせ
+    if (view.tab === 'paid') parts.push(hero());
+    if (view.tab === 'roster') parts.push(attendanceNotice());
+    // 11/14〜 スマホの打刻（GPS）：幹部がスタッフとしても登録されているときは、勤怠のタブの上に「打刻」のカード
+    if (view.tab === 'attendance' && me && K.phonePunch) parts.push(K.phonePunch.card(me));
     if (view.tab === 'paid' || view.tab === 'calendar') {
       // 担当が2店舗以上の人だけ、店舗を選ぶ。月の切り替え
       if (view.ctx.stores.length > 1) parts.push(el('div', { class: 'mgr-stores' }, storeChips()));
       parts.push(el('div', { class: 'mgr-bar mgr-bar--slim' }, monthNav()));
     }
     if (view.message && view.message.text) parts.push(el('p', { class: view.message.ok ? 'sync__result' : 'form-error', role: 'status' }, view.message.text));
-    const body = view.tab === 'paid' ? paidView() : view.tab === 'calendar' ? calendarView() : view.tab === 'self' ? selfView() : view.tab === 'attendance' ? attendanceView() : rosterView();
-    parts.push(el('section', { class: 'card req-card mgr-body' }, body));
-    parts.push(accountSection());
+    const body = view.tab === 'paid' ? paidView() : view.tab === 'calendar' ? calendarView() : view.tab === 'self' ? selfView() : view.tab === 'attendance' ? attendanceView() : view.tab === 'settings' ? settingsView() : rosterView();
+    parts.push(el('section', { class: `card req-card mgr-body mgr-body--${view.tab}` }, body));
+    parts.push(nav());
     container.append(...parts.filter(Boolean));
   }
 

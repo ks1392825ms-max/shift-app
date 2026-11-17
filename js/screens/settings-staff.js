@@ -674,7 +674,15 @@
     for (const c of String(email)) h = ((h * 33) ^ c.codePointAt(0)) >>> 0;
     return `mgr_${h.toString(16).padStart(8, '0')}`;
   }
+  // 11/17〜 勤怠用タブレット（設定 › 勤怠）にも送る：'kio_'＋アドレスから作った短い番号。名前とアドレスは、この画面を開いている間だけ覚える（記録には残さない）
+  function kioskKey(email) {
+    return `kio_${mgrKey(email).slice(4)}`;
+  }
+  const kioskTargets = new Map();
+  // 呼び方：スタッフ・幹部は「○○さん」、タブレットは名前のまま
+  const callName = (x) => (x && x.kiosk ? x.name : `${x ? x.name : ''}さん`);
   function mailTarget(id) {
+    if (String(id).startsWith('kio_')) return kioskTargets.get(id) || { id, name: '勤怠用タブレット', kiosk: true, active: true };
     const m = K.storage.getStaffMember(id);
     if (m) return m;
     const g = K.storage.getManagers ? K.storage.getManagers().find((x) => !x.staffId && mgrKey(x.email) === id) : null;
@@ -709,7 +717,7 @@
           el(
             'li',
             { class: `mail-notice__item is-${r.status}`, 'data-staff': r.staffId },
-            el('p', { class: 'mail-notice__who' }, el('b', null, `${r.name}さん`), el('span', { class: 'mail-notice__badge' }, MAIL_STATUS[r.status]), el('span', { class: 'mail-notice__time' }, timeLabel(r.at))),
+            el('p', { class: 'mail-notice__who' }, el('b', null, callName(r)), el('span', { class: 'mail-notice__badge' }, MAIL_STATUS[r.status]), el('span', { class: 'mail-notice__time' }, timeLabel(r.at))),
             resultLines(r).map((t) => el('p', { class: 'mail-notice__text' }, t))
           )
         )
@@ -790,7 +798,7 @@
   async function sendStaffMail(backend, member) {
     const cur = mailResults.get(member.id);
     if (cur && cur.status === 'sending') return;
-    const base = { staffId: member.id, name: member.name };
+    const base = { staffId: member.id, name: member.name, kiosk: Boolean(member.kiosk) };
     lastMailAt = Date.now();
     mailResults.set(member.id, { ...base, status: 'sending', at: new Date(Date.now()).toISOString() });
     refreshMail();
@@ -801,13 +809,13 @@
       if (backend.inviteStaff) created = Boolean(((await backend.inviteStaff(member.email)) || {}).created);
       else await (backend.sendPasswordReset ? backend.sendPasswordReset(member.email) : backend.sendStaffLoginLink(member.email));
       result = { ...base, status: 'accepted', at: new Date(Date.now()).toISOString(), created };
-      K.app.toast(`${member.name}さんへの送信を、Firebase が受け付けました（到着は未確認）`, 3500);
+      K.app.toast(`${callName(member)}への送信を、Firebase が受け付けました（到着は未確認）`, 3500);
     } catch (err) {
       const why = explainMailError(err);
       result = { ...base, status: 'failed', at: new Date(Date.now()).toISOString(), code: (err && err.code) || '', step: (err && err.step) || '', message: why.message, help: why.help };
       if (/too-many-requests|quota-exceeded/.test(result.code)) setHold(result.code);
       console.warn('[スタッフへのメール] 失敗', { staffId: member.id, code: result.code, step: result.step });
-      K.app.toast(`${member.name}さんに送れませんでした。画面上部のお知らせを見てください`, 3500);
+      K.app.toast(`${callName(member)}に送れませんでした。${member.kiosk ? 'くわしくは、送るボタンの下の文を見てください' : '画面上部のお知らせを見てください'}`, 3500);
     }
     mailResults.set(member.id, result);
     logMailResult(result);
@@ -1019,7 +1027,7 @@
     const sent = lastMail(memberId);
     K.app.toast(sent && sent.status === 'accepted' ? `${r.name}さんの案内をコピーしました。LINE などで本人に送ってください` : `${r.name}さんの案内をコピーしました。先に「メールを送る」を押してください（②のメールは、そのときに届きます）`, 4500);
   }
-  function showQr() {
+  function showQr(note) {
     const close = () => layer.remove();
     const layer = el(
       'div',
@@ -1030,7 +1038,7 @@
         el('h3', null, 'アプリのQRコード'),
         el('img', { src: INVITE_QR, alt: 'アプリのログイン画面のQRコード', width: '240', height: '240' }),
         el('p', { class: 'invite-qr__url' }, loginUrl()),
-        el('p', { class: 'field__note' }, 'スマホのカメラで読み取ると、アプリのログイン画面が開きます。開いたら「ホーム画面に追加」してもらってください。'),
+        el('p', { class: 'field__note' }, typeof note === 'string' ? note : 'スマホのカメラで読み取ると、アプリのログイン画面が開きます。開いたら「ホーム画面に追加」してもらってください。'),
         el('button', { type: 'button', class: 'btn btn--primary btn--block', onclick: close }, '閉じる')
       )
     );
@@ -1253,7 +1261,7 @@
       try {
         if (target && backend && backend.loadKiosks) {
           const kiosk = (await backend.loadKiosks()).find((k) => String(k.email).toLowerCase() === target && !k.deleted);
-          if (kiosk) throw new Error('このメールアドレスは、勤怠用 iPad に登録されています。幹部には、別のアドレスを使ってください。');
+          if (kiosk) throw new Error('このメールアドレスは、勤怠用タブレットに登録されています。幹部には、別のアドレスを使ってください。');
         }
         K.storage.saveManager(isNew ? null : g.email, fields);
         K.app.toast(isNew ? '幹部を登録しました。「パスワード設定用のメールを送る」を押してください' : '保存しました', 3500);
@@ -1426,4 +1434,18 @@
 
   K.settingsViews = K.settingsViews || {};
   K.settingsViews.staff = { render };
+  // 11/17〜 勤怠用タブレットへのメール（設定 › 勤怠）：スタッフへのメールと同じ送り方・同じ間隔と制限・同じ記録
+  K.loginMail = {
+    kioskKey,
+    gate: mailGate,
+    result: (id) => mailResults.get(id) || null,
+    lines: resultLines,
+    status: MAIL_STATUS,
+    send(backend, target) {
+      const t = { ...target, kiosk: true, active: true };
+      kioskTargets.set(t.id, t);
+      return sendStaffMail(backend, t);
+    },
+    showQr,
+  };
 })();

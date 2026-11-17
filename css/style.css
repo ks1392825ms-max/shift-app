@@ -8820,3 +8820,135 @@ body.is-kv-full .kv-back {
 .carrier-note[hidden] { display: none; }
 .lp-carrier { display: inline-block; margin-left: 6px; font-size: .68rem; font-weight: 700; color: #b5651d; background: #fff0e0; border-radius: 99px; padding: 0 8px; }
 @media (prefers-color-scheme: dark) { .carrier-note { background: #3a2a1a; color: #f5c28e; } .lp-carrier { background: #3a2a1a; color: #f5c28e; } }
+
+/* ==== 幹部の画面：管理者の画面と同じ形（11/16〜） ==== */
+/* 下のタブ：管理者のタブと同じ見た目。幹部の画面は入口の画面（is-gate）なので、ふつうの下のタブは隠れたまま、幹部のタブだけ出す */
+body.is-gate .bottom-nav.mgr-nav {
+  display: block;
+}
+.screen[data-screen="manager"] {
+  padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 32px);
+}
+.mgr-nav .bottom-nav__btn {
+  position: relative;
+}
+.mgr-nav .bottom-nav__btn.is-active {
+  color: var(--role-color, #d6453d);
+}
+.mgr-nav__badge {
+  position: absolute;
+  top: 6px;
+  left: calc(50% + 8px);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #e5484d;
+  color: #fff;
+  font-size: 0.68rem;
+  line-height: 18px;
+  text-align: center;
+}
+.mgr-settings .req-account__body {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* 確定シフト：管理者のシフト表と同じく広く。月全体を1画面に収め、2本指で広げる */
+.screen[data-screen="manager"][data-mgr-tab="roster"] {
+  max-width: 1280px;
+}
+.mgr-body--roster {
+  padding: 12px;
+}
+.mgr-body--roster > div > * + * {
+  margin-top: 10px;
+}
+.fit-bar__note {
+  font-size: 0.72rem;
+}
+@media (max-width: 480px) {
+  .mgr-body--roster {
+    padding: 10px 8px;
+  }
+  .screen[data-screen="manager"][data-mgr-tab="roster"] {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
+
+/* ==== シフト表を画面に合わせる（11/16〜 管理者のシフト表・幹部の確定シフト。js/fit-table.js） ==== */
+.fit-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  margin: 0 0 8px;
+}
+.fit-bar__seg {
+  flex: 1;
+}
+.fit-bar__seg .segment__btn {
+  white-space: nowrap;
+}
+.fit-bar__reset {
+  flex: none;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.fit-bar__reset[hidden] {
+  display: inline-block;
+  visibility: hidden;
+}
+.fit-bar__hint {
+  flex-basis: 100%;
+  margin: 0 2px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.roster-wrap.is-fit {
+  max-height: none;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: pan-x pan-y;
+}
+.roster-wrap.is-fit .roster {
+  min-width: 0;
+}
+.roster-wrap.is-fit.is-zoomed {
+  overflow: auto;
+}
+.roster-wrap.is-scaled .roster {
+  transform-origin: 0 0;
+}
+.roster-wrap.is-scaled .roster th,
+.roster-wrap.is-scaled .roster td {
+  position: static;
+}
+
+/* ==== 勤怠用タブレット：メールを送る（11/17〜） ==== */
+.att-set-list li.att-set-kiosk {
+  flex-wrap: wrap;
+}
+.att-set-kiosk__mail {
+  flex: 1 1 100%;
+}
+.att-set-kiosk__status {
+  flex-basis: 100%;
+  margin: 0;
+}
+.att-set-kiosk__status.is-failed {
+  color: var(--danger, #c62828);
+}
+.att-howto__qr {
+  display: block;
+  margin: 8px 0 4px;
+}

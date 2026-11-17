@@ -276,7 +276,7 @@
       el('p', { class: 'att-sub' }, '外出（出・戻り）　労働時間から引きます'),
       outRows.map((b, i) => el('div', { class: 'att-grid' }, timeInput(`att-os-${i}`, b.s, `外出${i + 1} 出`), timeInput(`att-oe-${i}`, b.e, `外出${i + 1} 戻り`))),
       el('p', { class: 'att-note' }, '0時を過ぎて退勤したときは、そのまま「1:30」のように入れてください（翌朝5時までは、翌日の時刻として数えます）。'),
-      el('label', { class: 'att-field att-field--wide' }, el('span', null, '直す理由（必ず・50文字まで）'), el('input', { type: 'text', id: 'att-reason', class: 'field__input', maxlength: '50', placeholder: '例：打ち忘れのため・iPad が動かなかった', value: keep('att-reason', ''), oninput: remember })),
+      el('label', { class: 'att-field att-field--wide' }, el('span', null, '直す理由（必ず・50文字まで）'), el('input', { type: 'text', id: 'att-reason', class: 'field__input', maxlength: '50', placeholder: '例：打ち忘れのため・タブレットが動かなかった', value: keep('att-reason', ''), oninput: remember })),
       e.msg ? el('p', { class: 'form-error', role: 'alert' }, e.msg) : null,
       el(
         'div',
@@ -613,7 +613,7 @@
       }
     } catch (err) {
       directorySynced = false;
-      console.warn('iPad の名前の一覧を更新できませんでした', err && err.message);
+      console.warn('タブレットの名前の一覧を更新できませんでした', err && err.message);
       return;
     }
     if (!A().backend().saveAttendanceDirectory) return;
@@ -675,7 +675,7 @@
       'div',
       { class: 'pin-card' },
       el('p', { class: 'pin-card__title' }, '勤怠の番号（PIN）'),
-      el('p', { class: 'hint hint--left' }, 'お店の iPad で出勤・退勤を打つときに使う4けたの番号です。人に教えないでください。決め直すこともできます。'),
+      el('p', { class: 'hint hint--left' }, 'お店のタブレットで出勤・退勤を打つときに使う4けたの番号です。人に教えないでください。決め直すこともできます。'),
       el('div', { class: 'pin-card__row' }, a, b),
       m ? el('p', { class: m.ok ? 'sync__result' : 'form-error', role: 'status' }, m.text) : null,
       el(
@@ -689,7 +689,7 @@
             else {
               try {
                 for (const id of staffIds) await A().setPin(id, a.value, { email });
-                pinMsg[key] = { ok: true, text: '番号を決めました。お店の iPad で使えます。' };
+                pinMsg[key] = { ok: true, text: '番号を決めました。お店のタブレットで使えます。' };
               } catch (err) {
                 pinMsg[key] = { ok: false, text: `決められませんでした（${err.message}）` };
               }
