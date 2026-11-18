@@ -28,6 +28,7 @@
 //   loadAttendanceDirectory / saveAttendanceDirectory                                     集計表用の名簿（11/12〜）
 //   addPhonePunch / watchMyPunches / savePunchCheck / loadStoreGeo / loadStoreGeos / saveStoreGeo   スマホの打刻（GPS・11/14〜）
 //   loadKiosks / saveKiosk / saveKioskDirectory                                             勤怠用 iPad の登録（管理者）
+//   stampLogin / loadLoginStamps                                                             最後にアプリを開いた日時（本人が書く・管理者が読む。11/18〜）
 //   subscribe(onData, onError)  共有データを受け取り続ける（変わるたびに onData）。戻り値で止められる
 //   write(changes)              記録をまとめて保存する：[{ collection, id, data }]
 //   isEmpty()                   共有の保存場所が空か（店舗が1つもないか）
@@ -681,6 +682,29 @@
   }
 
   // 管理者：番号を決めた人（スタッフID の一覧）
+  // ---- 最後にアプリを開いた日時（11/18〜） ----
+  // 本人が自分の分だけ書く（loginStamps/{メール}）。時刻はサーバーの時刻。はじめての日時は最初の1回だけ
+  async function stampLogin(role) {
+    const { fsMod, db, auth } = await load();
+    const user = auth.currentUser;
+    if (!user || !user.email) return;
+    const email = String(user.email).toLowerCase();
+    const ref = fsMod.doc(db, 'loginStamps', email);
+    const now = fsMod.serverTimestamp();
+    await fsMod.runTransaction(db, async (tx) => {
+      const cur = await tx.get(ref).catch(() => null);
+      if (cur && cur.exists()) tx.update(ref, { role, lastAt: now });
+      else tx.set(ref, { email, role, firstAt: now, lastAt: now });
+    });
+  }
+  // 管理者だけ：メール → { role, firstAt, lastAt }（ミリ秒）
+  async function loadLoginStamps() {
+    const { fsMod, db } = await load();
+    const snap = await fsMod.getDocs(fsMod.collection(db, 'loginStamps'));
+    const ms = (t) => (t && typeof t.toMillis === 'function' ? t.toMillis() : 0);
+    return snap.docs.map((d) => { const x = d.data(); return { email: d.id, role: x.role || '', firstAt: ms(x.firstAt), lastAt: ms(x.lastAt) }; });
+  }
+
   async function loadPinStatus() {
     const { fsMod, db } = await load();
     const snap = await fsMod.getDocs(fsMod.collection(db, 'attendancePins'));
@@ -1022,6 +1046,8 @@
     verifyPassword,
     setAttendancePin,
     loadPinStatus,
+    stampLogin,
+    loadLoginStamps,
     deleteAttendancePin,
     loadAttendance,
     loadAttendanceDirectory,

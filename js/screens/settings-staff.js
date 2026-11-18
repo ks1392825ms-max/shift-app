@@ -11,6 +11,9 @@
   let mgrTarget = null;
   // 「ログインする人」の表の絞り込み（all / mgr / staff / nomail）
   let loginFilter = 'all';
+  // 11/18〜「ログインする人」：上で幹部か店舗を選ぶ → 1人1行 → 押すと詳しく（パソコンは左に一覧・右に詳しく）
+  let peopleTab = 'mgr';
+  let peopleOpen = null;
 
   // 携帯会社のメール（11/16〜）：パソコンなどから送られたメールを受け取らない設定のことが多く、届きにくい
   const CARRIER_DOMAINS = ['docomo.ne.jp', 'ezweb.ne.jp', 'au.com', 'softbank.ne.jp', 'i.softbank.jp', 'ymobile.ne.jp', 'y-mobile.ne.jp', 'uqmobile.jp', 'disney.ne.jp', 'rakumail.jp'];
@@ -1095,6 +1098,197 @@
     );
   }
 
+  // 上の選ぶボタン：幹部・店舗ごと・メール未登録（人数つき）
+  // 右側の欄に使うデータ（管理者だけが読める）：最後に開いた日時（loginStamps）・勤怠の番号の有無・今月の勤怠
+  //   この画面を開いたときに読む（1分たったら読み直す）。読めなくても（ルールの公開前など）、一覧とボタンはそのまま使える
+  const people = { at: 0, loading: false, stamps: null, pins: null, att: new Map() };
+  function loadPeopleData() {
+    const backend = K.app.cloudBackend ? K.app.cloudBackend() : null;
+    if (!backend || people.loading || Date.now() - people.at < 60 * 1000) return;
+    people.loading = true;
+    Promise.all([
+      backend.loadLoginStamps ? backend.loadLoginStamps().catch(() => null) : null,
+      backend.loadPinStatus ? backend.loadPinStatus().catch(() => null) : null,
+    ]).then(([stamps, pins]) => {
+      people.stamps = stamps ? new Map(stamps.map((x) => [String(x.email).toLowerCase(), x])) : null;
+      people.pins = pins ? new Set(pins.map((x) => x.staffId)) : null;
+      people.at = Date.now();
+      people.loading = false;
+      if (document.querySelector('[data-managers]')) K.app.rerender();
+    });
+  }
+  // 最後に開いた日時：{ last, first }（Date）か null。記録が読めないときは undefined
+  function seenOf(r) {
+    if (!r.email) return null;
+    if (!people.stamps) return undefined;
+    const x = people.stamps.get(String(r.email).toLowerCase());
+    return x && x.lastAt ? { last: new Date(x.lastAt), first: new Date(x.firstAt || x.lastAt) } : null;
+  }
+  // 今月の勤怠（店舗・月ごとに1回だけ読む）：{ workDays, late, missingOut } か null（読んでいる途中・読めない）
+  function attOf(staff) {
+    const backend = K.app.cloudBackend ? K.app.cloudBackend() : null;
+    if (!backend || !backend.loadAttendance || !K.attendance || !K.attendanceView) return null;
+    const month = K.requests.todayJst().slice(0, 7);
+    const key = `${staff.storeId}|${month}`;
+    let c = people.att.get(key);
+    if (!c) {
+      c = { loading: true, data: null, failed: false };
+      people.att.set(key, c);
+      backend
+        .loadAttendance(staff.storeId, month)
+        .then((d) => { c.data = d; })
+        .catch(() => { c.failed = true; })
+        .finally(() => { c.loading = false; if (document.querySelector('[data-managers]')) K.app.rerender(); });
+    }
+    if (!c.data) return c.failed ? { failed: true } : null;
+    const rows = K.attendance.monthTable({ month, staff: [staff], planOf: K.attendanceView.adminPlan(staff.storeId, month), punches: c.data.punches || [], edits: c.data.edits || [], patterns: K.attendanceView.storePatterns(staff.storeId), checks: c.data.checks || [] });
+    const t = rows && rows[0] ? rows[0].total : null;
+    return t ? { workDays: t.workDays, late: t.late, missingOut: t.missingOut } : null;
+  }
+  function seenText(d) {
+    const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (mins < 60) return `${Math.max(1, mins)}分前`;
+    const today = new Date(); const y = new Date(today.getTime() - 86400000);
+    const hm = `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+    if (d.toDateString() === today.toDateString()) return `今日 ${hm}`;
+    if (d.toDateString() === y.toDateString()) return `昨日 ${hm}`;
+    return `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+  }
+  // ---- 11/18〜 右側の欄（パソコン）・詳しくの下（スマホ）：準備・予定・申請・勤怠／だれも選んでいないときは、ログインの進み具合 ----
+  const md = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}（${U.WEEKDAYS[K.calc.weekdayOf(d)]}）`;
+  const box = (title, ...body) => el('section', { class: 'pp-box' }, el('h4', { class: 'pp-box__title' }, title), ...body);
+  // 4 準備のチェック表
+  function readyBox(r) {
+    const v = r.email ? seenOf(r) : null;
+    const pin = r.staff && people.pins ? people.pins.has(r.staff.id) : null;
+    const items = [
+      ['メールアドレスの登録', Boolean(r.email), r.email ? maskEmail(r.email) : '未登録（編集から入れる）'],
+      ['パスワードを決めた（ログインできた）', Boolean(v), v ? `最後に開いた ${seenText(v.last)}` : v === undefined ? '確かめられませんでした' : r.email ? 'まだ（メールを送る・案内をコピー）' : '—'],
+    ];
+    if (r.staff) items.push(['勤怠の番号（PIN）', Boolean(pin), pin ? '設定済み' : pin === null ? '確かめられませんでした' : 'まだ（本人がアプリの設定で決める）']);
+    if (r.mgr) items.push(['幹部の担当店舗', r.mgr.storeIds.length > 0, storeNames(r.mgr.storeIds)]);
+    const done = items.filter((x) => x[1]).length;
+    return box(`準備のチェック（${done}／${items.length}）`, el('ul', { class: 'pp-check' }, items.map(([t, ok, sub]) => el('li', { class: ok ? 'is-ok' : 'is-ng' }, el('span', { class: 'pp-check__mark', 'aria-hidden': 'true' }, ok ? '✓' : '!'), el('span', null, el('b', null, t), el('small', null, sub))))));
+  }
+  // 1 これからの予定
+  function planBox(r) {
+    if (!r.staff) return box('これからの予定', el('p', { class: 'pp-muted' }, '名簿にいない幹部なので、シフトはありません。'));
+    const today = K.requests.todayJst();
+    const month = today.slice(0, 7);
+    const mine = K.storage.getShifts({ staffId: r.staff.id }).filter((x) => !x.deleted);
+    const next = mine.filter((x) => x.kind === 'work' && x.date >= today).sort((a, b) => a.date.localeCompare(b.date))[0];
+    const pat = next && K.storage.getPattern(next.patternId);
+    const offs = mine.filter((x) => x.date.startsWith(month) && (x.kind === 'off' || x.kind === 'paid')).sort((a, b) => a.date.localeCompare(b.date));
+    const work = mine.filter((x) => x.date.startsWith(month) && x.kind === 'work').length;
+    return box('これからの予定',
+      el('p', { class: 'pp-big' }, next ? el('span', null, el('small', null, '次の出勤'), `${md(next.date)}${pat ? ` ${pat.start}〜${pat.end}` : ''}`) : el('span', { class: 'pp-muted' }, '確定した出勤の予定はまだありません')),
+      el('p', { class: 'pp-line' }, `今月の出勤 ${work}日・休み ${offs.length}日`),
+      offs.length ? el('div', { class: 'pp-days' }, offs.slice(0, 10).map((x) => el('span', { class: `pp-day is-${x.kind}` }, `${md(x.date)} ${x.kind === 'paid' ? '有給' : '休み'}`))) : null
+    );
+  }
+  // 2 申請の状況
+  function reqBox(r) {
+    if (!r.staff) return null;
+    const paid = (K.requests.adminPaid() || []).filter((x) => x.staffId === r.staff.id);
+    const wish = (K.requests.adminWishes({ staffId: r.staff.id }) || []);
+    const pend = paid.filter((x) => x.status === 'pending');
+    const list = [...pend.map((x) => [x.date, '有給・申請中', 'pend']), ...wish.slice(0, 4).map((x) => [x.date, '希望休', 'wish']), ...paid.filter((x) => x.status === 'approved').slice(0, 3).map((x) => [x.date, '有給・承認', 'ok'])].sort((a, b) => a[0].localeCompare(b[0]));
+    return box(`申請の状況${pend.length ? `（判断待ち ${pend.length}件）` : ''}`,
+      list.length ? el('div', { class: 'pp-days' }, list.map(([d, t, k]) => el('span', { class: `pp-day is-${k}` }, `${md(d)} ${t}`))) : el('p', { class: 'pp-muted' }, '申請はありません'),
+      pend.length ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: () => K.app.navigate('requests') }, '申請の画面で判断する ›') : null
+    );
+  }
+  // 3 今月の勤怠（今日まで）
+  function attBox(r) {
+    if (!r.staff) return null;
+    const t = attOf(r.staff);
+    if (!t) return box('今月の勤怠（今日まで）', el('p', { class: 'pp-muted' }, '読み込んでいます…'));
+    if (t.failed) return box('今月の勤怠（今日まで）', el('p', { class: 'pp-muted' }, '勤怠を読み込めませんでした。'));
+    return box('今月の勤怠（今日まで）',
+      el('div', { class: 'pp-stats' }, [['出勤', `${t.workDays}日`, ''], ['遅刻', `${t.late}回`, t.late ? 'is-warn' : ''], ['退勤なし', `${t.missingOut}日`, t.missingOut ? 'is-ng' : '']].map(([x, n, c]) => el('div', { class: `pp-stat ${c}` }, el('small', null, x), el('b', null, n)))),
+      t.missingOut ? el('button', { type: 'button', class: 'btn btn--ghost btn--small', onclick: () => K.app.navigate('attendance') }, '勤怠の画面で直す ›') : null
+    );
+  }
+  // 5 ログインの進み具合（だれも選んでいないとき）
+  function progressBox(all) {
+    const rows = K.storage.getStores().map((st) => {
+      const list = all.filter((r) => r.staff && r.staff.storeId === st.id);
+      const ok = list.filter((r) => r.email && seenOf(r));
+      return { st, list, ok, not: list.filter((r) => !(r.email && seenOf(r))) };
+    });
+    const total = rows.reduce((a, x) => a + x.list.length, 0), okAll = rows.reduce((a, x) => a + x.ok.length, 0);
+    if (!people.stamps) return box('ログインの進み具合', el('p', { class: 'pp-muted' }, people.loading || !people.at ? '読み込んでいます…' : '開いた日時の記録を読めませんでした。'));
+    return box(`ログインの進み具合（${okAll}／${total}人）`,
+      rows.map(({ st, list, ok, not }) => el('div', { class: 'pp-prog', style: { '--store-color': st.color } },
+        el('p', { class: 'pp-prog__head' }, el('b', null, st.name), el('span', null, `${ok.length}／${list.length}人`)),
+        el('div', { class: 'pp-bar' }, el('i', { style: { width: `${list.length ? Math.round((ok.length / list.length) * 100) : 0}%` } })),
+        not.length ? el('div', { class: 'pp-not' }, el('small', null, 'まだ：'), not.map((r) => el('button', { type: 'button', class: 'pp-not__btn', onclick: () => { peopleTab = st.id; peopleOpen = r.key; K.app.rerender(); } }, r.name || '名前未登録', r.email ? null : el('span', { class: 'sb-chip__warn' }, '!')))) : el('p', { class: 'pp-allok' }, '✓ 全員ログインできています')
+      ))
+    );
+  }
+
+  function peopleGroups(all) {
+    const groups = [['mgr', '幹部', all.filter((r) => r.mgr), null]];
+    for (const st of K.storage.getStores()) groups.push([st.id, st.name, all.filter((r) => r.staff && r.staff.storeId === st.id), st.color]);
+    groups.push(['nomail', 'メール未登録', all.filter((r) => !r.email), null]);
+    return groups;
+  }
+  function peoplePicker(all) {
+    const groups = peopleGroups(all);
+    if (!groups.some(([k]) => k === peopleTab)) peopleTab = 'mgr';
+    return el(
+      'div',
+      { class: 'pp-tabs', role: 'tablist', 'aria-label': '表示する人' },
+      groups.map(([k, label, list, color]) =>
+        el(
+          'button',
+          { type: 'button', role: 'tab', 'data-people-tab': k, class: `pp-tab is-${k === 'mgr' ? 'mgr' : k === 'nomail' ? 'nomail' : 'store'}${peopleTab === k ? ' is-on' : ''}`, 'aria-selected': String(peopleTab === k), style: color ? { '--store-color': color } : null, onclick: () => { peopleTab = k; peopleOpen = null; K.app.rerender(); } },
+          el('span', { class: 'pp-tab__label' }, label),
+          el('span', { class: 'pp-tab__num' }, String(list.length))
+        )
+      )
+    );
+  }
+  function peopleBody(all, card) {
+    loadPeopleData();
+    const group = peopleGroups(all).find(([k]) => k === peopleTab);
+    const list = group ? group[2] : [];
+    const storeName = (id) => (K.storage.getStore(id) || {}).name || '';
+    const open = list.find((r) => r.key === peopleOpen) || null;
+    const row = (r) => {
+      const member = r.staff || mgrMailMember(r.mgr);
+      const last = r.email ? lastMail(member.id) : null;
+      // 店舗名は、店舗の色の札で出す。幹部は「担当」の店舗、スタッフは所属の店舗
+      const pill = (id, kind) => { const st = K.storage.getStore(id); return st ? el('span', { class: `pp-store is-${kind}`, style: { '--store-color': st.color } }, kind === 'mgr' ? `担当 ${st.name}` : st.name) : null; };
+      const sub = el('span', { class: 'pp-row__stores' }, r.mgr ? r.mgr.storeIds.map((id) => pill(id, 'mgr')) : null, r.staff && (peopleTab === 'nomail' || (peopleTab === 'mgr' && !r.mgr.storeIds.includes(r.staff.storeId))) ? pill(r.staff.storeId, 'staff') : null);
+      return el(
+        'button',
+        { type: 'button', class: `pp-row${open && open.key === r.key ? ' is-open' : ''}${r.email ? '' : ' is-nomail'}`, 'data-people-row': r.key, onclick: () => { peopleOpen = r.key; K.app.rerender(); window.scrollTo({ top: (document.querySelector('[data-managers]') || document.body).offsetTop, behavior: 'smooth' }); } },
+        el('span', { class: 'pp-row__main' }, el('b', { class: 'pp-row__name' }, r.name || '（名前が未登録）'), el('span', { class: 'lp-badges' }, r.mgr ? el('span', { class: 'lp-badge is-mgr' }, '幹部') : null, r.staff ? el('span', { class: 'lp-badge is-staff' }, 'スタッフ') : null), sub),
+        el(
+          'span',
+          { class: 'pp-row__seen' },
+          (() => { const v = r.email ? seenOf(r) : null; return v ? el('span', { class: 'pp-seen is-on' }, `最後に開いた ${seenText(v.last)}`) : r.email && v === null ? el('span', { class: 'pp-seen is-never' }, 'まだ開いていない') : null; })()
+        ),
+        el(
+          'span',
+          { class: 'pp-row__state' },
+          !r.email ? el('span', { class: 'lp-chip is-none' }, 'メール未登録') : isCarrierMail(r.email) ? el('span', { class: 'lp-carrier' }, '携帯会社のメール') : seenOf(r) ? null : last ? el('span', { class: `lp-chip is-${last.status}` }, MAIL_SHORT[last.status] || last.status) : el('span', { class: 'lp-chip is-never' }, 'まだ送っていない')
+        ),
+        el('span', { class: 'pp-row__go', 'aria-hidden': 'true' }, '›')
+      );
+    };
+    const listBox = el('div', { class: 'pp-list' }, list.length ? list.map(row) : el('p', { class: 'sb-empty' }, '当てはまる人はいません'));
+    const detail = open
+      ? el('div', { class: 'pp-detail' }, el('button', { type: 'button', class: 'text-btn pp-back', onclick: () => { peopleOpen = null; K.app.rerender(); } }, '‹ 一覧に戻る'), card(open), (() => {
+          const v = open.email ? seenOf(open) : null;
+          const fmt = (d) => `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+          return el('dl', { class: 'pp-seen-box' }, el('dt', null, '最後に開いた日時'), el('dd', null, v ? `${fmt(v.last)}（${seenText(v.last)}）` : v === undefined ? '確かめられませんでした' : open.email ? 'まだ開いていません' : 'メール未登録のため、ログインできません'), el('dt', null, 'はじめて開いた日時'), el('dd', null, v ? fmt(v.first) : '—'));
+        })(), readyBox(open), planBox(open), reqBox(open), attBox(open))
+      : el('div', { class: 'pp-detail pp-detail--overview' }, progressBox(all), el('p', { class: 'pp-muted pp-hint' }, '左の一覧から名前を押すと、その人の準備・予定・申請・勤怠が出ます。'));
+    return el('div', { class: `pp${open ? ' has-open' : ''}` }, listBox, detail);
+  }
+
   function loginOverview() {
     if (!K.storage.isCloud() || !K.storage.getManagers) return null;
     const all = loginPeople();
@@ -1170,26 +1364,12 @@
           el('button', { type: 'button', class: 'btn btn--ghost btn--small', 'data-mgr-add': '', onclick: () => openMgrForm('new') }, '＋ 名簿にいない幹部を追加')
         )
       ),
-      storeBoard(all),
-      el('p', { class: 'field__note sb-note' }, '赤い名前は幹部（担当する店舗）、白い名前はスタッフ（所属する店舗）です。「!」はメールアドレスが未登録で、まだログインできない人です。名前を押すと編集できます。'),
-      el('h3', { class: 'lp-subtitle' }, 'メールアドレスと送信の結果'),
-      el(
-        'div',
-        { class: 'lp-filters', role: 'group', 'aria-label': '絞り込み' },
-        filters.map(([k, label, n]) =>
-          el(
-            'button',
-            { type: 'button', class: `lp-filter is-${k}${loginFilter === k ? ' is-on' : ''}`, 'aria-pressed': String(loginFilter === k), 'data-login-filter': k, onclick: () => { loginFilter = k; K.app.rerender(); } },
-            el('span', { class: 'lp-filter__label' }, label),
-            el('span', { class: 'lp-filter__num' }, `${n}人`)
-          )
-        )
-      ),
-      el('div', { class: 'lp-cols' }, columns),
+      peoplePicker(all),
+      peopleBody(all, card),
       el(
         'p',
         { class: 'field__note lp-note' },
-        '「案内をコピー」は、その人だけに送ってください（登録したメールアドレスが入っています）。幹部にするときは、スタッフの行の「幹部にする」を押します。メールアドレスを変えるときは「編集」から。幹部の登録も一緒に変わります。登録したら「メールを送る」を押してください（相手がメールのリンクでパスワードを決めると、ログインできます）。'
+        '名前を押すと、メールを送る・案内をコピー・編集・幹部にする ができます。「案内をコピー」は、その人だけに送ってください。'
       )
     );
   }

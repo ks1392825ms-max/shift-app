@@ -834,13 +834,31 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/punchEdits/$(request.resource.data.targetId)).data.logId == id;
       allow update, delete: if false;
     }
+    // 11/18〜 最後にアプリを開いた日時（設定 › スタッフの「ログインする人」に出す）：
+    //   書くのは本人だけ（自分のメールの記録・時刻はサーバーの今の時刻・はじめての日時は変えられない）。読むのはオーナーだけ。消すことはできない
+    match /loginStamps/{email} {
+      allow read: if isAdmin();
+      allow create: if signedIn() && email == myEmail()
+        && request.resource.data.keys().hasOnly(['email', 'role', 'firstAt', 'lastAt'])
+        && request.resource.data.email == email
+        && request.resource.data.role in ['admin', 'manager', 'staff', 'kiosk']
+        && request.resource.data.firstAt == request.time
+        && request.resource.data.lastAt == request.time;
+      allow update: if signedIn() && email == myEmail()
+        && request.resource.data.keys().hasOnly(['email', 'role', 'firstAt', 'lastAt'])
+        && request.resource.data.email == email
+        && request.resource.data.role in ['admin', 'manager', 'staff', 'kiosk']
+        && request.resource.data.firstAt == resource.data.firstAt
+        && request.resource.data.lastAt == request.time;
+      allow delete: if false;
+    }
     // そのほかのデータ（シフト・勤務パターン・必要人数・シフト確定・希望休の上限の設定など）：オーナーだけ
     // （上で個別に決めた名簿・申請・履歴は、ここでは許さない）
     match /{collection}/{id} {
       allow read, write: if isAdmin()
         && !(collection in ['access', 'managers', 'wishRequests', 'paidRequests', 'changeRequests', 'decisionLogs', 'businessDays',
           'kiosks', 'kioskDirectory', 'attendanceDirectory', 'attendancePins', 'punchProofs', 'punches', 'punchEdits', 'attendanceLogs',
-          'punchChecks', 'storeGeo']);
+          'punchChecks', 'storeGeo', 'loginStamps']);
     }
   }
 }

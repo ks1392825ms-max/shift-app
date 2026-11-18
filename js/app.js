@@ -205,6 +205,44 @@
     return null;
   }
 
+  // 11/18〜 最後にアプリを開いた日時を記録する（本人の分だけ・1時間に1回まで。管理者が 設定 › スタッフ で見る）
+  //   記録できなくても（電波がない・ルールの公開前など）、アプリの動きには関係しない
+  const STAMP_KEY = 'shift-login-stamp';
+  const STAMP_EVERY_MS = 60 * 60 * 1000;
+  let stamping = false;
+  function stampOpen(role) {
+    if (stamping || !cloud.user || !cloud.backend || typeof cloud.backend.stampLogin !== 'function') return;
+    const email = String(cloud.user.email || '').toLowerCase();
+    if (!email) return;
+    let last = null;
+    try {
+      last = JSON.parse(localStorage.getItem(STAMP_KEY) || 'null');
+    } catch (err) {
+      last = null;
+    }
+    if (last && last.email === email && last.role === role && Date.now() - Number(last.at) < STAMP_EVERY_MS) return;
+    stamping = true;
+    Promise.resolve(cloud.backend.stampLogin(role))
+      .then(() => {
+        try {
+          localStorage.setItem(STAMP_KEY, JSON.stringify({ email, role, at: Date.now() }));
+        } catch (err) {
+          /* 覚えられなくても、次に開いたときにもう一度記録するだけ */
+        }
+      })
+      .catch((err) => console.warn('最後に開いた日時を記録できませんでした', err && (err.code || err.message)))
+      .finally(() => {
+        stamping = false;
+      });
+  }
+  // アプリに戻ってきたときも記録する（1時間に1回まで）
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      const role = currentRole();
+      if (role) stampOpen(role === 'manager-self' ? 'manager' : role);
+    }
+  });
+
   function renderRoleBadge() {
     const role = currentRole();
     if (role) document.body.dataset.role = role === 'manager-self' ? 'manager' : role;
@@ -218,6 +256,7 @@
       }
     }
     if (role === 'kiosk' && K.splash) K.splash.close();
+    if (role) stampOpen(role === 'manager-self' ? 'manager' : role);
     const title = document.querySelector('.app-title');
     if (!title) return;
     let badge = document.getElementById('role-badge');
