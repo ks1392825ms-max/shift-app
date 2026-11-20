@@ -5954,7 +5954,8 @@ body[data-role="staff"] .login-role::before {
 
   /* 外に出ている「出力」「月のタイムライン」は、メニューの中には出さない */
   .tb-menu .tb-menu__export,
-  .tb-menu .tb-menu__mtl {
+  .tb-menu .tb-menu__mtl,
+  .tb-menu .tb-menu__booking {
     display: none;
   }
 }
@@ -9042,3 +9043,60 @@ body.is-gate .bottom-nav.mgr-nav {
 .pp-hint { text-align: center; }
 @media (max-width: 899px) { .pp-detail--overview { display: grid; order: -1; } .pp.has-open .pp-detail--overview { display: none; } }
 @media (min-width: 900px) { .pp-detail--overview { display: grid !important; place-items: stretch; min-height: 0; border: 0; } }
+
+/* ==== 予約サイトへの入力（11/20〜 シフト表 › 予約サイト） ==== */
+.screen[data-screen="booking"] { max-width: 1280px; }
+.bk-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 6px; }
+.bk-head .month-nav { margin: 0; }
+.bk-store { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; border: 2px solid var(--store-color, #999); font-weight: 800; }
+.bk-store::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--store-color, #999); }
+.bk-lead { margin: 4px 0 12px; }
+.bk-progress { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.bk-prog { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; background: var(--surface); display: grid; gap: 6px; }
+.bk-prog__head { margin: 0; display: flex; justify-content: space-between; gap: 8px; }
+.bk-prog__head b { color: var(--site-color); }
+.bk-prog__warn { margin: 0; color: #b42318; font-size: 0.82rem; font-weight: 700; }
+.bk-bar { height: 10px; border-radius: 999px; background: #eceef1; overflow: hidden; }
+.bk-bar i { display: block; height: 100%; background: var(--site-color); border-radius: 999px; }
+.bk-filters { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 4px; }
+.bk-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 600px), 1fr)); gap: 12px; }
+.bk-card { border: 1px solid var(--border); border-radius: 16px; background: var(--surface); padding: 12px 14px; display: grid; gap: 10px; min-width: 0; }
+.bk-card.is-alldone { background: #f6fbf7; border-color: #cfe9d6; }
+.bk-card__head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bk-name { font-size: 1.1rem; }
+.bk-sum { color: var(--text-muted); font-size: 0.85rem; flex: 1; }
+.bk-card__body { display: grid; grid-template-columns: minmax(0, 1fr) 210px; gap: 12px; align-items: start; }
+.bk-cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+.bk-wd { text-align: center; font-size: 0.72rem; color: var(--text-muted); font-weight: 700; }
+.bk-wd.is-sun { color: #d64545; } .bk-wd.is-sat { color: #2f6fdb; }
+.bk-day { min-height: 40px; border-radius: 8px; padding: 2px 3px; display: grid; align-content: start; justify-items: center; gap: 1px; background: #f4f5f7; }
+.bk-day b { font-size: 0.72rem; color: var(--text-muted); }
+.bk-day small { font-size: 0.72rem; font-weight: 800; white-space: nowrap; letter-spacing: -0.02em; }
+.bk-day.is-work { background: #eef3ff; } .bk-day.is-work small { color: #1f3f8f; }
+.bk-day.is-off { background: #dff3e4; } .bk-day.is-off small { color: #1e6b34; }
+.bk-day.is-paid { background: #e3eeff; } .bk-day.is-paid small { color: #1f4fbf; }
+.bk-day.is-closed { background: repeating-linear-gradient(45deg, #f2f2f0, #f2f2f0 4px, #e9e9e6 4px, #e9e9e6 8px); } .bk-day.is-closed small { color: #888; }
+.bk-day.is-blank { background: none; }
+.bk-checks { display: grid; gap: 8px; }
+.bk-check { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: center; text-align: left; padding: 10px; border-radius: 12px; border: 2px solid var(--border); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; min-height: 64px; }
+.bk-check__box { width: 28px; height: 28px; border-radius: 8px; border: 2px solid var(--site-color); display: grid; place-items: center; font-weight: 900; color: #fff; }
+.bk-check__text { display: grid; gap: 2px; min-width: 0; }
+.bk-check__text b { font-size: 0.88rem; color: var(--site-color); }
+.bk-check__text small { font-size: 0.75rem; color: var(--text-muted); }
+.bk-check.is-done { border-color: var(--site-color); background: color-mix(in srgb, var(--site-color) 8%, #fff); }
+.bk-check.is-done .bk-check__box { background: var(--site-color); }
+.bk-check.is-changed { border-color: #e5484d; background: #fdecea; }
+.bk-check.is-changed .bk-check__box { background: #e5484d; border-color: #e5484d; }
+.bk-check.is-changed small { color: #b42318; font-weight: 700; }
+.bk-empty { padding: 24px; text-align: center; }
+@media (max-width: 640px) { .bk-card__body { grid-template-columns: 1fr; } .bk-checks { grid-template-columns: 1fr 1fr; } .bk-day small { font-size: 0.62rem; } }
+.bk-prog__none { margin: 0; color: var(--text-muted); font-size: 0.78rem; }
+.bk-card.is-none { background: #f7f7f6; border-style: dashed; }
+.bk-card.is-none .bk-cal { opacity: 0.55; }
+.bk-none-note { display: grid; gap: 4px; padding: 12px; border-radius: 12px; background: #eceeef; }
+.bk-none-note b { font-size: 0.95rem; }
+.bk-none-note small { color: var(--text-muted); font-size: 0.78rem; }
+.bk-none-btn { border: 1px dashed #b9bcc2; background: none; border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); cursor: pointer; }
+.bk-none-btn.is-on { border-style: solid; color: var(--text); background: var(--surface); }
+@media (max-width: 640px) { .bk-none-btn, .bk-none-note { grid-column: 1 / -1; } }
+.bk-day.is-biz { background: #efe5ff; } .bk-day.is-biz small { color: #6b3fc2; }

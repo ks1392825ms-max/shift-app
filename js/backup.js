@@ -94,6 +94,10 @@
       isStr(r.email, 254) && r.id === r.email && Array.isArray(r.staffIds) && r.staffIds.every(isId) &&
       Array.isArray(r.storeIds) && r.storeIds.every(isId),
     // 幹部（11/15〜 設定 > スタッフの幹部の欄）
+    // 予約サイトへの入力のチェック（11/20〜）
+    bookingChecks: (r) =>
+      isId(r.storeId) && isId(r.staffId) && ['coming', 'hpb', 'none'].includes(r.site) && (r.site === 'none' ? r.month === '' : /^\d{4}-\d{2}$/.test(r.month)) &&
+      isStr(r.sig || '', 40) && isStr(r.by || '', 254) && ISO_RE.test(r.checkedAt),
     managers: (r) =>
       isStr(r.email, 254) && r.id === r.email && Array.isArray(r.storeIds) && r.storeIds.every(isId) &&
       isStr(r.name || '', 12) && (r.staffId === undefined || r.staffId === null || isId(r.staffId)),

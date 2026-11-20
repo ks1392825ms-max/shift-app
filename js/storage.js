@@ -34,6 +34,7 @@
   const LIST_KEYS = [
     'stores', 'staff', 'shiftPatterns', 'shifts', 'businessTimes', 'businessTimeSkips',
     'staffingRules', 'dayOverrides', 'holidays', 'requests', 'staffAccounts', 'publications', 'managers',
+    'bookingChecks', // 11/20〜 予約サイトへの入力のチェック（管理者だけ）
   ];
   // 職種（St／As のどちらで数えるかは U.POSITION_ROLE）と雇用形態
   const POSITIONS = ['stylist', 'junior_stylist', 'junior_assistant', 'assistant'];
@@ -1125,6 +1126,42 @@
   }
 
   // 幹部の一覧（外した人は入れない）。name・email は、つながっている名簿の人がいればそちらから
+  // ---- 予約サイトへの入力のチェック（11/20〜 シフト表 › 予約サイト） ----
+  // 1件＝店舗・スタッフ・予約サイト・月（「設定なし」は月なし＝次の月もそのまま）。sig は、チェックしたときの予定のしるし（あとで変わったら知らせる）
+  const BOOKING_SITES = ['coming', 'hpb'];
+  function bookingCheckId(storeId, staffId, site, month) {
+    return site === 'none' ? `bk_${storeId}_${staffId}_none` : `bk_${storeId}_${staffId}_${site}_${month}`;
+  }
+  function getBookingChecks({ storeId, month } = {}) {
+    return active(data.bookingChecks)
+      .filter((c) => (!storeId || c.storeId === storeId) && (c.site === 'none' || !month || c.month === month))
+      .map(copy);
+  }
+  function setBookingCheck({ storeId, staffId, site, month = '', sig = '', by = '' }) {
+    if (!active(data.stores).some((s) => s.id === storeId)) throw new Error('店舗が見つかりませんでした。');
+    if (!data.staff.some((m) => m.id === staffId && !m.deleted)) throw new Error('スタッフが見つかりませんでした。');
+    if (![...BOOKING_SITES, 'none'].includes(site)) throw new Error('予約サイトの種類が正しくありません。');
+    if (site !== 'none' && !/^\d{4}-\d{2}$/.test(month)) throw new Error('月が正しくありません。');
+    const id = bookingCheckId(storeId, staffId, site, month);
+    const now = U.nowIso();
+    const record = { id, storeId, staffId, site, month: site === 'none' ? '' : month, sig: String(sig).slice(0, 40), by: String(by).slice(0, 254), checkedAt: now };
+    commit((d) => {
+      const cur = d.bookingChecks.find((x) => x.id === id);
+      if (cur) Object.assign(cur, record, { deleted: false, updatedAt: now });
+      else d.bookingChecks.push({ ...record, createdAt: now, updatedAt: now, deleted: false });
+    });
+    return copy(record);
+  }
+  function clearBookingCheck({ storeId, staffId, site, month = '' }) {
+    const id = bookingCheckId(storeId, staffId, site, month);
+    if (!active(data.bookingChecks).some((x) => x.id === id)) return;
+    commit((d) => {
+      const cur = d.bookingChecks.find((x) => x.id === id);
+      cur.deleted = true;
+      cur.updatedAt = U.nowIso();
+    });
+  }
+
   function getManagers() {
     return active(data.managers)
       .map((m) => {
@@ -2348,6 +2385,10 @@
     undoAutoShifts,
     getSamePersonStaff,
     getManagers,
+    BOOKING_SITES,
+    getBookingChecks,
+    setBookingCheck,
+    clearBookingCheck,
     saveManager,
     removeManager,
     startFreshCloud,

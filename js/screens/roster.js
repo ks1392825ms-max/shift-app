@@ -1281,6 +1281,7 @@
         { class: 'tb-menu', role: 'menu' },
         item('tb-menu__export', '出力', openExportSheet, '印刷・画像・PDF・CSV'),
         item('tb-menu__mtl', '月のタイムライン', () => K.app.navigate('monthTimeline'), '1か月の勤務を時間の帯で見る'),
+        item('tb-menu__booking', '予約サイト', () => K.app.navigate('booking'), 'カミング・ホットペッパーへの入力のチェック'),
         pub ? null : item('weekly-btn', '曜日の設定を反映', applyWeekly, 'スタッフの曜日ごとの勤務を入れる'),
         !pub && autoCount ? item('undo-auto-btn', `自動作成を取り消す（${autoCount}）`, undoAuto, 'AIで入れたマスを消す') : null,
         absences.length && !handling ? item('absence-btn', `欠勤・急な休み（${absences.length}件）`, openAbsenceList) : null,
@@ -1297,6 +1298,8 @@
       pub ? null : el('button', { type: 'button', class: 'check-btn tool-btn confirm-btn tb-confirm', onclick: confirmShift }, 'シフトを確定'),
       el('button', { type: 'button', class: 'check-btn export-btn tb-wide', onclick: openExportSheet }, '出力'),
       el('button', { type: 'button', class: 'check-btn mtl-btn tb-wide', onclick: () => K.app.navigate('monthTimeline') }, '月のタイムライン'),
+      // 11/20〜 予約サイト（カミング・ホットペッパービューティー）への入力のチェック
+      el('button', { type: 'button', class: 'check-btn mtl-btn tb-wide booking-btn', onclick: () => K.app.navigate('booking') }, '予約サイト'),
       more
     );
   }
