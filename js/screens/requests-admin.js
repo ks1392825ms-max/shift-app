@@ -308,20 +308,24 @@
     );
     openSelect.value = String(settings.openDay);
     fillClose(settings.openDay, settings.closeDay);
+    // 11/24〜 受け付ける月：翌月分／翌々月分（例：翌々月分なら、11月25日〜月末に1月分を受け付ける）
+    const aheadSelect = el('select', { id: 'req-months-ahead', class: 'field__input', 'aria-label': '受け付ける月' }, option(1, '翌月分（例：11月末に12月分）'), option(2, '翌々月分（例：11月末に1月分）'));
+    aheadSelect.value = String(settings.monthsAhead === 2 ? 2 : 1);
     return el(
       'section',
       { class: 'card req-period-card' },
-      el('h3', { class: 'card__title' }, '受付期間（翌月分）'),
+      el('h3', { class: 'card__title' }, '受付期間と受け付ける月'),
       el('div', { class: 'time-range req-period' }, openSelect, el('span', null, '〜'), closeSelect),
+      el('label', { class: 'field req-ahead' }, el('span', { class: 'field__label' }, '受け付ける月'), aheadSelect),
       el(
         'div',
         { class: 'actions' },
-        el('button', { type: 'button', class: 'btn btn--primary btn--small', onclick: () => run(() => R().setRequestPeriod(openSelect.value, closeSelect.value, email()), `受付期間を毎月${R().periodLabel({ openDay: Number(openSelect.value), closeDay: Number(closeSelect.value) })}にしました。`) }, '保存')
+        el('button', { type: 'button', class: 'btn btn--primary btn--small', onclick: () => run(() => R().setRequestPeriod(openSelect.value, closeSelect.value, email(), aheadSelect.value), `受付期間を毎月${R().periodLabel({ openDay: Number(openSelect.value), closeDay: Number(closeSelect.value) })}、${R().aheadLabel({ monthsAhead: Number(aheadSelect.value) })}にしました。`) }, '保存')
       ),
       el(
         'p',
         { class: 'hint hint--left' },
-        `今の設定：毎月${R().periodLabel(settings)}に、翌月分の希望休・有給を受け付けます（全店舗共通）。この期間だけ、スタッフが申請・取り消しを、幹部が判断と自分の休み・社用の登録をできます。期間の外は、オーナーだけが判断・変更できます。`
+        `今の設定：毎月${R().periodLabel(settings)}に、${R().aheadLabel(settings)}の希望休・有給を受け付けます（全店舗共通）。この期間だけ、スタッフが申請・取り消しを、幹部が判断と自分の休み・社用の登録をできます。期間の外は、オーナーだけが判断・変更できます。`
       )
     );
   }

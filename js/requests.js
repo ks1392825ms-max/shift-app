@@ -62,7 +62,9 @@
     const o = s.openDay === undefined ? DEFAULTS.openDay : s.openDay;
     const c = s.closeDay === undefined ? DEFAULTS.closeDay : s.closeDay;
     const ok = Number.isInteger(o) && Number.isInteger(c) && o >= 1 && o <= 28 && c >= o && c <= MONTH_END;
-    return ok ? { openDay: o, closeDay: c } : { openDay: DEFAULTS.openDay, closeDay: DEFAULTS.closeDay };
+    // 11/24〜 受け付ける月：1＝翌月分（初め）／2＝翌々月分（例：11月25日〜月末に、1月分を受け付ける）
+    const monthsAhead = s.monthsAhead === 2 ? 2 : 1;
+    return ok ? { openDay: o, closeDay: c, monthsAhead } : { openDay: DEFAULTS.openDay, closeDay: DEFAULTS.closeDay, monthsAhead };
   }
 
   // 画面で使う受付期間の設定を覚える（設定を読み込んだとき。スタッフ・幹部・オーナー）
@@ -75,6 +77,11 @@
     return new Date(y, m, 0).getDate();
   }
 
+  // 「翌月分」「翌々月分」
+  function aheadLabel(p = periodOf(periodSettings)) {
+    return p.monthsAhead === 2 ? '翌々月分' : '翌月分';
+  }
+
   // 「25日〜月末」「15日〜25日」
   function periodLabel(p = periodOf(periodSettings)) {
     return `${p.openDay}日〜${p.closeDay >= 29 ? '月末' : `${p.closeDay}日`}`;
@@ -82,19 +89,20 @@
 
   // 受付期間：{ open, month（申請する月）, opensOn（次に受付が始まる日）, opensFor（その日に受け付け始める月）,
   //            closesOn（今の受付が終わる日）, after（今月の受付が終わったあと）, openDay, closeDay, today }
-  // month は、受付が終わったあとも「翌月」のまま（その月の申請の状況を見るため）
+  // month は、受付が終わったあとも同じ月のまま（その月の申請の状況を見るため）
+  // 11/24〜 受け付ける月は、設定の monthsAhead（1＝翌月・2＝翌々月）。ルールの windowOpenAt と同じ決まり
   function requestWindow() {
     const today = todayJst();
     const ym = today.slice(0, 7);
-    const month = nextMonthOf(ym);
-    const { openDay, closeDay } = periodOf(periodSettings);
+    const { openDay, closeDay, monthsAhead } = periodOf(periodSettings);
+    const month = monthsAhead === 2 ? nextMonthOf(nextMonthOf(ym)) : nextMonthOf(ym);
     const day = Number(today.slice(8, 10));
     const open = day >= openDay && day <= closeDay;
     const after = day > closeDay;
-    const opensOn = open ? null : after ? `${month}-${pad(openDay)}` : `${ym}-${pad(openDay)}`;
+    const opensOn = open ? null : after ? `${nextMonthOf(ym)}-${pad(openDay)}` : `${ym}-${pad(openDay)}`;
     const opensFor = after ? nextMonthOf(month) : month;
     const closesOn = `${ym}-${pad(Math.min(closeDay, daysIn(ym)))}`;
-    return { open, month, opensOn, opensFor, closesOn, after, openDay, closeDay, today };
+    return { open, month, opensOn, opensFor, closesOn, after, openDay, closeDay, monthsAhead, today };
   }
 
   // 「11月25日」の形
@@ -456,18 +464,20 @@
     const n = Number(value);
     if (!Number.isInteger(n) || n < 0 || n > MAX_LIMIT) throw new Error(`希望休の上限は0〜${MAX_LIMIT}日で入れてください。`);
     const p = periodOf(admin.settings);
-    await requireBackend().adminSet('settings', 'requests', { defaultLimit: n, openDay: p.openDay, closeDay: p.closeDay, updatedAt: U.nowIso(), updatedBy: email || '' });
+    await requireBackend().adminSet('settings', 'requests', { defaultLimit: n, openDay: p.openDay, closeDay: p.closeDay, monthsAhead: p.monthsAhead, updatedAt: U.nowIso(), updatedBy: email || '' });
   }
 
   // 受付期間（オーナーだけ）：開始日 1〜28、終了日は開始日〜28 か 31（月末）。希望休の初期の上限は今のまま
-  async function setRequestPeriod(openValue, closeValue, email) {
+  async function setRequestPeriod(openValue, closeValue, email, aheadValue) {
     const openDay = Number(openValue);
     const closeDay = Number(closeValue);
+    const monthsAhead = aheadValue === undefined ? periodOf(admin.settings).monthsAhead : Number(aheadValue);
+    if (monthsAhead !== 1 && monthsAhead !== 2) throw new Error('受け付ける月は「翌月分」か「翌々月分」から選んでください。');
     if (!Number.isInteger(openDay) || openDay < 1 || openDay > 28) throw new Error('受付の開始日は1〜28日から選んでください。');
     if (!Number.isInteger(closeDay) || !((closeDay >= 1 && closeDay <= 28) || closeDay === MONTH_END)) throw new Error('受付の終了日は1〜28日か「月末」から選んでください。');
     if (closeDay < openDay) throw new Error('受付の終了日は、開始日と同じ日か、あとの日にしてください。');
     const limit = settingsOf(admin.settings).defaultLimit;
-    await requireBackend().adminSet('settings', 'requests', { defaultLimit: limit, openDay, closeDay, updatedAt: U.nowIso(), updatedBy: email || '' });
+    await requireBackend().adminSet('settings', 'requests', { defaultLimit: limit, openDay, closeDay, monthsAhead, updatedAt: U.nowIso(), updatedBy: email || '' });
   }
 
   // スタッフ別・月別の上限（value が空なら、初期値に戻す）
@@ -496,7 +506,7 @@
   async function decide(kind, record, { status, reason, email, role = 'owner' }) {
     if (role === 'manager') {
       const w = requestWindow();
-      if (!w.open || record.month !== w.month) throw new Error(`幹部が判断できるのは、受付期間（${periodLabel()}）の翌月分だけです。`);
+      if (!w.open || record.month !== w.month) throw new Error(`幹部が判断できるのは、受付期間（${periodLabel()}）の${aheadLabel()}だけです。`);
     }
     K.records.cleanReason(status, reason); // 理由の確認（画面にすぐ知らせるため。ルールでも確かめる）
     return requireBackend().decideRequest(kind, record, { status, reason, email, role });
@@ -546,6 +556,7 @@
     requestWindow,
     periodOf,
     periodLabel,
+    aheadLabel,
     usePeriodSettings,
     untilText,
     closedText,

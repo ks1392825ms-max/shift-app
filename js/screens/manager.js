@@ -328,7 +328,7 @@
         : null,
       done.length ? el('div', null, el('h3', { class: 'mgr-sec mgr-sec--sub' }, '判断済み', el('span', { class: 'mgr-sec__n' }, `${done.length}件`)), el('ul', { class: 'mgr-cards' }, done.map((r) => paidCard('paid', r)))) : null,
       el('details', { class: 'mgr-log' }, el('summary', null, '判断の履歴を見る'), logView()),
-      help('スタッフの有給を「承認」か「非承認」にします（非承認は理由が必要で、スタッフにも表示されます）。判断できるのは受付期間の間・翌月分だけです。期間の外の変更はオーナーだけです。希望休は、スタッフが申請したらそのまま確定するので、判断はいりません。')
+      help(`スタッフの有給を「承認」か「非承認」にします（非承認は理由が必要で、スタッフにも表示されます）。判断できるのは受付期間の間・${R().aheadLabel()}（受付中の月）だけです。期間の外の変更はオーナーだけです。希望休は、スタッフが申請したらそのまま確定するので、判断はいりません。`)
     );
   }
 

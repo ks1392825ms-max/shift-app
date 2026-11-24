@@ -127,14 +127,24 @@ service cloud.firestore {
         && v.split('T')[0] in [utcDay(request.time - duration.value(1, 'd')), utcDay(request.time), utcDay(request.time + duration.value(1, 'd'))];
     }
 
-    // 日本時間で今日が受付期間（オーナーが選んだ「開始日〜終了日」。初めは25日〜月末）で、month（"2026-11" の形）が翌月か
+    // 日本時間で今日が受付期間（オーナーが選んだ「開始日〜終了日」。初めは25日〜月末）で、month（"2026-11" の形）が受け付ける月か
+    // 11/24〜 受け付ける月は settings/requests の monthsAhead（1＝翌月・2＝翌々月。ないときは翌月）
     // （ルールの let は、使うたびに計算し直されるので、1回計算した値を関数に渡す形にしている：計算の回数の上限があるため）
     function requestWindowOpen(month) {
       let t = request.time + duration.value(9, 'h');
       return windowOpenAt(month, t);
     }
     function windowOpenAt(month, t) {
-      return month == nextMonthOf(t.year(), t.month()) && dayInPeriod(t.day(), requestSettings());
+      return windowCheck(month, t, requestSettings());
+    }
+    function windowCheck(month, t, s) {
+      return month == targetMonthOf(t.year(), t.month(), s.get('monthsAhead', 1)) && dayInPeriod(t.day(), s);
+    }
+    // 受け付ける月の "2027-01" の形（a == 2 なら翌々月、それ以外は翌月）
+    function targetMonthOf(y, m, a) {
+      return a == 2
+        ? (m >= 11 ? string(y + 1) + '-' + pad2(m - 10) : string(y) + '-' + pad2(m + 2))
+        : nextMonthOf(y, m);
     }
     // 翌月の "2026-11" の形
     function nextMonthOf(y, m) {
