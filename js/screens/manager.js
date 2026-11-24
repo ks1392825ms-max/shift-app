@@ -52,6 +52,8 @@
     try {
       view.ctx = await backend().loadManagerContext(view.manager);
       R().usePeriodSettings(view.ctx.settings); // オーナーが選んだ受付期間
+      // 11/24〜 受け付ける月（翌月分／翌々月分）は、設定を読んでから決まる。最初に開く月を、受付中の月にそろえる
+      view.month = R().requestWindow().month;
       view.storeId = view.ctx.stores.length ? view.ctx.stores[0].id : null;
       await loadRequests();
     } catch (err) {
